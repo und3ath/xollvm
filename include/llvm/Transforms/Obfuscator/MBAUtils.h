@@ -60,8 +60,8 @@ namespace llvm::obf {
 		/// @param SlotName  Per-function volatile i32 alloca name (pass-specific).
 		///                  e.g. "obf.mba.noise.i32", "obf.vm.mba.noise.i32".
 		/// @param Opts      Advanced inflation knobs (safe defaults for most callers).
-		MbaUtils(Module& M, Rng& R, StringRef SlotName, Options Opts = {});
-
+		MbaUtils(Module& M, Rng& R, StringRef SlotName, Options Opts);
+		MbaUtils(Module& M, Rng& R, StringRef SlotName);
 		// =========================================================================
 		// Opcode filter
 		// =========================================================================

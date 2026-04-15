@@ -41,6 +41,12 @@ STATISTIC(MBAXor, "Xor instructions transformed with MBA");
 // Construction
 // ============================================================================
 
+
+MbaUtils::MbaUtils(Module& M, Rng& R, StringRef SlotName)
+	MbaUtils(M, R, SlotName, Options{}) {
+}
+
+
 MbaUtils::MbaUtils(Module& M, Rng& R, StringRef SlotName, Options Opts)
 	: M(M), R(R), SlotName(SlotName), Opts(Opts) {
 }
