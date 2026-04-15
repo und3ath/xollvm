@@ -1,0 +1,923 @@
+#include "llvm/Transforms/Obfuscator/StringEncryption.h"
+#include "llvm/Transforms/Obfuscator/ObfuscationAnnotationAnalysis.h"
+#include "llvm/Transforms/Obfuscator/ObfuscationConfig.h"
+#include "llvm/Transforms/Obfuscator/ObfuscationOptions.h"
+#include "llvm/Transforms/Obfuscator/PassCtx.h"
+#include "llvm/Transforms/Obfuscator/Utils.h"
+
+#include "llvm/Transforms/Obfuscator/AESStubBitcode.h"
+
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/Statistic.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/Bitcode/BitcodeReader.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/GlobalVariable.h"
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/Module.h"
+#include "llvm/Linker/Linker.h"
+#include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/Utils/ModuleUtils.h"
+
+
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <map>
+#include <set>
+#include <string>
+#include <tuple>
+#include <vector>
+
+using namespace llvm;
+
+#define DEBUG_TYPE "strenc"
+
+STATISTIC(EncryptedStrings, "Number of AES-encrypted strings");
+STATISTIC(DecryptCallsInserted, "Number of __strenc_decrypt calls inserted");
+STATISTIC(StubLinked, "Times AES stub module was linked");
+
+
+
+namespace {
+
+    // ============================================================================
+    // Compile-time AES-128 engine
+    // Used only inside the pass to encrypt strings offline.
+    // None of this code appears in the emitted binary.
+    // ============================================================================
+
+    // AES forward S-box (standard FIPS-197)
+    static constexpr uint8_t AES_SBOX[256] = {
+        0x63,0x7c,0x77,0x7b,0xf2,0x6b,0x6f,0xc5,0x30,0x01,0x67,0x2b,0xfe,0xd7,0xab,0x76,
+        0xca,0x82,0xc9,0x7d,0xfa,0x59,0x47,0xf0,0xad,0xd4,0xa2,0xaf,0x9c,0xa4,0x72,0xc0,
+        0xb7,0xfd,0x93,0x26,0x36,0x3f,0xf7,0xcc,0x34,0xa5,0xe5,0xf1,0x71,0xd8,0x31,0x15,
+        0x04,0xc7,0x23,0xc3,0x18,0x96,0x05,0x9a,0x07,0x12,0x80,0xe2,0xeb,0x27,0xb2,0x75,
+        0x09,0x83,0x2c,0x1a,0x1b,0x6e,0x5a,0xa0,0x52,0x3b,0xd6,0xb3,0x29,0xe3,0x2f,0x84,
+        0x53,0xd1,0x00,0xed,0x20,0xfc,0xb1,0x5b,0x6a,0xcb,0xbe,0x39,0x4a,0x4c,0x58,0xcf,
+        0xd0,0xef,0xaa,0xfb,0x43,0x4d,0x33,0x85,0x45,0xf9,0x02,0x7f,0x50,0x3c,0x9f,0xa8,
+        0x51,0xa3,0x40,0x8f,0x92,0x9d,0x38,0xf5,0xbc,0xb6,0xda,0x21,0x10,0xff,0xf3,0xd2,
+        0xcd,0x0c,0x13,0xec,0x5f,0x97,0x44,0x17,0xc4,0xa7,0x7e,0x3d,0x64,0x5d,0x19,0x73,
+        0x60,0x81,0x4f,0xdc,0x22,0x2a,0x90,0x88,0x46,0xee,0xb8,0x14,0xde,0x5e,0x0b,0xdb,
+        0xe0,0x32,0x3a,0x0a,0x49,0x06,0x24,0x5c,0xc2,0xd3,0xac,0x62,0x91,0x95,0xe4,0x79,
+        0xe7,0xc8,0x37,0x6d,0x8d,0xd5,0x4e,0xa9,0x6c,0x56,0xf4,0xea,0x65,0x7a,0xae,0x08,
+        0xba,0x78,0x25,0x2e,0x1c,0xa6,0xb4,0xc6,0xe8,0xdd,0x74,0x1f,0x4b,0xbd,0x8b,0x8a,
+        0x70,0x3e,0xb5,0x66,0x48,0x03,0xf6,0x0e,0x61,0x35,0x57,0xb9,0x86,0xc1,0x1d,0x9e,
+        0xe1,0xf8,0x98,0x11,0x69,0xd9,0x8e,0x94,0x9b,0x1e,0x87,0xe9,0xce,0x55,0x28,0xdf,
+        0x8c,0xa1,0x89,0x0d,0xbf,0xe6,0x42,0x68,0x41,0x99,0x2d,0x0f,0xb0,0x54,0xbb,0x16
+    };
+
+    // AES round constants (rcon[i] = x^(i-1) in GF(2^8), 1-indexed)
+    static constexpr uint8_t AES_RCON[11] = {
+        0x00, 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1b, 0x36
+    };
+
+    // Expand a 16-byte AES-128 key into 176 bytes of round-key schedule.
+    static void aes_key_expand(const uint8_t key[16], uint8_t rk[176]) {
+        // Copy the original key as round 0
+        for (int i = 0; i < 16; i++) rk[i] = key[i];
+
+        for (int i = 4; i < 44; i++) {   // 44 words of 4 bytes each
+            uint8_t temp[4];
+            for (int j = 0; j < 4; j++) temp[j] = rk[(i - 1) * 4 + j];
+
+            if (i % 4 == 0) {
+                // RotWord
+                uint8_t t = temp[0];
+                temp[0] = temp[1]; temp[1] = temp[2]; temp[2] = temp[3]; temp[3] = t;
+                // SubWord
+                for (int j = 0; j < 4; j++) temp[j] = AES_SBOX[temp[j]];
+                // XOR with Rcon
+                temp[0] ^= AES_RCON[i / 4];
+            }
+
+            for (int j = 0; j < 4; j++)
+                rk[i * 4 + j] = rk[(i - 4) * 4 + j] ^ temp[j];
+        }
+    }
+
+    // GF(2^8) × 2
+    static inline uint8_t xtime(uint8_t x) {
+        return (uint8_t)((x << 1) ^ ((x >> 7) * 0x1bu));
+    }
+
+    // AES ShiftRows (column-major: s[col*4+row])
+    static void aes_shift_rows(uint8_t s[16]) {
+        uint8_t t;
+        t = s[1]; s[1] = s[5]; s[5] = s[9]; s[9] = s[13]; s[13] = t;
+        t = s[2]; s[2] = s[10]; s[10] = t; t = s[6]; s[6] = s[14]; s[14] = t;
+        t = s[15]; s[15] = s[11]; s[11] = s[7]; s[7] = s[3]; s[3] = t;
+    }
+
+    // AES MixColumns
+    static void aes_mix_columns(uint8_t s[16]) {
+        for (int c = 0; c < 4; c++) {
+            uint8_t a = s[c * 4], b = s[c * 4 + 1], cc = s[c * 4 + 2], d = s[c * 4 + 3];
+            uint8_t tmp = a ^ b ^ cc ^ d;
+            s[c * 4 + 0] ^= tmp ^ xtime((uint8_t)(a ^ b));
+            s[c * 4 + 1] ^= tmp ^ xtime((uint8_t)(b ^ cc));
+            s[c * 4 + 2] ^= tmp ^ xtime((uint8_t)(cc ^ d));
+            s[c * 4 + 3] ^= tmp ^ xtime((uint8_t)(d ^ a));
+        }
+    }
+
+    // AES-128 encrypt one block (offline, in the pass, not in emitted code)
+    static void aes128_encrypt_block(const uint8_t rk[176], uint8_t blk[16]) {
+        uint8_t s[16];
+        for (int i = 0; i < 16; i++) s[i] = blk[i] ^ rk[i];
+        for (int r = 1; r <= 9; r++) {
+            for (int i = 0; i < 16; i++) s[i] = AES_SBOX[s[i]];
+            aes_shift_rows(s);
+            aes_mix_columns(s);
+            for (int i = 0; i < 16; i++) s[i] ^= rk[r * 16 + i];
+        }
+        for (int i = 0; i < 16; i++) s[i] = AES_SBOX[s[i]];
+        aes_shift_rows(s);
+        for (int i = 0; i < 16; i++) blk[i] = s[i] ^ rk[160 + i];
+    }
+
+    // AES-128-CTR encrypt/decrypt (symmetric) — used at pass time to produce
+    // ciphertext that will be embedded as constant globals.
+    static void aes128_ctr(const uint8_t rk[176],
+        const uint8_t nonce8[8],
+        uint8_t* buf, size_t len) {
+        uint8_t ctr[16] = {};
+        for (int i = 0; i < 8; i++) ctr[i] = nonce8[i];
+        // ctr[8..15] = 0 (counter, big-endian)
+
+        size_t off = 0;
+        while (off < len) {
+            uint8_t ks[16];
+            for (int i = 0; i < 16; i++) ks[i] = ctr[i];
+            aes128_encrypt_block(rk, ks);
+
+            size_t n = std::min<size_t>(16, len - off);
+            for (size_t i = 0; i < n; i++) buf[off + i] ^= ks[i];
+            off += 16;
+
+            // Increment big-endian 64-bit counter in bytes [8..15]
+            for (int i = 15; i >= 8; i--)
+                if (++ctr[i]) break;
+        }
+    }
+
+    // FNV-64 nonce derivation: unique per (string_index, content)
+    static uint64_t fnv64_nonce(size_t idx, StringRef content) {
+        constexpr uint64_t FNV_OFFSET = 14695981039346656037ULL;
+        constexpr uint64_t FNV_PRIME = 1099511628211ULL;
+        uint64_t h = FNV_OFFSET;
+        // Mix the string index
+        for (int i = 0; i < 8; i++) {
+            h ^= (uint8_t)((idx >> (8 * i)) & 0xFF);
+            h *= FNV_PRIME;
+        }
+        // Mix the content bytes
+        for (unsigned char c : content) {
+            h ^= (uint8_t)c;
+            h *= FNV_PRIME;
+        }
+        return h;
+    }
+
+    // ============================================================================
+    // StrEncCtx — per-pass context holding config + key material
+    // ============================================================================
+    struct StrEncCtx : llvm::obf::ModPassCtx {
+        StringEncryptionConfig Cfg;
+        llvm::obf::Rng         KeyRng;
+
+        // AES-128 compile-time key material
+        uint8_t MasterKey[16] = {};
+        uint8_t ExpandedKeys[176] = {};
+
+        // IR objects created once, reused for all strings
+        GlobalVariable* KeyDataGV = nullptr;   // @.strenc.kd  — data half (bytes 0–87)
+        Function* KeyCodeFn = nullptr;   // __strenc_key_b — code half (bytes 88–175)
+        Function* KeyDataFn = nullptr;   // __strenc_key_a — wrapper memcpy
+        Function* DecryptFn = nullptr;   // __strenc_decrypt (from linked stub)
+
+        StrEncCtx(Module& M, ModuleAnalysisManager& MAM)
+            : ModPassCtx(M, MAM, "strenc"),
+            KeyRng(R.fork("keys")) {
+
+            // Merge StringEncryptionConfig across all annotated functions
+            bool Any = false;
+            StringEncryptionConfig Acc;
+            Acc.enable = false;
+            Acc.minLength = 0;
+            Acc.useAES = true;
+            Acc.keySplit = true;
+
+            for (auto& It : Ann.PerFunction) {
+                auto PC = It.second.getPassConfig("strenc");
+                if (!PC) continue;
+                auto Local = StringEncryptionConfig::fromPassConfig(*PC);
+                if (!Local.validate() || !Local.enable) continue;
+                Any = true;
+                Acc.enable = true;
+                Acc.minLength = std::max(Acc.minLength, Local.minLength);
+                // If any function requests AES, use AES for all
+                if (Local.useAES)    Acc.useAES = true;
+                if (Local.keySplit)  Acc.keySplit = true;
+            }
+
+            // ── NEW: collect strenc_stub config ──────────────────────────────────────
+            for (auto& It : Ann.PerFunction) {
+                auto PC = It.second.getPassConfig("aes_stub");
+                if (!PC)
+                    PC = It.second.getPassConfig("strenc_stub"); // legacy alias
+                if (!PC) continue;
+                Acc.stubPasses = AnnotationParser::parseAnnotationString(PC->rawInner);
+                break;  // module-wide: first occurrence wins
+            }
+
+            Cfg = Acc;
+            if (!Any) { Cfg.enable = false; return; }
+
+            if (!Cfg.useAES) return;   // legacy XOR path — key gen not needed
+
+            // ── Generate compile-time AES master key from RNG ──
+            for (int i = 0; i < 4; i++) {
+                uint32_t W = KeyRng.u32();
+                MasterKey[4 * i + 0] = (W >> 0) & 0xFF;
+                MasterKey[4 * i + 1] = (W >> 8) & 0xFF;
+                MasterKey[4 * i + 2] = (W >> 16) & 0xFF;
+                MasterKey[4 * i + 3] = (W >> 24) & 0xFF;
+            }
+            aes_key_expand(MasterKey, ExpandedKeys);
+        }
+    };
+
+    // ============================================================================
+    // StrEncImpl — stateless helper methods
+    // ============================================================================
+    struct StrEncImpl {
+
+
+        // —— Shared stub linking (used by both strenc and vmpass) ——————————
+        
+        /// Link the embedded AES stub bitcode into M if not already present.
+        /// This is safe to call from multiple passes — deduplication is built-in.
+        /// Returns the __obf_aes_ctr_decrypt function, or nullptr on failure.
+        static Function * linkStubAndGetCTRDecrypt(Module & M) {
+             // Fast path: if the stub is already linked (by strenc or a prior
+             // vmpass invocation), just return the shared decrypt function.
+            if (Function* Existing = M.getFunction("__obf_aes_ctr_decrypt"))
+                return Existing;
+            
+            // Link the full stub — this also brings in __strenc_decrypt, but
+            // it will only be used if strenc actually creates call sites to it.
+            // Unused functions are eliminated by the linker.
+            Function * DecFn = linkStub(M);
+            if (!DecFn) return nullptr;
+            
+            return M.getFunction("__obf_aes_ctr_decrypt");
+            
+        }
+        
+
+        // ── Stub linking ─────────────────────────────────────────────────────────
+
+        /// Parse the embedded AES stub bitcode and link it into M.
+        /// Returns the __strenc_decrypt function (now a member of M), or nullptr.
+        static Function* linkStub(Module& M);
+
+        /// After linking, make all stub-private functions truly private + mark
+        /// them to prevent self-re-encryption and to let the obfuscation driver
+        /// pick them up naturally.
+        static void hardenStubFunctions(Module& M,
+            const ObfuscationConfig& StubPasses,
+            ObfuscationAnnotationCache& Cache);
+
+        // ── Key-provider IR generation ────────────────────────────────────────────
+
+        /// Create @.strenc.kd global holding bytes 0–87 of the expanded key.
+        static GlobalVariable* createKeyDataGlobal(Module& M,
+            const uint8_t rk[176]);
+
+        /// Create __strenc_key_a() — a private function that memcpy's @.strenc.kd
+        /// into the caller's buffer (88 bytes).
+        static Function* createKeyDataFn(Module& M, GlobalVariable* KDG);
+
+        /// Create __strenc_key_b() — a private function with 88 individual stores
+        /// of immediate byte constants (bytes 88–175 of the expanded key).
+        /// These bytes live as instruction operands in the code segment, not data.
+        static Function* createKeyCodeFn(Module& M, const uint8_t rk[176]);
+
+        // ── Per-string helpers ────────────────────────────────────────────────────
+
+        /// True if GV should be encrypted (is a non-empty, eligible string).
+        static bool shouldEncrypt(GlobalVariable& GV, int minLength);
+
+        /// Create a private constant global for the ciphertext bytes.
+        static GlobalVariable* createCiphertextGlobal(Module& M,
+            const std::string& cipher,
+            unsigned idx);
+
+        /// Create a private constant global holding the 8-byte nonce.
+        static GlobalVariable* createNonceGlobal(Module& M,
+            uint64_t nonce,
+            unsigned idx);
+
+        // ── Opaque-pointer GEP helper ─────────────────────────────────────────────
+        static Value* gepI8(IRBuilder<>& B, Type* ArrTy, Value* ArrPtr);
+
+        // ── ConstantExpr materialisation (same as before) ────────────────────────
+        static void materializeConstExprUsers(GlobalVariable* GV);
+
+        // ── Top-level entry ───────────────────────────────────────────────────────
+        static bool encryptStrings(Module& M, StrEncCtx& Ctx);
+
+        // ── Legacy XOR path (fallback when useAES=false) ──────────────────────────
+        static bool encryptStringsXOR(Module& M, StrEncCtx& Ctx);
+    };
+
+    // ── StrEncImpl::linkStub ─────────────────────────────────────────────────────
+
+    Function* StrEncImpl::linkStub(Module& M) {
+        if (llvm::obf::StubBitcodeSize == 0) {
+            errs() << "strenc: embedded stub bitcode is empty — "
+                "did the CMake build rule run?\n";
+            return nullptr;
+        }
+
+        // If the decrypt function is already present (e.g., two TUs in one LTO
+        // module), skip re-linking.
+        if (Function* Existing = M.getFunction("__aes_decrypt"))
+            return Existing;
+
+        // Parse the embedded bitcode into a fresh Module.
+        MemoryBufferRef MBR(
+            StringRef(reinterpret_cast<const char*>(llvm::obf::StubBitcode), llvm::obf::StubBitcodeSize),
+            "aes_stub.bc");
+
+        LLVMContext& Ctx = M.getContext();
+        auto StubOrErr = parseBitcodeFile(MBR, Ctx);
+        if (!StubOrErr) {
+            handleAllErrors(StubOrErr.takeError(), [](const ErrorInfoBase& E) {
+                errs() << "strenc: failed to parse stub bitcode: "
+                    << E.message() << "\n";
+                });
+            return nullptr;
+        }
+
+        std::unique_ptr<Module> StubM = std::move(*StubOrErr);
+
+        // Set the data layout and target triple to match the target module so the
+        // linker doesn't complain about mismatches.
+        StubM->setDataLayout(M.getDataLayout());
+        StubM->setTargetTriple(M.getTargetTriple());
+
+        // Link — we only need definitions that are referenced.
+        // Linker::Flags::LinkOnlyNeeded avoids pulling in unreferenced symbols.
+        if (Linker::linkModules(M, std::move(StubM), 0)) {
+            errs() << "strenc: linkModules failed\n";
+            return nullptr;
+        }
+
+        ++StubLinked;
+        return M.getFunction("__aes_decrypt");
+    }
+
+    // ── StrEncImpl::hardenStubFunctions ──────────────────────────────────────────
+
+    void StrEncImpl::hardenStubFunctions(Module& M,
+        const ObfuscationConfig& StubPasses,
+        ObfuscationAnnotationCache& Cache) {
+        // All stub functions are prefixed with "__aes_" or "__obf_aes_".
+        // After linking they may still have ExternalLinkage from their C
+        // definition.  Make them private so:
+        //   (a) the OS linker strips them from exports,
+        //   (b) they are eligible for dead-code elimination,
+        //   (c) they get individual obfuscation seeds from the function driver.
+        for (Function& F : M) {
+            if (!F.getName().starts_with("__aes_") &&
+                !F.getName().starts_with("__obf_aes_")) continue;
+            if (F.isDeclaration()) continue;
+
+            F.setLinkage(GlobalValue::PrivateLinkage);
+            F.setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
+            F.removeFnAttr(Attribute::OptimizeNone);
+            F.removeFnAttr(Attribute::NoInline);
+
+            if (!StubPasses.passes.empty() &&
+                Cache.PerFunction.find(&F) == Cache.PerFunction.end()) {
+                Cache.PerFunction[&F] = StubPasses;
+            }
+        }
+
+        // Mark all strenc-private globals the same way.
+        for (GlobalVariable& GV : M.globals()) {
+            StringRef Sec = GV.hasSection() ? GV.getSection() : StringRef();
+            if (Sec.starts_with(".strenc"))
+                GV.setVisibility(GlobalValue::HiddenVisibility);
+        }
+    }
+
+    // ── StrEncImpl::createKeyDataGlobal ──────────────────────────────────────────
+
+    GlobalVariable* StrEncImpl::createKeyDataGlobal(Module& M,
+        const uint8_t rk[176]) {
+        LLVMContext& C = M.getContext();
+        ArrayType* Ty = ArrayType::get(Type::getInt8Ty(C), 88);
+
+        std::vector<Constant*> Bytes;
+        Bytes.reserve(88);
+        for (int i = 0; i < 88; i++)
+            Bytes.push_back(ConstantInt::get(Type::getInt8Ty(C), rk[i]));
+
+        GlobalVariable* GV = new GlobalVariable(
+            M, Ty, /*isConstant=*/true,
+            GlobalValue::PrivateLinkage,
+            ConstantArray::get(Ty, Bytes),
+            ".strenc.kd");
+
+        GV->setSection(".strenc.kd");
+        GV->setAlignment(Align(16));
+        GV->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
+        return GV;
+    }
+
+    // ── StrEncImpl::createKeyDataFn ───────────────────────────────────────────────
+    // __strenc_key_a(ptr out)  →  memcpy(out, @.strenc.kd, 88)
+
+    Function* StrEncImpl::createKeyDataFn(Module& M, GlobalVariable* KDG) {
+        LLVMContext& C = M.getContext();
+        Type* VoidTy = Type::getVoidTy(C);
+        Type* PtrTy = PointerType::getUnqual(C);
+        Type* I64Ty = Type::getInt64Ty(C);
+        Type* I32Ty = Type::getInt32Ty(C);
+        Type* I8Ty = Type::getInt8Ty(C);
+
+        FunctionType* FT = FunctionType::get(VoidTy, { PtrTy }, false);
+
+        // Get the existing declaration (inserted by stub linkage) or create fresh.
+        Function* F = M.getFunction("__aes_key_a");
+        if (!F)
+            F = Function::Create(FT, GlobalValue::PrivateLinkage, "__aes_key_a", M);
+        else if (!F->isDeclaration())
+            return F;  // already fully defined, nothing to do
+
+        // Promote: set linkage/attrs on whatever we got
+        F->setLinkage(GlobalValue::PrivateLinkage);
+        F->addFnAttr(Attribute::NoUnwind);
+        F->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
+
+        Argument* OutArg = F->getArg(0);
+        OutArg->setName("out");
+
+        BasicBlock* BB = BasicBlock::Create(C, "entry", F);
+        IRBuilder<> B(BB);
+
+        ArrayType* ArrTy = ArrayType::get(I8Ty, 88);
+        Value* Z = ConstantInt::get(I32Ty, 0);
+        Value* Src = B.CreateInBoundsGEP(ArrTy, KDG, { Z, Z }, "kd.ptr");
+        B.CreateMemCpy(OutArg, Align(1), Src, Align(16),
+            ConstantInt::get(I64Ty, 88));
+        B.CreateRetVoid();
+
+        return F;
+    }
+
+    Function* StrEncImpl::createKeyCodeFn(Module& M, const uint8_t rk[176]) {
+        LLVMContext& C = M.getContext();
+        Type* VoidTy = Type::getVoidTy(C);
+        Type* PtrTy = PointerType::getUnqual(C);
+        Type* I8Ty = Type::getInt8Ty(C);
+        Type* I32Ty = Type::getInt32Ty(C);
+
+        FunctionType* FT = FunctionType::get(VoidTy, { PtrTy }, false);
+
+        Function* F = M.getFunction("__aes_key_b");
+        if (!F)
+            F = Function::Create(FT, GlobalValue::PrivateLinkage, "__aes_key_b", M);
+        else if (!F->isDeclaration())
+            return F;
+
+        F->setLinkage(GlobalValue::PrivateLinkage);
+        F->addFnAttr(Attribute::NoUnwind);
+        F->setSection(".strenc.kt");
+        F->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
+
+        Argument* OutArg = F->getArg(0);
+        OutArg->setName("out");
+
+        BasicBlock* BB = BasicBlock::Create(C, "entry", F);
+        IRBuilder<> B(BB);
+
+        for (int i = 0; i < 88; i++) {
+            Value* Idx = ConstantInt::get(I32Ty, i);
+            Value* Ptr = B.CreateGEP(I8Ty, OutArg, Idx);
+            B.CreateStore(ConstantInt::get(I8Ty, rk[88 + i]), Ptr);
+        }
+        B.CreateRetVoid();
+
+        return F;
+    }
+
+    // ── StrEncImpl helpers ────────────────────────────────────────────────────────
+
+    bool StrEncImpl::shouldEncrypt(GlobalVariable& GV, int minLength) {
+        if (!GV.hasInitializer() || !GV.isConstant()) return false;
+        auto* CDA = dyn_cast<ConstantDataArray>(GV.getInitializer());
+        if (!CDA || !CDA->isCString()) return false;
+
+        // Skip stub-owned globals (section starts with ".strenc")
+        if (GV.hasSection() && GV.getSection().starts_with(".strenc"))
+            return false;
+
+        StringRef S = CDA->getAsCString();
+        if ((int)S.size() < minLength) return false;
+
+        // Skip printf-style format strings
+        if (S.contains('%')) return false;
+
+        return true;
+    }
+
+    GlobalVariable* StrEncImpl::createCiphertextGlobal(Module& M,
+        const std::string& cipher,
+        unsigned idx) {
+        LLVMContext& C = M.getContext();
+        size_t N = cipher.size() + 1;  // include null terminator byte
+        ArrayType* Ty = ArrayType::get(Type::getInt8Ty(C), N);
+
+        std::vector<Constant*> Bytes;
+        Bytes.reserve(N);
+        for (unsigned char c : cipher)
+            Bytes.push_back(ConstantInt::get(Type::getInt8Ty(C), c));
+        Bytes.push_back(ConstantInt::get(Type::getInt8Ty(C), 0)); // null terminator
+
+        std::string Name = ".strenc.ct." + std::to_string(idx);
+        GlobalVariable* GV = new GlobalVariable(
+            M, Ty, /*isConstant=*/true,
+            GlobalValue::PrivateLinkage,
+            ConstantArray::get(Ty, Bytes),
+            Name);
+
+        GV->setSection(".strenc.ct");
+        GV->setAlignment(Align(1));
+        GV->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
+        return GV;
+    }
+
+    GlobalVariable* StrEncImpl::createNonceGlobal(Module& M,
+        uint64_t nonce,
+        unsigned idx) {
+        LLVMContext& C = M.getContext();
+        ArrayType* Ty = ArrayType::get(Type::getInt8Ty(C), 8);
+
+        std::vector<Constant*> Bytes;
+        Bytes.reserve(8);
+        for (int i = 0; i < 8; i++)
+            Bytes.push_back(ConstantInt::get(Type::getInt8Ty(C),
+                (uint8_t)((nonce >> (8 * i)) & 0xFF)));
+
+        std::string Name = ".strenc.nonce." + std::to_string(idx);
+        GlobalVariable* GV = new GlobalVariable(
+            M, Ty, /*isConstant=*/true,
+            GlobalValue::PrivateLinkage,
+            ConstantArray::get(Ty, Bytes),
+            Name);
+
+        GV->setSection(".strenc.n");
+        GV->setAlignment(Align(8));
+        GV->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
+        return GV;
+    }
+
+    Value* StrEncImpl::gepI8(IRBuilder<>& B, Type* ArrTy, Value* ArrPtr) {
+        Value* Z = ConstantInt::get(Type::getInt32Ty(B.getContext()), 0);
+        return B.CreateInBoundsGEP(ArrTy, ArrPtr, { Z, Z }, "strenc.gep");
+    }
+
+    void StrEncImpl::materializeConstExprUsers(GlobalVariable* GV) {
+        SmallVector<ConstantExpr*, 16> Work;
+        for (User* U : GV->users())
+            if (auto* CE = dyn_cast<ConstantExpr>(U))
+                Work.push_back(CE);
+
+        while (!Work.empty()) {
+            ConstantExpr* CE = Work.pop_back_val();
+            SmallVector<Use*, 16> Uses;
+            for (Use& U : CE->uses()) Uses.push_back(&U);
+            for (Use* UPtr : Uses) {
+                auto* I = dyn_cast<Instruction>(UPtr->getUser());
+                if (!I) continue;
+                Instruction* NI = CE->getAsInstruction();
+                NI->insertBefore(I);
+                NI->setDebugLoc(I->getDebugLoc());
+                UPtr->set(NI);
+            }
+        }
+    }
+
+    // StrEncImpl::encryptStrings 
+
+    bool StrEncImpl::encryptStrings(Module& M, StrEncCtx& Ctx) {
+        //  link the AES stub
+        Function* DecryptFn = linkStub(M);
+        if (!DecryptFn) {
+            errs() << "strenc: AES stub link failed — skipping encryption\n";
+            return false;
+        }
+         // Get a mutable reference to the annotation cache directly from the
+        // MAM.  Do NOT use const_cast on Ctx.Ann — the function driver reads
+        // the cache via getCachedResult on the MAM proxy, and const_cast on a
+        // captured const& may not propagate reliably through NPM's analysis
+        // caching layers.
+        auto& MutableCache =
+            Ctx.MAM.getResult<ObfuscationAnnotationAnalysis>(M);
+        hardenStubFunctions(M, Ctx.Cfg.stubPasses, MutableCache);
+
+        // create key-provider IR functions 
+        GlobalVariable* KDG = createKeyDataGlobal(M, Ctx.ExpandedKeys);
+        Ctx.KeyDataFn = createKeyDataFn(M, KDG);
+        Ctx.KeyCodeFn = createKeyCodeFn(M, Ctx.ExpandedKeys);
+        Ctx.KeyDataGV = KDG;
+        Ctx.DecryptFn = DecryptFn;
+
+        // collect string candidates 
+        // Collect before iterating to avoid invalidating the globals list.
+        struct Candidate {
+            GlobalVariable* GV;
+            std::string     Plaintext;
+            unsigned        Index;
+        };
+        std::vector<Candidate> Cands;
+
+        unsigned idx = 0;
+        for (GlobalVariable& GV : M.globals()) {
+            if (!shouldEncrypt(GV, Ctx.Cfg.minLength)) continue;
+            auto* CDA = dyn_cast<ConstantDataArray>(GV.getInitializer());
+            if (!CDA || !CDA->isString()) continue;
+            Cands.push_back({ &GV, CDA->getAsCString().str(), idx++ });
+        }
+
+        if (Cands.empty()) return false;
+
+        bool Changed = false;
+
+        LLVMContext& C = M.getContext();
+        Type* I8Ty = Type::getInt8Ty(C);
+        Type* I32Ty = Type::getInt32Ty(C);
+        Type* I64Ty = Type::getInt64Ty(C);
+
+        // encrypt each candidate 
+        for (auto& Cand : Cands) {
+            GlobalVariable* GV = Cand.GV;
+            const std::string& Plain = Cand.Plaintext;
+
+            // Materialise ConstantExpr users so we can find using functions
+            materializeConstExprUsers(GV);
+
+            // Derive per-string nonce (FNV-64 of index + content)
+            uint64_t Nonce = fnv64_nonce(Cand.Index, Plain);
+
+            // Encrypt offline
+            std::string Cipher = Plain;
+            aes128_ctr(Ctx.ExpandedKeys,
+                reinterpret_cast<const uint8_t*>(&Nonce),
+                reinterpret_cast<uint8_t*>(Cipher.data()),
+                Cipher.size());
+
+            // Create per-string globals
+            GlobalVariable* CtGV = createCiphertextGlobal(M, Cipher, Cand.Index);
+            GlobalVariable* NonceGV = createNonceGlobal(M, Nonce, Cand.Index);
+
+            ArrayType* CtTy = cast<ArrayType>(CtGV->getValueType());
+            ArrayType* NonceTy = cast<ArrayType>(NonceGV->getValueType());
+            const uint64_t CtBytes = CtTy->getNumElements();  // plaintext len + 1
+
+            // Find all functions that use this string global
+            std::set<Function*> Users;
+            for (User* U : GV->users())
+                if (auto* I = dyn_cast<Instruction>(U))
+                    Users.insert(I->getFunction());
+
+            // inject decryption at each using function's entry ──────
+            for (Function* F : Users) {
+                if (!F || F->isDeclaration()) continue;
+                // Skip the stub functions themselves (avoids self-re-encryption)
+                if (F->getName().starts_with("__strenc_")) continue;
+
+                Instruction* IP = &*F->getEntryBlock().getFirstInsertionPt();
+                IRBuilder<> B(IP);
+
+                // alloca [N x i8]  (stack buffer for in-place decryption)
+                AllocaInst* Buf = B.CreateAlloca(CtTy, nullptr, "strenc.buf");
+                Buf->setAlignment(Align(16));
+
+                // memcpy(Buf, CtGV, CtBytes)
+                Value* Dst = gepI8(B, CtTy, Buf);
+                Value* Src = gepI8(B, CtTy, CtGV);
+                B.CreateMemCpy(Dst, Align(1), Src, Align(1),
+                    ConstantInt::get(I64Ty, CtBytes));
+
+                // ptr to nonce
+                Value* NcPtr = gepI8(B, NonceTy, NonceGV);
+
+                // call __strenc_decrypt(buf_ptr, plaintext_len, nonce_ptr)
+                // Note: len = CtBytes - 1 (exclude null terminator)
+                B.CreateCall(DecryptFn, {
+                    Dst,
+                    ConstantInt::get(I32Ty, (uint32_t)(CtBytes - 1)),
+                    NcPtr
+                    });
+
+                // Replace all uses of the original GV in this function with Buf.
+                // Buf and GV both have type 'ptr' in opaque-pointer mode.
+                for (User* U : make_early_inc_range(GV->users())) {
+                    auto* I = dyn_cast<Instruction>(U);
+                    if (!I || I->getFunction() != F) continue;
+                    I->replaceUsesOfWith(GV, Buf);
+                }
+
+                ++DecryptCallsInserted;
+                Changed = true;
+            }
+
+            ++EncryptedStrings;
+
+            if (GV->use_empty())
+                GV->eraseFromParent();
+        }
+
+        return Changed;
+    }
+
+    // ── StrEncImpl::encryptStringsXOR (legacy fallback) ───────────────────────────
+    // Kept verbatim from original implementation; activated when useAES=false.
+
+    bool StrEncImpl::encryptStringsXOR(Module& M, StrEncCtx& Ctx) {
+        LLVMContext& C = M.getContext();
+        Type* I8Ty = Type::getInt8Ty(C);
+        Type* I32Ty = Type::getInt32Ty(C);
+        Type* I64Ty = Type::getInt64Ty(C);
+        Type* PtrTy = PointerType::getUnqual(C);
+
+        // ── build/get the legacy XOR decrypt function ──────────────────────────
+        auto getOrCreateXORDecrypt = [&]() -> Function* {
+            if (Function* F = M.getFunction("__decrypt_string")) return F;
+
+            FunctionType* FT = FunctionType::get(
+                PtrTy, { PtrTy, I8Ty, I32Ty }, false);
+            Function* F = Function::Create(
+                FT, GlobalValue::PrivateLinkage, "__decrypt_string", M);
+            F->addFnAttr(Attribute::NoInline);
+            F->addFnAttr(Attribute::NoUnwind);
+
+            Argument* strArg = F->getArg(0); strArg->setName("str");
+            Argument* keyArg = F->getArg(1); keyArg->setName("key");
+            Argument* lenArg = F->getArg(2); lenArg->setName("len");
+
+            BasicBlock* entry = BasicBlock::Create(C, "entry", F);
+            BasicBlock* loopCond = BasicBlock::Create(C, "loop.cond", F);
+            BasicBlock* loopBody = BasicBlock::Create(C, "loop.body", F);
+            BasicBlock* loopEnd = BasicBlock::Create(C, "loop.end", F);
+
+            IRBuilder<> B(entry);
+            AllocaInst* iA = B.CreateAlloca(I32Ty, nullptr, "i");
+            B.CreateStore(ConstantInt::get(I32Ty, 0), iA);
+            B.CreateBr(loopCond);
+
+            B.SetInsertPoint(loopCond);
+            LoadInst* iV = B.CreateLoad(I32Ty, iA, "i.val");
+            B.CreateCondBr(B.CreateICmpSLT(iV, lenArg, "cmp"), loopBody, loopEnd);
+
+            B.SetInsertPoint(loopBody);
+            Value* ptr = B.CreateGEP(I8Ty, strArg, iV, "ptr");
+            Value* ch = B.CreateLoad(I8Ty, ptr, "ch");
+            Value* dec = B.CreateXor(ch, keyArg, "dec");
+            B.CreateStore(dec, ptr);
+            B.CreateStore(B.CreateAdd(iV, ConstantInt::get(I32Ty, 1)), iA);
+            B.CreateBr(loopCond);
+
+            B.SetInsertPoint(loopEnd);
+            B.CreateRet(strArg);
+            return F;
+            };
+
+        Function* DecFn = getOrCreateXORDecrypt();
+
+        auto gepI8 = [&](IRBuilder<>& B, Type* ArrTy, Value* ArrPtr) -> Value* {
+            Value* Z = ConstantInt::get(I32Ty, 0);
+            return B.CreateInBoundsGEP(ArrTy, ArrPtr, { Z, Z }, "strenc.gep");
+            };
+
+        auto materialize = [&](GlobalVariable* GV) {
+            SmallVector<ConstantExpr*, 16> Work;
+            for (User* U : GV->users())
+                if (auto* CE = dyn_cast<ConstantExpr>(U)) Work.push_back(CE);
+            while (!Work.empty()) {
+                auto* CE = Work.pop_back_val();
+                SmallVector<Use*, 16> Uses;
+                for (Use& U : CE->uses()) Uses.push_back(&U);
+                for (Use* UP : Uses) {
+                    if (auto* I = dyn_cast<Instruction>(UP->getUser())) {
+                        Instruction* NI = CE->getAsInstruction();
+                        NI->insertBefore(I);
+                        NI->setDebugLoc(I->getDebugLoc());
+                        UP->set(NI);
+                    }
+                }
+            }
+            };
+
+        std::vector<std::tuple<GlobalVariable*, uint8_t, std::string>> ToEnc;
+        for (GlobalVariable& GV : M.globals()) {
+            if (!shouldEncrypt(GV, Ctx.Cfg.minLength)) continue;
+            auto* CDA = dyn_cast<ConstantDataArray>(GV.getInitializer());
+            if (!CDA || !CDA->isString()) continue;
+            uint8_t K = (uint8_t)(Ctx.KeyRng.u32() & 0xFF);
+            if (!K) K = 42;
+            ToEnc.emplace_back(&GV, K, CDA->getAsCString().str());
+        }
+        if (ToEnc.empty()) return false;
+
+        bool Changed = false;
+        for (auto& [GV, Key, Str] : ToEnc) {
+            materialize(GV);
+
+            std::vector<Constant*> Enc;
+            for (char ch : Str)
+                Enc.push_back(ConstantInt::get(I8Ty, (uint8_t)ch ^ Key));
+            Enc.push_back(ConstantInt::get(I8Ty, 0));
+
+            ArrayType* ArrTy = ArrayType::get(I8Ty, Enc.size());
+            auto* EncGV = new GlobalVariable(M, ArrTy, true,
+                GlobalValue::PrivateLinkage,
+                ConstantArray::get(ArrTy, Enc),
+                ".enc_str");
+            EncGV->setAlignment(Align(1));
+
+            std::set<Function*> Users;
+            for (User* U : GV->users())
+                if (auto* I = dyn_cast<Instruction>(U))
+                    Users.insert(I->getFunction());
+
+            for (Function* F : Users) {
+                if (!F || F->isDeclaration()) continue;
+                Instruction* IP = &*F->getEntryBlock().getFirstInsertionPt();
+                IRBuilder<> B(IP);
+
+                AllocaInst* Buf = B.CreateAlloca(ArrTy, nullptr, "strenc.buf");
+                Buf->setAlignment(Align(1));
+                Value* Dst = gepI8(B, ArrTy, Buf);
+                Value* Src = gepI8(B, ArrTy, EncGV);
+                B.CreateMemCpy(Dst, Align(1), Src, Align(1),
+                    ConstantInt::get(I64Ty, Enc.size()));
+                B.CreateCall(DecFn, {
+                    B.CreateBitCast(Dst, PtrTy),
+                    ConstantInt::get(I8Ty, Key),
+                    ConstantInt::get(I32Ty, (uint32_t)Str.size())
+                    });
+
+                for (User* U : make_early_inc_range(GV->users())) {
+                    auto* I = dyn_cast<Instruction>(U);
+                    if (!I || I->getFunction() != F) continue;
+                    I->replaceUsesOfWith(GV, Buf);
+                }
+                ++DecryptCallsInserted;
+                Changed = true;
+            }
+            ++EncryptedStrings;
+            if (GV->use_empty()) GV->eraseFromParent();
+        }
+        return Changed;
+    }
+
+} // anonymous namespace
+
+// ============================================================================
+// StringEncryptionPass::run
+// ============================================================================
+
+PreservedAnalyses StringEncryptionPass::run(Module& M,
+    ModuleAnalysisManager& MAM) {
+    StrEncCtx Ctx(M, MAM);
+    if (!Ctx.Cfg.enable)
+        return PreservedAnalyses::all();
+
+    if (ObfVerbose) {
+        errs() << "[strenc] enable=" << Ctx.Cfg.enable
+            << " minlen=" << Ctx.Cfg.minLength
+            << " aes=" << Ctx.Cfg.useAES
+            << " keysplit=" << Ctx.Cfg.keySplit
+            << "\n";
+    }
+
+    bool Changed = Ctx.Cfg.useAES
+        ? StrEncImpl::encryptStrings(M, Ctx)
+        : StrEncImpl::encryptStringsXOR(M, Ctx);
+
+    if (Changed && ObfVerbose)
+        errs() << "[strenc] done: " << (uint64_t)EncryptedStrings
+        << " strings, " << (uint64_t)DecryptCallsInserted
+        << " call sites\n";
+
+    return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
+}
