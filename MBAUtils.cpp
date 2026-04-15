@@ -43,7 +43,7 @@ STATISTIC(MBAXor, "Xor instructions transformed with MBA");
 
 
 MbaUtils::MbaUtils(Module& M, Rng& R, StringRef SlotName)
-	MbaUtils(M, R, SlotName, Options{}) {
+	: MbaUtils(M, R, SlotName, Options{}) {
 }
 
 
