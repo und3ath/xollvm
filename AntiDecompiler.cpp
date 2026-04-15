@@ -41,7 +41,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
-#include "llvm/Transforms/Obfuscator/EhUtils.h"
+#include "llvm/Transforms/Obfuscator/EHUtils.h"
 #include "llvm/Transforms/Obfuscator/AntiDecompiler.h"
 #include "llvm/Transforms/Obfuscator/PassCtx.h"
 #include "llvm/Transforms/Obfuscator/FunctionObfContextAnalysis.h"
