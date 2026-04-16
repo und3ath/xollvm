@@ -30,7 +30,7 @@
 #include "llvm/Transforms/Obfuscator/ObfuscationOptions.h"
 #include "llvm/Transforms/Obfuscator/AESStubBitcode.h"
 #include "llvm/Transforms/Obfuscator/OpaqueUtils.h"
-#include "llvm/Transforms/Obfuscator/MbaUtils.h"
+#include "llvm/Transforms/Obfuscator/MBAUtils.h"
 #include "llvm/Transforms/Obfuscator/Rng.h"
 
 #include <functional>
