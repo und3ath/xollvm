@@ -2340,7 +2340,7 @@ void VMImpl::hardenVMEngine(Function* EF, VMEngine::SharedState* SS) {
 	// alloca needed.
 	unsigned HandlerTraps = 0;
 	if (VCtx.Cfg.antiDebug && (TI.IsX86_64 || TI.IsAArch64)) {
-		Function* RCC = Intrinsic::getDeclaration(&M, Intrinsic::readcyclecounter);
+		Function* RCC = Intrinsic::getOrInsertDeclaration(&M, Intrinsic::readcyclecounter);
 
 
 		// Collect candidates FIRST to avoid iterator invalidation.
@@ -3209,7 +3209,7 @@ void VMImpl::buildAntiDebugGate(VMEngine::SharedState* SS) {
 		//  Timing gate: readcyclecounter (x86_64 + AArch64) 
 		bool HasCycleCounter = TI.IsX86_64 || TI.IsAArch64;
 		if (HasCycleCounter) {
-			Function* RCC = Intrinsic::getDeclaration(&M, Intrinsic::readcyclecounter);
+			Function* RCC = Intrinsic::getOrInsertDeclaration(&M, Intrinsic::readcyclecounter);
 			auto* T1 = B.CreateCall(RCC, {}, "vm.ad.t1");
 
 			// Small computation between reads (prevents the two reads from
