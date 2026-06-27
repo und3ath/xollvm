@@ -1,0 +1,33 @@
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+__attribute__((noinline, annotate("{annotation}")))
+uint32_t obf_target(uint32_t x, uint32_t y) {{
+    uint32_t res = x;
+    for (int i = 0; i < 5; ++i) {{
+        switch ((res + (uint32_t)i) % 4u) {{
+            case 0:
+                for (uint32_t j = 0; j < (x % 5u); j++) res ^= (y + j);
+                break;
+            case 1:
+                if (res > y) res -= y; else res += x;
+                break;
+            case 2:
+                res = (res << 3) | (res >> 29);
+                break;
+            case 3:
+                res *= 31u;
+                break;
+        }}
+        if (res & 0x80000000u) res >>= 1;
+    }}
+    return res;
+}}
+
+int main(int argc, char** argv) {{
+    uint32_t x = (argc > 1) ? (uint32_t)strtoul(argv[1], 0, 0) : 123u;
+    uint32_t y = (argc > 2) ? (uint32_t)strtoul(argv[2], 0, 0) : 456u;
+    printf("R=%u\n", obf_target(x, y));
+    return 0;
+}}

@@ -1,0 +1,37 @@
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+static __attribute__((noinline)) uint32_t step_c(uint32_t a, uint32_t b);
+static __attribute__((noinline)) uint32_t step_b(uint32_t a, uint32_t b);
+static __attribute__((noinline)) uint32_t step_a(uint32_t a, uint32_t b);
+
+static __attribute__((noinline)) uint32_t step_c(uint32_t a, uint32_t b) {{
+    return (a ^ b) + ((a + b) * 3u);
+}}
+
+static __attribute__((noinline)) uint32_t step_b(uint32_t a, uint32_t b) {{
+    /* Tail call. */
+    return step_c(a ^ 0xA5u, b + 17u);
+}}
+
+static __attribute__((noinline)) uint32_t step_a(uint32_t a, uint32_t b) {{
+    /* Tail call. */
+    return step_b(a * 7u, b ^ 0x5Au);
+}}
+
+__attribute__((noinline, annotate("{annotation}")))
+uint32_t obf_target(uint32_t x, uint32_t y) {{
+    uint32_t r = step_a(x, y);
+    r ^= step_b(y, x);
+    r += step_c(x ^ y, x + y);
+    return r;
+}}
+
+int main(int argc, char** argv) {{
+    uint32_t x = (argc > 1) ? (uint32_t)strtoul(argv[1], 0, 0) : 0x1234u;
+    uint32_t y = (argc > 2) ? (uint32_t)strtoul(argv[2], 0, 0) : 0x5678u;
+    uint32_t r = obf_target(x, y);
+    printf("R=%u\n", r);
+    return (int)(r & 0xFFu);
+}}

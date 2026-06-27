@@ -44,6 +44,20 @@ add_llvm_component_library(LLVMObfuscator
   StringEncryption.cpp
   VirtualCall.cpp
   AntiDecompiler.cpp
+  ADec/ArchBackend.cpp
+  ADec/Arch_X86_64.cpp
+  ADec/Arch_AArch64.cpp
+  ADec/GadgetPool.cpp
+  ADec/Technique.cpp
+  ADec/Tech_AsmGadgets.cpp
+  ADec/Tech_IndirectBr.cpp
+  ADec/Tech_DeadDecoy.cpp
+  ADec/Tech_StackPollution.cpp
+  ADec/Tech_CallTrampoline.cpp
+  ADec/Tech_AliasConfusion.cpp
+  ADec/Tech_FakeLoop.cpp
+  ADec/Tech_RdtscStretch.cpp
+  ADec/Tech_ConstLaunder.cpp
   AntiOptimizationShield.cpp
   VMPass.cpp
   VMPass_Emitter.cpp

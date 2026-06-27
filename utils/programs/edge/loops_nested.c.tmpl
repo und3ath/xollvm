@@ -1,0 +1,35 @@
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+__attribute__((noinline, annotate("{annotation}")))
+uint32_t obf_target(uint32_t x, uint32_t y) {{
+    uint32_t r = x;
+    /* Triple-nested loop with early-exit + continue. */
+    for (uint32_t i = 0; i < 8u; ++i) {{
+        for (uint32_t j = 0; j < 4u; ++j) {{
+            for (uint32_t k = 0; k < 3u; ++k) {{
+                uint32_t v = (i * 31u) + (j * 17u) + (k * 7u);
+                if ((v ^ y) == 0xDEADu) {{
+                    r ^= v;
+                    goto done;
+                }}
+                if (v & 1u) continue;
+                r += v;
+                r ^= (r >> 3);
+            }}
+            r += y;
+        }}
+        r *= 3u;
+    }}
+done:
+    return r;
+}}
+
+int main(int argc, char** argv) {{
+    uint32_t x = (argc > 1) ? (uint32_t)strtoul(argv[1], 0, 0) : 1u;
+    uint32_t y = (argc > 2) ? (uint32_t)strtoul(argv[2], 0, 0) : 2u;
+    uint32_t r = obf_target(x, y);
+    printf("R=%u\n", r);
+    return (int)(r & 0xFFu);
+}}

@@ -1,0 +1,17 @@
+#include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+__attribute__((noinline, annotate("{annotation}")))
+int obf_target(int unused_x, int unused_y) {{
+    int r = 0;
+    r |= strcmp("{short}", "{short}");
+    r |= strcmp("{long_}", "{long_}");
+    return r;
+}}
+
+int main(int argc, char **argv) {{
+    int r = obf_target(0, 0);
+    if (r != 0) printf("FAIL strenc minlen\n");
+    return r;
+}}

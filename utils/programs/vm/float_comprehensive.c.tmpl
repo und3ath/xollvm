@@ -1,0 +1,57 @@
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+
+static __attribute__((noinline))
+double scalar_op(double a, double b, int mode) {{
+    switch (mode & 3) {{
+    case 0: return a + b;
+    case 1: return a - b;
+    case 2: return a * b;
+    default: return (b != 0.0) ? a / b : a;
+    }}
+}}
+
+__attribute__((noinline, annotate("{annotation}")))
+uint32_t obf_target(uint32_t x, uint32_t y) {{
+    double dx = (double)(int32_t)x;
+    double dy = (double)(int32_t)y;
+    float  fx = (float)dx;
+    double ex = (double)fx;
+
+    double s  = dx + dy;
+    double p  = dx * dy;
+    double d  = (dy != 0.0) ? dx / dy : dx;
+    double rm = fmod(dx + 1.0, dy + 1.0);
+
+    double big = (dx > dy) ? s : p;
+    double sml = (dx < dy) ? d : rm;
+
+    double buf[4] = {{ s, p, d, rm }};
+    buf[(x & 3u)] = big + sml;
+    double loaded = buf[(y & 3u)];
+
+    int32_t  si  = (int32_t)(loaded + 0.5);
+    double abs_loaded = loaded >= 0.0 ? loaded : -loaded;
+    uint32_t ui = (uint32_t)(abs_loaded + 0.5);
+    int64_t  si64 = (int64_t)(s * 1000.0 + 0.5);
+
+    double cr = scalar_op(dx, dy, (int)(x ^ y));
+
+    int64_t cr64 = (int64_t)(cr * 100.0 + 0.5);
+
+    uint64_t acc = (uint64_t)(uint32_t)si ^ (uint64_t)ui
+                ^ (uint64_t)(uint32_t)si64 ^ (uint64_t)(uint32_t)cr64;
+    union {{ float f; uint32_t u; }} ce = {{(float)ex}};
+    uint32_t ex_bits = ce.u;
+    return (uint32_t)(acc ^ (acc >> 32)) ^ x ^ y ^ ex_bits;
+}}
+
+int main(int argc, char** argv) {{
+    uint32_t x = (argc > 1) ? (uint32_t)strtoul(argv[1], 0, 0) : 31416u;
+    uint32_t y = (argc > 2) ? (uint32_t)strtoul(argv[2], 0, 0) : 27182u;
+    uint32_t r = obf_target(x, y);
+    printf("R=%u\n", r);
+    return (int)(r & 0xFF);
+}}

@@ -1,0 +1,36 @@
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+
+__attribute__((noinline, annotate("{annotation}")))
+uint32_t obf_target(uint32_t x, uint32_t y) {{
+    double a = (double)(int32_t)x;
+    double b = (double)(int32_t)y;
+
+    uint32_t r = 0;
+    if (a == b)  r |= 1u;
+    if (a != b)  r |= 2u;
+    if (a <  b)  r |= 4u;
+    if (a <= b)  r |= 8u;
+    if (a >  b)  r |= 16u;
+    if (a >= b)  r |= 32u;
+
+    double nan_val = (x == 0 && y == 0) ? (0.0/0.0) : a;
+    if (!isnan(nan_val) && nan_val < b)  r |= 64u;
+    if ( isnan(nan_val) || nan_val > b)  r |= 128u;
+
+    double sel = (x > y) ? a * 2.0 : b + 1.0;
+    uint32_t sel_bits;
+    __builtin_memcpy(&sel_bits, &sel, 4);
+
+    return r ^ x ^ y ^ sel_bits;
+}}
+
+int main(int argc, char** argv) {{
+    uint32_t x = (argc > 1) ? (uint32_t)strtoul(argv[1], 0, 0) : 100u;
+    uint32_t y = (argc > 2) ? (uint32_t)strtoul(argv[2], 0, 0) : 200u;
+    uint32_t r = obf_target(x, y);
+    printf("R=%u\n", r);
+    return (int)(r & 0xFF);
+}}

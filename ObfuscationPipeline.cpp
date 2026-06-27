@@ -14,6 +14,7 @@
 #include "llvm/Transforms/Obfuscator/VirtualCall.h"
 #include "llvm/Transforms/Obfuscator/ObfRepairSSA.h"
 #include "llvm/Transforms/Obfuscator/VMPass.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <unordered_set>
@@ -87,9 +88,20 @@ ObfuscationPipeline::getOrderingRules() {
 		{}
 	};
 
+	// strenc is a module-only pass (StringEncryptionPass runs before the
+	// function pipeline). The ordering below only affects display in
+	// obf-dump-config and the meta-order tests — place it after all
+	// CFG/IR-mutating passes and before adec to match real-world intent:
+	// encrypt strings on already-obfuscated code, before final anti-decompiler.
+	rules["strenc"] = PassOrderingRules{
+		{"mba", "substitution", "split", "sdiff", "bcf", "vcall", "flattening", "shield"},
+		{"adec"},
+		{}
+	};
+
 	// Anti-decompiler runs last.
 	rules["adec"] = PassOrderingRules{
-		{"mba", "substitution", "split", "sdiff", "bcf", "vcall", "flattening", "shield"},
+		{"mba", "substitution", "split", "sdiff", "bcf", "vcall", "flattening", "shield", "strenc"},
 		{},
 		{}
 	};
@@ -192,6 +204,106 @@ std::vector<std::string> ObfuscationPipeline::getRecommendedOrder(
 	return topologicalSort(requestedPasses, rules);
 }
 
+void ObfuscationPipeline::enforceConflicts(
+	const std::vector<std::string>& passes,
+	const std::unordered_map<std::string, PassOrderingRules>& rules) {
+
+	std::unordered_set<std::string> enabled(passes.begin(), passes.end());
+	for (const auto& p : enabled) {
+		auto it = rules.find(p);
+		if (it == rules.end())
+			continue;
+		for (const auto& c : it->second.conflicts) {
+			if (!enabled.count(c))
+				continue;
+			// Stable ordering for the error message (avoids duplicate fatal
+			// from the symmetric pair).
+			if (p < c) {
+				report_fatal_error(
+					Twine("obfuscator: conflicting passes both enabled: '")
+					+ p + "' and '" + c + "'",
+					/*gen_crash_diag=*/false);
+			}
+		}
+	}
+}
+
+void ObfuscationPipeline::validateExplicitOrder(
+	std::vector<std::string>& cliOrder,
+	const std::unordered_map<std::string, PassOrderingRules>& rules) {
+
+	std::unordered_set<std::string> seen;
+	std::vector<std::string> deduped;
+	deduped.reserve(cliOrder.size());
+
+	for (const auto& name : cliOrder) {
+		if (rules.find(name) == rules.end()) {
+			report_fatal_error(
+				Twine("obfuscator: -obf-pipeline-ordering: unknown pass name '")
+				+ name + "'",
+				/*gen_crash_diag=*/false);
+		}
+		if (seen.insert(name).second)
+			deduped.push_back(name);
+	}
+	cliOrder = std::move(deduped);
+}
+
+std::vector<std::string> ObfuscationPipeline::getPassOrder(
+	const std::vector<std::string>& enabledPasses) {
+
+	auto rules = getOrderingRules();
+
+	// Conflict check covers both BUG-06 (topo path) and CLI override path:
+	// if two mutually exclusive passes are enabled together, fail loud
+	// regardless of which ordering mode is active.
+	enforceConflicts(enabledPasses, rules);
+
+	// Priority 1: explicit CLI order.
+	std::string cliRaw = std::string(ObfPipelineOrdering);
+	if (!cliRaw.empty()) {
+		std::vector<std::string> cli = ParsePipelineOrdering(cliRaw);
+		validateExplicitOrder(cli, rules);
+
+		std::unordered_set<std::string> enabledSet(
+			enabledPasses.begin(), enabledPasses.end());
+
+		std::vector<std::string> result;
+		result.reserve(enabledPasses.size());
+		std::unordered_set<std::string> placed;
+
+		// Emit CLI-listed passes that are actually enabled, in CLI order.
+		for (const auto& name : cli) {
+			if (enabledSet.count(name) && placed.insert(name).second)
+				result.push_back(name);
+			else if (!enabledSet.count(name) && ObfVerbose)
+				errs() << "obfuscator: CLI-ordered pass '" << name
+				       << "' not enabled for this function; skipping\n";
+		}
+
+		// Append remaining enabled passes in topo order so partial CLI lists
+		// still get a sensible tail.
+		std::vector<std::string> remaining;
+		remaining.reserve(enabledPasses.size());
+		for (const auto& name : enabledPasses)
+			if (!placed.count(name))
+				remaining.push_back(name);
+
+		auto tail = topologicalSort(remaining, rules);
+		for (const auto& name : tail)
+			result.push_back(name);
+
+		return result;
+	}
+
+	// Priority 2: per-annotation order verbatim.
+	if (ObfPipelineOrderingAnn)
+		return enabledPasses;
+
+	// Priority 3: topological sort (default).
+	return topologicalSort(enabledPasses, rules);
+}
+
 void ObfuscationPipeline::buildPipeline(FunctionPassManager& FPM,
 	const ObfuscationConfig& config) {
 
@@ -201,7 +313,7 @@ void ObfuscationPipeline::buildPipeline(FunctionPassManager& FPM,
 		return;
 	}
 
-	auto orderedPasses = getRecommendedOrder(enabledPasses);
+	auto orderedPasses = getPassOrder(enabledPasses);
 
 
 
@@ -277,7 +389,7 @@ std::vector<ObfPassEntry> ObfuscationPipeline::getPassEntries(
 	if (enabledPasses.empty())
 		return {};
 
-	auto orderedPasses = getRecommendedOrder(enabledPasses);
+	auto orderedPasses = getPassOrder(enabledPasses);
 
 	std::vector<ObfPassEntry> Entries;
 	Entries.reserve(orderedPasses.size());

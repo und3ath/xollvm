@@ -1,0 +1,31 @@
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+__attribute__((noinline, annotate("{annotation}")))
+uint32_t obf_fn1(uint32_t x, uint32_t y) {{
+    uint32_t r = x;
+    for (uint32_t i = 0; i < (y & 0xF); i++)
+        r = r * 31u + i;
+    return r ^ y;
+}}
+
+__attribute__((noinline, annotate("{annotation}")))
+uint32_t obf_fn2(uint32_t a, uint32_t b) {{
+    uint32_t s = a + b;
+    if (s > 1000u) s = s - 500u;
+    else           s = s * 3u;
+    return s ^ (a << 2) ^ (b >> 1);
+}}
+
+__attribute__((noinline, annotate("{annotation}")))
+uint32_t obf_target(uint32_t x, uint32_t y) {{
+    return obf_fn1(x, y) + obf_fn2(y, x);
+}}
+
+int main(int argc, char** argv) {{
+    uint32_t x = (argc > 1) ? (uint32_t)atoi(argv[1]) : 42;
+    uint32_t y = (argc > 2) ? (uint32_t)atoi(argv[2]) : 17;
+    printf("%u\n", obf_target(x, y));
+    return 0;
+}}

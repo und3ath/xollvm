@@ -1,0 +1,36 @@
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+
+__attribute__((noinline, annotate("{annotation}")))
+uint32_t obf_target(uint32_t x, uint32_t y) {{
+    float  fx = (float)x * 0.001f;
+    float  fy = (float)y * 0.001f + 1.0f;
+    double dx = (double)x * 0.000001;
+    double dy = (double)y * 0.000001 + 1.0;
+
+    float  a = fx + fy;
+    float  b = fx - fy;
+    float  c = fx * fy;
+    float  d = fx / fy;
+    float  e = fmodf(fx + 1.0f, fy);
+
+    double da = dx + dy;
+    double db = dx * dy;
+    double dc = dx / dy;
+    double dd = fmod(dx + 1.0, dy);
+
+    double r = (double)(a + b + c + d + e) + da + db + dc + dd;
+    uint32_t bits;
+    __builtin_memcpy(&bits, &r, 4);
+    return bits ^ x ^ y;
+}}
+
+int main(int argc, char** argv) {{
+    uint32_t x = (argc > 1) ? (uint32_t)strtoul(argv[1], 0, 0) : 1234u;
+    uint32_t y = (argc > 2) ? (uint32_t)strtoul(argv[2], 0, 0) : 5678u;
+    uint32_t r = obf_target(x, y);
+    printf("R=%u\n", r);
+    return (int)(r & 0xFF);
+}}

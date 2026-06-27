@@ -91,7 +91,7 @@ PassConfig AnnotationParser::parsePassConfig(const std::string& passSpec) {
 	std::string spec = passSpec;
 	// trim...
 
-	// Find the first '(' — everything before is the pass name
+	// Find the first '(' ï¿½ everything before is the pass name
 	auto parenPos = spec.find('(');
 	if (parenPos == std::string::npos) {
 		// No params: just a name
@@ -667,7 +667,7 @@ StringEncryptionConfig::fromPassConfig(const PassConfig& pc) {
 	cfg.enable = pc.enabled;
 
 	try {
-		// minlen / minLength / min  — minimum string length
+		// minlen / minLength / min  ï¿½ minimum string length
 		for (StringRef key : {"minlen", "minlength", "min"}) {
 			if (pc.params.count(key.str())) {
 				cfg.minLength = std::stoi(pc.params.at(key.str()));
@@ -675,11 +675,11 @@ StringEncryptionConfig::fromPassConfig(const PassConfig& pc) {
 			}
 		}
 
-		// aes=0|1  — enable/disable AES-CTR (default: 1)
+		// aes=0|1  ï¿½ enable/disable AES-CTR (default: 1)
 		if (pc.params.count("aes"))
 			cfg.useAES = (pc.params.at("aes") != "0");
 
-		// keysplit=0|1  — split key across segments (default: 1)
+		// keysplit=0|1  ï¿½ split key across segments (default: 1)
 		if (pc.params.count("keysplit"))
 			cfg.keySplit = (pc.params.at("keysplit") != "0");
 	}
@@ -696,7 +696,7 @@ bool StringEncryptionConfig::validate() const {
 
 	if (minLength < 1 || minLength > 100) {
 		errs() << "[strenc] invalid minLength=" << minLength
-			<< " (must be 1–100)\n";
+			<< " (must be 1ï¿½100)\n";
 		return false;
 	}
 	return true;
@@ -705,6 +705,26 @@ bool StringEncryptionConfig::validate() const {
 // ============================================================================
 // Anti-decompilation
 // ============================================================================
+
+int AntiDecompilerConfig::effectiveProb(std::string_view techName) const {
+	if (techName == "asmGadgets"     && asmProb         >= 0) return asmProb;
+	if (techName == "indirectBr"     && ibrProb         >= 0) return ibrProb;
+	if (techName == "deadDecoy"      && decoyProb       >= 0) return decoyProb;
+	if (techName == "callTrampoline" && callProb        >= 0) return callProb;
+	if (techName == "aliasConfusion" && aliasProb       >= 0) return aliasProb;
+	if (techName == "fakeLoop"       && fakeLoopProb    >= 0) return fakeLoopProb;
+	if (techName == "rdtscStretch"   && rdtscProb       >= 0) return rdtscProb;
+	if (techName == "constLaunder"   && constLaunderProb >= 0) return constLaunderProb;
+	return prob;
+}
+
+unsigned AntiDecompilerConfig::effectiveStrength(std::string_view techName) const {
+	if (techName == "deadDecoy"      && decoyStrength >= 0)
+		return (unsigned)decoyStrength;
+	if (techName == "stackPollution" && stackStrength >= 0)
+		return (unsigned)stackStrength;
+	return strength;
+}
 
 AntiDecompilerConfig AntiDecompilerConfig::fromPassConfig(const PassConfig& pc) {
 	AntiDecompilerConfig cfg;
@@ -731,12 +751,61 @@ AntiDecompilerConfig AntiDecompilerConfig::fromPassConfig(const PassConfig& pc) 
 		if (auto v = boolParam("deadCodeDecoys"))   cfg.enableDeadCodeDecoys = *v;
 		if (auto v = boolParam("callObfuscation"))  cfg.enableCallObfuscation = *v;
 		if (auto v = boolParam("aliasConfusion"))   cfg.enableAliasConfusion = *v;
+		if (auto v = boolParam("fakeLoop"))         cfg.enableFakeLoop = *v;
+		if (auto v = boolParam("rdtscStretch"))     cfg.enableRdtscStretch = *v;
+		if (auto v = boolParam("constLaunder"))     cfg.enableConstLaunder = *v;
 
 		// Shorthand aliases
-		if (auto v = boolParam("asm"))   cfg.enableAsmAntiDisasm = *v;
-		if (auto v = boolParam("ibr"))   cfg.enableIndirectBr = *v;
-		if (auto v = boolParam("decoy")) cfg.enableDeadCodeDecoys = *v;
-		if (auto v = boolParam("alias")) cfg.enableAliasConfusion = *v;
+		if (auto v = boolParam("asm"))    cfg.enableAsmAntiDisasm = *v;
+		if (auto v = boolParam("ibr"))    cfg.enableIndirectBr = *v;
+		if (auto v = boolParam("decoy"))  cfg.enableDeadCodeDecoys = *v;
+		if (auto v = boolParam("alias"))  cfg.enableAliasConfusion = *v;
+		if (auto v = boolParam("loop"))   cfg.enableFakeLoop = *v;
+		if (auto v = boolParam("rdtsc"))  cfg.enableRdtscStretch = *v;
+		if (auto v = boolParam("clndr"))  cfg.enableConstLaunder = *v;
+
+		// Per-technique probability overrides.
+		if (pc.params.count("asmProb"))      cfg.asmProb      = std::stoi(pc.params.at("asmProb"));
+		if (pc.params.count("ibrProb"))      cfg.ibrProb      = std::stoi(pc.params.at("ibrProb"));
+		if (pc.params.count("decoyProb"))    cfg.decoyProb    = std::stoi(pc.params.at("decoyProb"));
+		if (pc.params.count("callProb"))     cfg.callProb     = std::stoi(pc.params.at("callProb"));
+		if (pc.params.count("aliasProb"))    cfg.aliasProb    = std::stoi(pc.params.at("aliasProb"));
+		if (pc.params.count("fakeLoopProb")) cfg.fakeLoopProb = std::stoi(pc.params.at("fakeLoopProb"));
+		if (pc.params.count("rdtscProb"))    cfg.rdtscProb    = std::stoi(pc.params.at("rdtscProb"));
+		if (pc.params.count("constLaunderProb"))
+			cfg.constLaunderProb = std::stoi(pc.params.at("constLaunderProb"));
+
+		// Per-technique strength overrides.
+		if (pc.params.count("decoyStrength"))
+			cfg.decoyStrength = std::stoi(pc.params.at("decoyStrength"));
+		if (pc.params.count("stackStrength"))
+			cfg.stackStrength = std::stoi(pc.params.at("stackStrength"));
+
+		// External gadget JSON path.
+		if (pc.params.count("gadgets"))
+			cfg.gadgetsFile = pc.params.at("gadgets");
+		// Inline ad-hoc asm gadgets (';' separated raw bodies).
+		if (pc.params.count("asmInline"))
+			cfg.inlineAsm = pc.params.at("asmInline");
+
+		// Technique / category filters (comma separated).
+		auto splitCsv = [](const std::string& s) {
+			std::vector<std::string> out;
+			std::string cur;
+			for (char c : s) {
+				if (c == ',') {
+					if (!cur.empty()) { out.push_back(cur); cur.clear(); }
+				} else if (c != ' ' && c != '\t') {
+					cur.push_back(c);
+				}
+			}
+			if (!cur.empty()) out.push_back(cur);
+			return out;
+		};
+		if (pc.params.count("techniques"))
+			cfg.techniquesAllowed = splitCsv(pc.params.at("techniques"));
+		if (pc.params.count("categories"))
+			cfg.categoriesAllowed = splitCsv(pc.params.at("categories"));
 	}
 	catch (const std::exception& e) {
 		errs() << "Error parsing AntiDecompiler parameters: " << e.what() << "\n";
@@ -758,6 +827,33 @@ bool AntiDecompilerConfig::validate() const {
 	}
 	if (strength > 3) {
 		errs() << "AntiDecompiler: Invalid strength " << strength << " (must be 0-3)\n";
+		return false;
+	}
+	auto checkProb = [&](const char* name, int v) {
+		if (v == -1) return true;
+		if (v < 1 || v > 100) {
+			errs() << "AntiDecompiler: Invalid " << name << " " << v
+			       << " (must be 1-100 or -1)\n";
+			return false;
+		}
+		return true;
+	};
+	if (!checkProb("asmProb",          asmProb))          return false;
+	if (!checkProb("ibrProb",          ibrProb))          return false;
+	if (!checkProb("decoyProb",        decoyProb))        return false;
+	if (!checkProb("callProb",         callProb))         return false;
+	if (!checkProb("aliasProb",        aliasProb))        return false;
+	if (!checkProb("fakeLoopProb",     fakeLoopProb))     return false;
+	if (!checkProb("rdtscProb",        rdtscProb))        return false;
+	if (!checkProb("constLaunderProb", constLaunderProb)) return false;
+	if (decoyStrength != -1 && (decoyStrength < 0 || decoyStrength > 3)) {
+		errs() << "AntiDecompiler: Invalid decoyStrength " << decoyStrength
+		       << " (must be 0-3 or -1)\n";
+		return false;
+	}
+	if (stackStrength != -1 && (stackStrength < 0 || stackStrength > 3)) {
+		errs() << "AntiDecompiler: Invalid stackStrength " << stackStrength
+		       << " (must be 0-3 or -1)\n";
 		return false;
 	}
 	return true;

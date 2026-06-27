@@ -1,0 +1,29 @@
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdarg.h>
+
+static __attribute__((noinline))
+uint32_t vadd(int n, ...) {{
+    va_list ap;
+    va_start(ap, n);
+    uint32_t sum = 0;
+    for (int i = 0; i < n; i++) sum += (uint32_t)va_arg(ap, int);
+    va_end(ap);
+    return sum;
+}}
+
+__attribute__((noinline, annotate("{annotation}")))
+uint32_t obf_target(uint32_t x, uint32_t y) {{
+    uint32_t a = vadd(3, (int)x, (int)y, (int)(x ^ y));
+    uint32_t b = vadd(2, (int)(x + y), (int)(x * y & 0xFFFF));
+    return a ^ b ^ (x << 1) ^ (y >> 1);
+}}
+
+int main(int argc, char** argv) {{
+    uint32_t x = (argc > 1) ? (uint32_t)strtoul(argv[1], 0, 0) : 111u;
+    uint32_t y = (argc > 2) ? (uint32_t)strtoul(argv[2], 0, 0) : 222u;
+    uint32_t r = obf_target(x, y);
+    printf("R=%u\n", r);
+    return (int)(r & 0xFF);
+}}

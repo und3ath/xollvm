@@ -165,7 +165,7 @@ namespace llvm::obf {
 	private:
 		Module& M;
 		Rng& R;       ///< Noise RNG (alias to caller-owned Rng).
-		StringRef SlotName;
+		std::string SlotName;
 		Options   Opts;
 
 		// Per-function cache — reset whenever a different function is detected.

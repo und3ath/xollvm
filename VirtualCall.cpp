@@ -3,6 +3,9 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
+#include <memory>
+#include <mutex>
+#include <unordered_map>
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/IR/Type.h"
@@ -390,10 +393,13 @@ namespace {
 	static const char* kMergedMDKey = "obf.vcall.merged.info";
 
 	MergedVTableInfo& VCallImpl::getMergedInfo(Module& M) {
-		// Store in Module metadata via a static map keyed by Module* (simple & safe in-pass lifetime).
-		// This pass runs per-function, but within one opt invocation this is stable.
-		static DenseMap<Module*, MergedVTableInfo> Map;
-		return Map[&M];
+		static std::mutex MapMutex;
+		static std::unordered_map<Module*, std::unique_ptr<MergedVTableInfo>> Map;
+		std::lock_guard<std::mutex> Lock(MapMutex);
+		auto& Ptr = Map[&M];
+		if (!Ptr)
+			Ptr = std::make_unique<MergedVTableInfo>();
+		return *Ptr;
 	}
 
 	GlobalVariable* VCallImpl::getOrCreateMergedVTable(Module& M, Function* Callee, VCallCtx& Ctx,
@@ -504,7 +510,7 @@ namespace {
 				NewElems.push_back(Constant::getNullValue(PtrTy));
 		}
 
-		BaseOut = OldN; // base offset for this callee’s segment (aligned)
+		BaseOut = OldN; // base offset for this calleeï¿½s segment (aligned)
 		for (Constant* E : Segment) NewElems.push_back(E);
 
 		ArrayType* NewAT = ArrayType::get(PtrTy, (unsigned)NewElems.size());
@@ -544,7 +550,11 @@ namespace {
 		L2->setVolatile(true);
 
 		// Optional "shape" noise. K cancels out algebraically, but keeps extra ops in IR.
+		// Mask to ITy bitwidth so ConstantInt::get does not assert on narrow ITy.
+		unsigned IBW = ITy->getBitWidth();
 		uint64_t K = (uint64_t)IndexRng.u32() | 1ull;
+		if (IBW < 64) K &= ((uint64_t(1) << IBW) - 1);
+		if (K == 0) K = 1;
 		Value* Kc = ConstantInt::get(ITy, K);
 
 		Value* A1 = B.CreateAdd(L1, Kc, "vcall.a1");
@@ -571,7 +581,7 @@ namespace {
 		LLVMContext& C = B.getContext();
 		Type* I32 = Type::getInt32Ty(C);
 
-		// Reuse runtime-zero delta to create “unknown but equals 0” value.
+		// Reuse runtime-zero delta to create ï¿½unknown but equals 0ï¿½ value.
 		Value* Z = makeRuntimeZeroDelta(B, Ctx.VolSlot, Ctx.SiteRng);
 		Value* V = B.CreateAdd(IdxI32, Z, "vcall.idx.zadd");
 
@@ -639,10 +649,14 @@ namespace {
 		Type* I32 = Type::getInt32Ty(C);
 		Value* Mask = ConstantInt::get(I32, kTableSize - 1);
 
-		// Compute Idx = (BaseOff + RealSlot + delta0) & mask.
+		// Compute Idx = BaseOff + ((RealSlot + delta0) & mask).
+		// The mask keeps the lookup inside this callee's kTableSize-sized segment;
+		// in merged mode BaseOff is the segment start and must not be masked away.
 		Value* Delta0 = makeRuntimeZeroDelta(B, Ctx.VolSlot, Ctx.IndexRng);
-		Value* Base = ConstantInt::get(I32, (uint32_t)(BaseOff + RealSlot));
-		Value* Idx = B.CreateAnd(B.CreateAdd(Base, Delta0, "vcall.idx.add"), Mask, "vcall.idx");
+		Value* RealSlotV = ConstantInt::get(I32, (uint32_t)RealSlot);
+		Value* InSeg = B.CreateAnd(B.CreateAdd(RealSlotV, Delta0, "vcall.idx.add"), Mask, "vcall.idx.seg");
+		Value* BaseV = ConstantInt::get(I32, (uint32_t)BaseOff);
+		Value* Idx = Merged ? B.CreateAdd(BaseV, InSeg, "vcall.idx") : InSeg;
 		Idx = obfuscateIndexPerCallsite(B, Idx, Ctx);
 
 		Value* GEPIdx[] = { ConstantInt::get(I32, 0), Idx };

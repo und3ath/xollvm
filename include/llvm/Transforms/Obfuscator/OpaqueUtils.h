@@ -103,7 +103,7 @@ namespace llvm::obf {
 	private:
 		Module& M;
 		Rng& R;
-		StringRef SlotName;
+		std::string SlotName;
 		Options Opts;
 
 		// Per-instance cache (safe even if reused across functions)

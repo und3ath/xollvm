@@ -1,0 +1,30 @@
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+__attribute__((noinline, annotate("{annotation}")))
+uint32_t obf_target(uint32_t x, uint32_t y) {{
+    int8_t   i8  = (int8_t)(x ^ 0xA5u);
+    uint8_t  u8  = (uint8_t)(y + 17u);
+    int16_t  i16 = (int16_t)(x >> 16) ^ 0x1234;
+    uint16_t u16 = (uint16_t)(y >> 8)  + 0xBEEFu;
+    int64_t  i64 = ((int64_t)(int32_t)x * -3) + (int64_t)y;
+    uint64_t u64 = ((uint64_t)x << 1) | ((uint64_t)y << 33);
+
+    int32_t  sext = (int32_t)i8 + (int32_t)i16;
+    uint32_t zext = (uint32_t)u8 + (uint32_t)u16;
+    int32_t  trunc64 = (int32_t)(i64 ^ (int64_t)u64);
+
+    uint32_t r = (uint32_t)sext ^ zext ^ (uint32_t)trunc64;
+    r ^= (uint32_t)(u64 >> 32);
+    r += (uint32_t)(i64 & 0xFFFFFFFF);
+    return r;
+}}
+
+int main(int argc, char** argv) {{
+    uint32_t x = (argc > 1) ? (uint32_t)strtoul(argv[1], 0, 0) : 0xDEADBEEFu;
+    uint32_t y = (argc > 2) ? (uint32_t)strtoul(argv[2], 0, 0) : 0x12345678u;
+    uint32_t r = obf_target(x, y);
+    printf("R=%u\n", r);
+    return (int)(r & 0xFFu);
+}}

@@ -1,0 +1,33 @@
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+typedef struct {{
+    uint32_t a, b, c, d;
+}} Quad;
+
+static __attribute__((noinline)) Quad mix_quad(Quad q, uint32_t k) {{
+    Quad r;
+    r.a = q.a ^ k;
+    r.b = q.b + (k << 1);
+    r.c = q.c - (k * 3u);
+    r.d = q.d ^ (q.a + q.b + q.c);
+    return r;
+}}
+
+__attribute__((noinline, annotate("{annotation}")))
+uint32_t obf_target(uint32_t x, uint32_t y) {{
+    Quad q = {{ x, y, x ^ y, x + y }};
+    q = mix_quad(q, 0xDEADu);
+    q = mix_quad(q, x);
+    q = mix_quad(q, y);
+    return q.a ^ q.b ^ q.c ^ q.d;
+}}
+
+int main(int argc, char** argv) {{
+    uint32_t x = (argc > 1) ? (uint32_t)strtoul(argv[1], 0, 0) : 0xCAFEu;
+    uint32_t y = (argc > 2) ? (uint32_t)strtoul(argv[2], 0, 0) : 0xBABEu;
+    uint32_t r = obf_target(x, y);
+    printf("R=%u\n", r);
+    return (int)(r & 0xFFu);
+}}

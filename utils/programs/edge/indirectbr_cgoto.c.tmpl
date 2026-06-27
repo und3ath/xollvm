@@ -1,0 +1,27 @@
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+__attribute__((noinline, annotate("{annotation}")))
+uint32_t obf_target(uint32_t x, uint32_t y) {{
+    /* Labels-as-values + computed goto — emits LLVM indirectbr. */
+    static const void *table[] = {{ &&L0, &&L1, &&L2, &&L3 }};
+    uint32_t r = y;
+    uint32_t idx = x & 3u;
+    goto *table[idx];
+
+L0: r += 1u;          goto Lend;
+L1: r ^= (x << 1);    goto Lend;
+L2: r *= 3u;          r += y; goto Lend;
+L3: r = (r >> 5) | (r << 27);
+Lend:
+    return r ^ (x + y);
+}}
+
+int main(int argc, char** argv) {{
+    uint32_t x = (argc > 1) ? (uint32_t)strtoul(argv[1], 0, 0) : 2u;
+    uint32_t y = (argc > 2) ? (uint32_t)strtoul(argv[2], 0, 0) : 99u;
+    uint32_t r = obf_target(x, y);
+    printf("R=%u\n", r);
+    return (int)(r & 0xFFu);
+}}

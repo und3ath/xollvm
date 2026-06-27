@@ -1,0 +1,27 @@
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+__attribute__((noinline, annotate("{annotation}")))
+uint32_t obf_target(uint32_t x, uint32_t y) {{
+    double buf[4];
+    buf[0] = (double)x;
+    buf[1] = (double)y;
+    buf[2] = buf[0] * 1.5 + 0.5;
+    buf[3] = buf[1] * 2.0 - 1.0;
+
+    double sum     = buf[0] + buf[1] + buf[2] + buf[3];
+    double idx_val = buf[(x ^ y) & 3u];
+
+    union {{ double d; uint64_t u; }} cs = {{sum}}, ci = {{idx_val}};
+    uint64_t r64 = cs.u ^ ci.u ^ (uint64_t)x ^ ((uint64_t)y << 32);
+    return (uint32_t)(r64 ^ (r64 >> 32));
+}}
+
+int main(int argc, char** argv) {{
+    uint32_t x = (argc > 1) ? (uint32_t)strtoul(argv[1], 0, 0) : 42u;
+    uint32_t y = (argc > 2) ? (uint32_t)strtoul(argv[2], 0, 0) : 99u;
+    uint32_t r = obf_target(x, y);
+    printf("R=%u\n", r);
+    return (int)(r & 0xFF);
+}}

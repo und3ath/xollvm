@@ -1,0 +1,38 @@
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdexcept>
+
+struct Guard {{
+    uint32_t* val;
+    Guard(uint32_t* v) : val(v) {{ *val += 10; }}
+    ~Guard() {{ *val += 5; }}
+}};
+
+__attribute__((noinline, annotate("{annotation}")))
+uint32_t obf_target(uint32_t x, uint32_t y) {{
+    uint32_t status = 0;
+    try {{
+        Guard g(&status);
+        if (x == 0) throw std::runtime_error("zero");
+        if (x > y) {{
+            status += (x ^ y);
+            if (status % 2 == 0) throw 42;
+        }}
+        status += (x * y);
+    }} catch (const std::runtime_error&) {{
+        status += 100;
+    }} catch (int ecode) {{
+        status += (uint32_t)ecode;
+    }} catch (...) {{
+        status += 1;
+    }}
+    return status;
+}}
+
+int main(int argc, char** argv) {{
+    uint32_t x = (argc > 1) ? (uint32_t)strtoul(argv[1], 0, 0) : 10u;
+    uint32_t y = (argc > 2) ? (uint32_t)strtoul(argv[2], 0, 0) : 5u;
+    printf("R=%u\n", obf_target(x, y));
+    return 0;
+}}

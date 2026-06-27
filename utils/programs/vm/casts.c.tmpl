@@ -1,0 +1,29 @@
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+__attribute__((noinline, annotate("{annotation}")))
+uint32_t obf_target(uint32_t x, uint32_t y) {{
+    short s = (short)(x & 0xFFFFu);
+    char  c = (char)(y & 0xFFu);
+
+    int a = (int)s + (int)x;
+    int b = (int)(unsigned char)c;
+    short t = (short)(a & 0x7FFF);
+
+    int32_t t32 = (int32_t)(a ^ b);
+    int64_t sext = (int64_t)t32;
+    uint32_t u32 = (uint32_t)(a + (uint32_t)b);
+    uint64_t zext = (uint64_t)u32;
+
+    uint64_t mix = (uint64_t)sext + zext + (uint64_t)(uint16_t)t;
+    return (uint32_t)(mix ^ (mix >> 32));
+}}
+
+int main(int argc, char** argv) {{
+    uint32_t x = (argc > 1) ? (uint32_t)strtoul(argv[1], 0, 0) : 123u;
+    uint32_t y = (argc > 2) ? (uint32_t)strtoul(argv[2], 0, 0) : 456u;
+    uint32_t r = obf_target(x, y);
+    printf("R=%u\n", r);
+    return (int)(r & 0xFFu);
+}}

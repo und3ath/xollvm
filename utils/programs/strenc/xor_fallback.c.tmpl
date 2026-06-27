@@ -1,0 +1,14 @@
+#include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+__attribute__((noinline, annotate("{annotation}")))
+int obf_target(int unused_x, int unused_y) {{
+    return strcmp("{secret}", "{secret}");
+}}
+
+int main(int argc, char **argv) {{
+    int r = obf_target(0, 0);
+    if (r != 0) printf("FAIL strenc xor\n");
+    return r;
+}}

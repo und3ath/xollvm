@@ -1,0 +1,25 @@
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+__attribute__((noinline, annotate("{annotation}")))
+uint32_t obf_target(uint32_t x, uint32_t y) {{
+    uint32_t arr[8];
+    for (uint32_t i = 0; i < 8u; ++i) {{
+        arr[i] = (x + i) ^ (y + (i * 3u));
+    }}
+    uint32_t idx = (x ^ (y << 1)) & 7u;
+    uint32_t *p = &arr[idx];
+    uint32_t v = *p;
+    *p = v + (y & 0xFFu);
+    uint32_t w = arr[(idx + 5u) & 7u];
+    return (v ^ w) + arr[idx];
+}}
+
+int main(int argc, char** argv) {{
+    uint32_t x = (argc > 1) ? (uint32_t)strtoul(argv[1], 0, 0) : 123u;
+    uint32_t y = (argc > 2) ? (uint32_t)strtoul(argv[2], 0, 0) : 456u;
+    uint32_t r = obf_target(x, y);
+    printf("R=%u\n", r);
+    return (int)(r & 0xFFu);
+}}

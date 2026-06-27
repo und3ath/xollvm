@@ -1,0 +1,23 @@
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+static __attribute__((noinline)) uint32_t fib(uint32_t n) {{
+    if (n < 2u) return n;
+    return fib(n - 1u) + fib(n - 2u);
+}}
+
+__attribute__((noinline, annotate("{annotation}")))
+uint32_t obf_target(uint32_t x, uint32_t y) {{
+    uint32_t n = (x % 16u) + 1u;
+    uint32_t r = fib(n);
+    return r ^ y;
+}}
+
+int main(int argc, char** argv) {{
+    uint32_t x = (argc > 1) ? (uint32_t)strtoul(argv[1], 0, 0) : 10u;
+    uint32_t y = (argc > 2) ? (uint32_t)strtoul(argv[2], 0, 0) : 7u;
+    uint32_t r = obf_target(x, y);
+    printf("R=%u\n", r);
+    return (int)(r & 0xFFu);
+}}

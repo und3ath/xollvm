@@ -41,7 +41,7 @@ PreservedAnalyses ObfDumpConfigPass::run(Module& M, ModuleAnalysisManager& MAM) 
 		printList(outs(), Enabled);
 		outs() << "\n";
 
-		auto Ordered = ObfuscationPipeline::getRecommendedOrder(Enabled);
+		auto Ordered = ObfuscationPipeline::getPassOrder(Enabled);
 		outs() << "  ordered: ";
 		printList(outs(), Ordered);
 		outs() << "\n";

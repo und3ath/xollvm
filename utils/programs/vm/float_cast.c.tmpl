@@ -1,0 +1,41 @@
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+__attribute__((noinline, annotate("{annotation}")))
+uint32_t obf_target(uint32_t x, uint32_t y) {{
+    int32_t  si = (int32_t)x - 50000;
+    uint32_t ui = y;
+    int64_t  si64 = (int64_t)si * 1000LL;
+    uint64_t ui64 = (uint64_t)ui * 2ULL;
+
+    double fa = (double)si;
+    double fb = (double)ui;
+    double fc = (double)si64;
+    double fd = (double)ui64;
+
+    float   flt = (float)fa;
+    double  ext = (double)flt;
+
+    int32_t  back_si   = (int32_t)(fa + 0.5);
+    uint32_t back_ui   = (uint32_t)(fb + 0.5);
+    int64_t  back_si64 = (int64_t)(fc * 0.001 + 0.5);
+    uint64_t back_ui64 = (uint64_t)(fd * 0.5  + 0.5);
+
+    uint64_t mix = (uint64_t)((uint32_t)back_si ^ back_ui)
+                ^ (uint64_t)(back_si64 ^ (int64_t)back_ui64);
+    mix ^= *(uint64_t*)&ext;
+    // Use signed FP-to-int conv: fa/fb may be negative for small x, and
+    // fptoui on a negative double is UB (poison) that O0 vs O2 lower
+    // differently between native and VM-dispatched paths.
+    mix ^= (uint64_t)(int64_t)fa + (uint64_t)(int64_t)fb;
+    return (uint32_t)(mix ^ (mix >> 32));
+}}
+
+int main(int argc, char** argv) {{
+    uint32_t x = (argc > 1) ? (uint32_t)strtoul(argv[1], 0, 0) : 77777u;
+    uint32_t y = (argc > 2) ? (uint32_t)strtoul(argv[2], 0, 0) : 33333u;
+    uint32_t r = obf_target(x, y);
+    printf("R=%u\n", r);
+    return (int)(r & 0xFF);
+}}

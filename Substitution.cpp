@@ -212,7 +212,10 @@ namespace {
 			E = B.CreateBitCast(E32, Ty);
 
 		// Mix with a random constant, but keep it non-constant overall.
+		// Mask to BW bits so APInt ctor does not assert on i1/i8/i16/i32.
 		uint64_t C = Rng.u64();
+		if (BW < 64)
+			C &= (uint64_t(1) << BW) - 1;
 		Value* K = ConstantInt::get(Ty, C);
 		Value* X = B.CreateXor(E, K, "sub.rand");
 		return B.CreateFreeze(X, "sub.rand.fr");

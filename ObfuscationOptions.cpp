@@ -1,4 +1,6 @@
 #include "llvm/Transforms/Obfuscator/ObfuscationOptions.h"
+#include "llvm/ADT/SmallVector.h"
+#include <cctype>
 
 using namespace llvm;
 
@@ -73,3 +75,126 @@ cl::opt<std::string> llvm::ObfReportJson(
 	"obf-report-json",
 	cl::desc("Write JSON obfuscation map to this path ('-' for stdout). Empty=off"),
 	cl::init(""));
+
+cl::opt<std::string> llvm::ObfPipelineOrdering(
+	"obf-pipeline-ordering",
+	cl::desc("Explicit comma-separated pipeline order "
+	         "(e.g. \"mba,split,bcf,flattening\"). "
+	         "Listed passes go first in this order; "
+	         "remaining enabled passes are appended in topo order. "
+	         "Unknown names are fatal. Empty=off."),
+	cl::init(""));
+
+cl::opt<bool> llvm::ObfPipelineOrderingAnn(
+	"obf-pipeline-ordering-ann",
+	cl::desc("Use the per-function annotation order verbatim instead of "
+	         "topological sort. Ignored when -obf-pipeline-ordering is set."),
+	cl::init(false));
+
+std::vector<std::string> llvm::ParsePipelineOrdering(llvm::StringRef raw) {
+	std::vector<std::string> out;
+	llvm::SmallVector<llvm::StringRef, 16> parts;
+	raw.split(parts, ',', /*MaxSplit=*/-1, /*KeepEmpty=*/false);
+	out.reserve(parts.size());
+	for (auto &p : parts) {
+		llvm::StringRef trimmed = p.trim();
+		if (trimmed.empty())
+			continue;
+		std::string s;
+		s.reserve(trimmed.size());
+		for (char c : trimmed)
+			s.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+		out.push_back(std::move(s));
+	}
+	return out;
+}
+
+cl::opt<std::string> llvm::ADecGadgetsFile(
+	"adec-gadgets-file",
+	cl::desc("Comma-separated list of JSON gadget files merged into the "
+	         "global gadget pool. Empty=off (built-ins only)."),
+	cl::init(""));
+
+cl::opt<bool> llvm::ADecDisableBuiltinGadgets(
+	"adec-disable-builtin-gadgets",
+	cl::desc("Suppress the compile-time built-in gadget tables; rely "
+	         "entirely on user-supplied files / annotations."),
+	cl::init(false));
+
+cl::opt<std::string> llvm::ADecClobbersX86(
+	"adec-clobbers-x86",
+	cl::desc("Override default inline-asm clobber list for x86_64. "
+	         "Comma-separated short register names."),
+	cl::init(""));
+
+cl::opt<std::string> llvm::ADecClobbersAArch64(
+	"adec-clobbers-aarch64",
+	cl::desc("Override default inline-asm clobber list for aarch64. "
+	         "Comma-separated short register names."),
+	cl::init(""));
+
+cl::opt<std::string> llvm::ADecTechniques(
+	"adec-techniques",
+	cl::desc("Whitelist of anti-decompiler technique names, comma-separated "
+	         "(asmGadgets,indirectBr,deadDecoy,stackPollution,"
+	         "callTrampoline,aliasConfusion). Empty=all."),
+	cl::init(""));
+
+cl::opt<std::string> llvm::ADecCategories(
+	"adec-categories",
+	cl::desc("Gadget category filter, comma-separated "
+	         "(anti-disasm,anti-trace,desync,...). Empty=all."),
+	cl::init(""));
+
+cl::opt<std::string> llvm::ADecBudgetSplit(
+	"adec-budget-split",
+	cl::desc("Per-technique budget percent split, e.g. "
+	         "\"asm:30,ibr:20,decoy:20,call:15,alias:15,"
+	         "loop:5,rdtsc:5,clndr:10\". "
+	         "Empty=defaults."),
+	cl::init(""));
+
+cl::opt<std::string> llvm::ADecPrefix(
+	"adec-prefix",
+	cl::desc("IR-name prefix for anti-decompiler artifacts. Default 'adec'. "
+	         "Override with a per-build random value to defeat signature "
+	         "scans against canonical adec.* names."),
+	cl::init("adec"));
+
+cl::opt<bool> llvm::ADecRandomizeConsts(
+	"adec-randomize-consts",
+	cl::desc("Replace hard-coded decoy payload constants with RNG values."),
+	cl::init(false));
+
+std::vector<std::string> llvm::ParseAdecCsv(llvm::StringRef raw) {
+	std::vector<std::string> out;
+	llvm::SmallVector<llvm::StringRef, 16> parts;
+	raw.split(parts, ',', /*MaxSplit=*/-1, /*KeepEmpty=*/false);
+	out.reserve(parts.size());
+	for (auto &p : parts) {
+		llvm::StringRef trimmed = p.trim();
+		if (trimmed.empty())
+			continue;
+		out.push_back(trimmed.str());
+	}
+	return out;
+}
+
+std::string llvm::FormatClobberList(llvm::StringRef rawCsv) {
+	std::string out;
+	bool first = true;
+	llvm::SmallVector<llvm::StringRef, 16> parts;
+	rawCsv.split(parts, ',', /*MaxSplit=*/-1, /*KeepEmpty=*/false);
+	for (auto &p : parts) {
+		llvm::StringRef trimmed = p.trim();
+		if (trimmed.empty())
+			continue;
+		if (!first)
+			out.push_back(',');
+		first = false;
+		out += "~{";
+		out += trimmed.str();
+		out.push_back('}');
+	}
+	return out;
+}

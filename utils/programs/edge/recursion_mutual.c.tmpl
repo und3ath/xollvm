@@ -1,0 +1,30 @@
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+static __attribute__((noinline)) uint32_t is_even(uint32_t n);
+static __attribute__((noinline)) uint32_t is_odd(uint32_t n);
+
+static __attribute__((noinline)) uint32_t is_even(uint32_t n) {{
+    if (n == 0u) return 1u;
+    return is_odd(n - 1u);
+}}
+
+static __attribute__((noinline)) uint32_t is_odd(uint32_t n) {{
+    if (n == 0u) return 0u;
+    return is_even(n - 1u);
+}}
+
+__attribute__((noinline, annotate("{annotation}")))
+uint32_t obf_target(uint32_t x, uint32_t y) {{
+    uint32_t n = (x ^ y) % 24u;
+    return (is_even(n) << 16) | (is_odd(n) << 8) | (n & 0xFFu);
+}}
+
+int main(int argc, char** argv) {{
+    uint32_t x = (argc > 1) ? (uint32_t)strtoul(argv[1], 0, 0) : 5u;
+    uint32_t y = (argc > 2) ? (uint32_t)strtoul(argv[2], 0, 0) : 8u;
+    uint32_t r = obf_target(x, y);
+    printf("R=%u\n", r);
+    return (int)(r & 0xFFu);
+}}

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <cstdint>
 #include <vector>
@@ -173,6 +174,37 @@ namespace llvm {
 		bool enableDeadCodeDecoys = true;  // opaque pred + type-confusing dead blocks
 		bool enableCallObfuscation = true;  // indirect call through volatile slots
 		bool enableAliasConfusion = true;  // pointer aliasing via ptrtoint chains
+		bool enableFakeLoop = false;   // opaque-bounded fake loop with junk math
+		bool enableRdtscStretch = false;  // passive rdtsc anti-trace reads (x86 only)
+		bool enableConstLaunder = false;  // route literal constants through volatile globals
+
+		// Per-technique probability overrides. -1 = fall back to `prob`.
+		int asmProb = -1;
+		int ibrProb = -1;
+		int decoyProb = -1;
+		int callProb = -1;
+		int aliasProb = -1;
+		int fakeLoopProb = -1;
+		int rdtscProb = -1;
+		int constLaunderProb = -1;
+
+		// Per-technique strength overrides. -1 = fall back to `strength`.
+		int decoyStrength = -1;
+		int stackStrength = -1;
+
+		// Per-function annotation path to a JSON gadget pool.
+		std::string gadgetsFile;
+		// Per-function inline asm bodies (raw, separated by ';').
+		// Appended to the function-scope gadget pool.
+		std::string inlineAsm;
+		// Per-function technique whitelist (empty = no filter).
+		std::vector<std::string> techniquesAllowed;
+		// Per-function gadget category filter (empty = no filter).
+		std::vector<std::string> categoriesAllowed;
+
+		// Resolve effective per-technique prob/strength with fallback.
+		int effectiveProb(std::string_view techName) const;
+		unsigned effectiveStrength(std::string_view techName) const;
 
 		static AntiDecompilerConfig fromPassConfig(const PassConfig& pc);
 		bool validate() const;

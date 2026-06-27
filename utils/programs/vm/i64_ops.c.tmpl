@@ -1,0 +1,58 @@
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <inttypes.h>
+
+__attribute__((noinline, annotate("{annotation}")))
+uint32_t obf_target(uint32_t x, uint32_t y) {{
+    uint64_t ux = (((uint64_t)x) << 32) | (uint64_t)y;
+    uint64_t uy = (((uint64_t)y) << 32) | (uint64_t)x;
+    uy |= 1ULL;
+
+    uint64_t buf[4];
+    buf[0] = ux + 0x123456789ABCDEF0ULL;
+    buf[1] = uy ^ 0x0F0F0F0F0F0F0F0FULL;
+    buf[2] = buf[0] + buf[1];
+    buf[3] = buf[0] ^ buf[1];
+    uint64_t *p = &buf[(x ^ y) & 3u];
+    uint64_t v  = *p;
+    *p = v + 1ULL;
+
+    uintptr_t pi = (uintptr_t)((uint8_t*)p - (uint8_t*)buf);
+
+    int64_t sx = (int64_t)((int32_t)x) - 123;
+    int64_t sy = (int64_t)((int32_t)y) + 7;
+    if (sy == 0) sy = 1;
+    int64_t sdiv = sx / sy;
+    int64_t srem = sx % sy;
+    uint64_t udiv = ux / uy;
+    uint64_t urem = ux % uy;
+
+    uint64_t sel = (x & 1u) ? (uint64_t)sdiv : udiv;
+
+    int32_t  t32  = (int32_t)(sel ^ (uint64_t)pi);
+    int64_t  sext = (int64_t)t32;
+    uint32_t u32  = (uint32_t)(sel + v);
+    uint64_t zext = (uint64_t)u32;
+    uint64_t mix  = (uint64_t)sext + zext + (uint64_t)(uint32_t)srem;
+
+    uint64_t out;
+    switch ((unsigned)(mix & 7u)) {{
+        case 0: out = sel + (uint64_t)srem; break;
+        case 1: out = sel ^ urem; break;
+        case 2: out = (sel << 5) | (sel >> 3); break;
+        case 3: out = sel - (uint64_t)pi; break;
+        case 4: out = sel + v; break;
+        default: out = sel ^ mix; break;
+    }}
+
+    return (uint32_t)(out ^ (out >> 32));
+}}
+
+int main(int argc, char** argv) {{
+    uint32_t x = (argc > 1) ? (uint32_t)strtoul(argv[1], 0, 0) : 123u;
+    uint32_t y = (argc > 2) ? (uint32_t)strtoul(argv[2], 0, 0) : 456u;
+    uint32_t r = obf_target(x, y);
+    printf("R=%u\n", r);
+    return (int)(r & 0xFFu);
+}}

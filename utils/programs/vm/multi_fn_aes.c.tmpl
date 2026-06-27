@@ -1,0 +1,25 @@
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+__attribute__((noinline, annotate("{annotation}")))
+uint32_t obf_a(uint32_t x) {{
+    return (x ^ 0xDEADBEEFu) * 7u + 3u;
+}}
+
+__attribute__((noinline, annotate("{annotation}")))
+uint32_t obf_b(uint32_t x) {{
+    return (x ^ 0xCAFEBABEu) * 11u - 5u;
+}}
+
+__attribute__((noinline, annotate("{annotation}")))
+uint32_t obf_target(uint32_t x, uint32_t y) {{
+    return obf_a(x) ^ obf_b(y);
+}}
+
+int main(int argc, char** argv) {{
+    uint32_t x = (argc > 1) ? (uint32_t)atoi(argv[1]) : 99;
+    uint32_t y = (argc > 2) ? (uint32_t)atoi(argv[2]) : 77;
+    printf("%u\n", obf_target(x, y));
+    return 0;
+}}

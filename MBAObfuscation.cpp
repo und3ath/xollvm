@@ -119,7 +119,7 @@ namespace {
 	}
 
 	// ============================================================================
-	// MbaCtx — per-invocation pass context
+	// MbaCtx ï¿½ per-invocation pass context
 	// ============================================================================
 
 	struct MbaCtx : llvm::obf::FuncPassCtx {
@@ -207,9 +207,8 @@ namespace {
 		unsigned D = BaseDepth;
 
 		auto* BB = BO.getParent();
-		uint32_t id = Ctx.BlockIDs.lookup(BB);
-
-		if (id % 2 == 0)
+		auto It = Ctx.BlockIDs.find(BB);
+		if (It != Ctx.BlockIDs.end() && It->second % 2 == 0)
 			D++;
 
 		if (!Ctx.EntropySources.empty())
@@ -225,10 +224,10 @@ namespace {
 		unsigned P = BaseProb;
 
 		auto* BB = BO.getParent();
-		uint32_t id = Ctx.BlockIDs.lookup(BB);
+		auto It = Ctx.BlockIDs.find(BB);
 
 		// Structural diversity
-		if (id % 2 == 0)
+		if (It != Ctx.BlockIDs.end() && It->second % 2 == 0)
 			P += 5;
 
 		// Entropy availability encourages MBA

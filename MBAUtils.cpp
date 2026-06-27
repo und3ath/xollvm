@@ -312,6 +312,10 @@ Value* MbaUtils::inflateLinear(IRBuilder<>& B, Value* Base, unsigned DepthHint) 
 	Type* Ty = Base->getType();
 	Value* Cur = Base;
 
+	// Mask RNG constants to BW bits so ConstantInt::get does not assert when
+	// Ty is narrower than 32 bits (e.g. i8/i16).
+	const uint64_t BWMask = (BW < 64) ? ((uint64_t(1) << BW) - 1) : ~uint64_t(0);
+
 	for (unsigned i = 0; i < Terms; ++i) {
 		Value* Z = llvm::obf::makeRuntimeZero(B, Slot, BW, R, "mba.lin0");
 
@@ -329,14 +333,14 @@ Value* MbaUtils::inflateLinear(IRBuilder<>& B, Value* Base, unsigned DepthHint) 
 		}
 		case 1: {
 			// (Z & (Z + C)) -> 0 at runtime (Z == 0, so result is 0)
-			uint32_t Cst = (R.u32() | 1u);
+			uint64_t Cst = ((uint64_t)R.u32() | 1ull) & BWMask;
 			Value* Add = B.CreateAdd(Z, ConstantInt::get(Ty, Cst), "mba.lin.addc");
 			T = B.CreateAnd(Z, Add, "mba.lin.and");
 			break;
 		}
 		case 2: {
 			// ((Z ^ K) ^ K) -> Z -> 0 at runtime
-			uint32_t K = R.u32();
+			uint64_t K = (uint64_t)R.u32() & BWMask;
 			Value* Kc = ConstantInt::get(Ty, K);
 			Value* X1 = B.CreateXor(Z, Kc, "mba.lin.x1");
 			T = B.CreateXor(X1, Kc, "mba.lin.x2");
@@ -344,20 +348,20 @@ Value* MbaUtils::inflateLinear(IRBuilder<>& B, Value* Base, unsigned DepthHint) 
 		}
 		case 3: {
 			// (Z * oddC) -> 0 at runtime (Z == 0)
-			uint32_t Cst = (R.u32() | 1u);
+			uint64_t Cst = ((uint64_t)R.u32() | 1ull) & BWMask;
 			T = B.CreateMul(Z, ConstantInt::get(Ty, Cst), "mba.lin.mulc");
 			break;
 		}
 		case 4: {
 			// ((Z + K) & Z) -> 0 at runtime
-			uint32_t K = R.u32();
+			uint64_t K = (uint64_t)R.u32() & BWMask;
 			Value* Add = B.CreateAdd(Z, ConstantInt::get(Ty, K), "mba.lin.addk");
 			T = B.CreateAnd(Add, Z, "mba.lin.and2");
 			break;
 		}
 		case 5: {
 			// (Z & (Z | K)) -> Z -> 0 at runtime
-			uint32_t K = R.u32();
+			uint64_t K = (uint64_t)R.u32() & BWMask;
 			Value* Or = B.CreateOr(Z, ConstantInt::get(Ty, K), "mba.lin.orK");
 			T = B.CreateAnd(Z, Or, "mba.lin.and3");
 			break;
@@ -417,8 +421,15 @@ Value* MbaUtils::addNonLinearZero(IRBuilder<>& B, BinaryOperator& Orig, Value* C
 			(uint32_t)(sizeof(Mods) / sizeof(Mods[0])))];
 		uint32_t C = (R.u32() | 1u);
 
-		Value* Mc = ConstantInt::get(Ty, M);
-		Value* Cc = ConstantInt::get(Ty, C);
+		// Mask to BW so ConstantInt::get does not assert on narrow Ty (i1/i8).
+		const uint64_t BWMask = (BW < 64) ? ((uint64_t(1) << BW) - 1) : ~uint64_t(0);
+		uint64_t Mm = (uint64_t)M & BWMask;
+		if (Mm == 0) Mm = 1; // urem by 0 is UB
+		uint64_t Cm = ((uint64_t)C | 1ull) & BWMask;
+		if (Cm == 0) Cm = 1;
+
+		Value* Mc = ConstantInt::get(Ty, Mm);
+		Value* Cc = ConstantInt::get(Ty, Cm);
 
 		Value* t1 = B.CreateURem(B.CreateMul(x, Cc, "mba.nl.m1"), Mc, "mba.nl.r1");
 		Value* x2 = B.CreateAdd(x, Z, "mba.nl.x2");

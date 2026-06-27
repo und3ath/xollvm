@@ -1,0 +1,23 @@
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+__attribute__((noinline, annotate("{annotation}")))
+double obf_target(uint32_t x, uint32_t y) {{
+    double a = (double)x * 3.14159265358979;
+    double b = (double)y * 2.71828182845904;
+    double c = a + b;
+    if (x & 1u) c = a * b;
+    if (y & 1u) c -= a;
+    return c;
+}}
+
+int main(int argc, char** argv) {{
+    uint32_t x = (argc > 1) ? (uint32_t)strtoul(argv[1], 0, 0) : 7u;
+    uint32_t y = (argc > 2) ? (uint32_t)strtoul(argv[2], 0, 0) : 13u;
+    double r = obf_target(x, y);
+    uint64_t bits;
+    __builtin_memcpy(&bits, &r, 8);
+    printf("R=%llu\n", (unsigned long long)bits);
+    return (int)(bits & 0xFF);
+}}

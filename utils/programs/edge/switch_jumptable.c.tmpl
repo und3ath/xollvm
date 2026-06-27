@@ -1,0 +1,36 @@
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+__attribute__((noinline, annotate("{annotation}")))
+uint32_t obf_target(uint32_t x, uint32_t y) {{
+    uint32_t r = y;
+    /* Dense contiguous switch — LLVM lowers to jump table. */
+    switch (x & 0xFu) {{
+        case 0:  r += 1u;          break;
+        case 1:  r ^= 0xA5u;       break;
+        case 2:  r = (r << 3) | 1; break;
+        case 3:  r -= 17u;         break;
+        case 4:  r *= 7u;          break;
+        case 5:  r ^= (r >> 5);    break;
+        case 6:  r += y * 3u;      break;
+        case 7:  r &= 0xFFFF0000u; break;
+        case 8:  r |= 0xCAFE;      break;
+        case 9:  r -= y;           break;
+        case 10: r = (r >> 7) | (r << 25); break;
+        case 11: r ^= 0xDEADBEEFu; break;
+        case 12: r += (x ^ y);     break;
+        case 13: r = ~r;           break;
+        case 14: r ^= 0x55555555u; break;
+        default: r += 999u;        break;
+    }}
+    return r;
+}}
+
+int main(int argc, char** argv) {{
+    uint32_t x = (argc > 1) ? (uint32_t)strtoul(argv[1], 0, 0) : 0x37u;
+    uint32_t y = (argc > 2) ? (uint32_t)strtoul(argv[2], 0, 0) : 0x100u;
+    uint32_t r = obf_target(x, y);
+    printf("R=%u\n", r);
+    return (int)(r & 0xFFu);
+}}

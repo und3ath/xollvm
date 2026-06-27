@@ -1,0 +1,72 @@
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+extern int puts(const char*);
+
+static __attribute__((noinline)) uint32_t calleeA(uint32_t x) {{
+  x ^= 0xA5A5A5A5u;
+  x = (x * 3u) + 1u;
+  return x;
+}}
+
+static __attribute__((noinline)) uint32_t calleeB(uint32_t x) {{
+  x ^= 0x12345678u;
+  x = (x * 5u) - 7u;
+  return x;
+}}
+
+static __attribute__((noinline)) uint32_t calleeC(uint32_t x) {{
+  return (x ^ (x >> 7)) + 0x9E3779B9u;
+}}
+
+__attribute__((noinline, annotate("{annotation}")))
+uint32_t obf_target(uint32_t x, uint32_t y) {{
+  volatile uint32_t vx = x;
+  uint32_t r = calleeA(vx) + calleeB(y);
+
+  uint32_t sx = x & 0xFFFFu;
+  uint32_t sy = y & 0xFFFFu;
+  r += (sx + 17u) ^ (sy * 3u);
+  r ^= ((sx << 3) | (sy >> 2));
+
+  if (r == (x + 42u)) r += 7u;
+  if ((r ^ x) < (y + 3u)) r -= x;
+
+  r = r + (x - y);
+  r = r * 7u;
+  r = r ^ calleeC(r);
+
+  for (uint32_t i = 0; i < 4u; ++i) {{
+    r += (i * 3u);
+    if ((r + i) == (123u + x)) r -= x;
+    if ((r ^ i) > (777u + y)) r += y;
+  }}
+
+  r = (r + (x ^ 0x13579BDFu)) * (uint32_t)(3u + (y & 7u));
+  r ^= (r >> 5);
+  r += (sx * sy) + 11u;
+
+  switch (r & 3u) {{
+    case 0: r += 1u; break;
+    case 1: r ^= 0x55u; break;
+    case 2: r -= 3u; break;
+    default: r += 7u; break;
+  }}
+
+{maybe_puts}
+  return r;
+}}
+
+int main(int argc, char** argv) {{
+  uint32_t x = (argc > 1) ? (uint32_t)strtoul(argv[1], 0, 0) : 123u;
+  uint32_t y = (argc > 2) ? (uint32_t)strtoul(argv[2], 0, 0) : 456u;
+
+  uint32_t acc = 0u;
+  for (uint32_t i = 0u; i < 5u; ++i) {{
+    acc ^= obf_target(x + i, y ^ i);
+  }}
+
+  printf("R=%u\n", acc);
+  return (int)(acc & 0xFFu);
+}}

@@ -1383,14 +1383,6 @@ namespace {
 			if (isa<ReturnInst>(TI) || isa<UnreachableInst>(TI))
 				continue;
 
-			// Lower any remaining invoke terminators in flattened blocks.
-			if (auto* II = dyn_cast<InvokeInst>(TI)) {
-				llvm::obf::lowerInvokeToCall(II);
-				TI = BB->getTerminator();  // refresh
-			}
-
-
-			
 			// ── Invoke handling (EH-aware flattening) ────────────────────
 			// Create a trampoline block for the invoke's normal continuation.
 			// The trampoline sets the dispatch state and jumps to the router.

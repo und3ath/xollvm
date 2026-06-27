@@ -274,9 +274,10 @@ namespace {
 
 
 	void BcfImpl::addBogusFlow(BasicBlock* BB, Function& F, BcfCtx &ctx) {
-		// Add a safety check to skip the entry block
+
 		if (BB == &F.getEntryBlock())
 			return;
+
 
 		if (!canObfuscateBlock(BB))
 			return;

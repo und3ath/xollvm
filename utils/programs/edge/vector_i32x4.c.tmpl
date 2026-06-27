@@ -1,0 +1,27 @@
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+typedef uint32_t v4u __attribute__((vector_size(16)));
+
+__attribute__((noinline, annotate("{annotation}")))
+uint32_t obf_target(uint32_t x, uint32_t y) {{
+    v4u a = {{ x,     x + 1u, x ^ y, x + y     }};
+    v4u b = {{ y * 3, y ^ 0xAA, y - 7u, y << 1 }};
+    v4u c = a + b;
+    v4u d = a ^ b;
+    v4u e = c * d;
+
+    /* Lane reduction. */
+    uint32_t r = e[0] ^ e[1] ^ e[2] ^ e[3];
+    r += c[0] + d[3];
+    return r;
+}}
+
+int main(int argc, char** argv) {{
+    uint32_t x = (argc > 1) ? (uint32_t)strtoul(argv[1], 0, 0) : 11u;
+    uint32_t y = (argc > 2) ? (uint32_t)strtoul(argv[2], 0, 0) : 22u;
+    uint32_t r = obf_target(x, y);
+    printf("R=%u\n", r);
+    return (int)(r & 0xFFu);
+}}
