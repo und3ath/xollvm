@@ -48,54 +48,34 @@ STATISTIC(ShieldFunctionsProcessed, "Functions processed by shield");
 namespace {
 
 	// ============================================================================
-	// Shield configuration (parsed from annotation "shield(...)")
+	// Shield configuration resolver.
+	//
+	// Parsing of `shield(...)` params is owned by llvm::ShieldConfig::fromPassConfig
+	// (ObfuscationConfig.cpp). This helper layers the auto-enable heuristic on top:
+	// when the function has obfuscation passes annotated but no explicit `shield`
+	// token, default-construct a ShieldConfig and enable it.
 	// ============================================================================
-	struct ShieldConfig {
-		bool enable = false;
-		unsigned maxSites = 200; // per-function budget
-		bool volatileBarriers = true;
-		bool opaqueIdentities = true;
-		bool deadStoreProtect = true;
-		bool cfgGuards = true;
+	static llvm::ShieldConfig buildShieldConfig(Function& F, FunctionAnalysisManager& AM) {
+		const auto& Cache = getObfCache(F, AM);
+		const auto& Cfg = Cache.getConfig(F);
 
-		static ShieldConfig fromFunction(Function& F, FunctionAnalysisManager& AM) {
-			const auto& Cache = getObfCache(F, AM);
-			const auto& Cfg = Cache.getConfig(F);
+		auto shieldPC = Cfg.getPassConfig("shield");
+		if (shieldPC.has_value())
+			return llvm::ShieldConfig::fromPassConfig(*shieldPC);
 
-			// Shield is auto-enabled if ANY obfuscation pass is active.
-			// It can also be explicitly requested via "shield" in annotations.
-			ShieldConfig SC;
-
-			auto shieldPC = Cfg.getPassConfig("shield");
-			if (shieldPC.has_value()) {
-				SC.enable = shieldPC->enabled;
-				auto& P = shieldPC->params;
-				if (P.count("maxSites"))
-					SC.maxSites = std::stoul(P.at("maxSites"));
-				if (P.count("volatile"))
-					SC.volatileBarriers = (P.at("volatile") != "0");
-				if (P.count("identity"))
-					SC.opaqueIdentities = (P.at("identity") != "0");
-				if (P.count("dse"))
-					SC.deadStoreProtect = (P.at("dse") != "0");
-				if (P.count("cfg"))
-					SC.cfgGuards = (P.at("cfg") != "0");
-			}
-			else {
-				// Auto-enable if any other obfuscation pass ran (heuristic: check for
-				// obfuscation IR artifacts).
-				SC.enable = !Cfg.passes.empty();
-			}
-
-			return SC;
-		}
-	};
+		// Auto-enable: any other obfuscation pass annotated implies shield runs
+		// with defaults. See NEW-10 — this heuristic will be gated behind an
+		// explicit flag in a follow-up.
+		llvm::ShieldConfig SC;
+		SC.enable = !Cfg.passes.empty();
+		return SC;
+	}
 
 	// ============================================================================
 	// Context
 	// ============================================================================
 	struct ShieldCtx : llvm::obf::FuncPassCtx {
-		ShieldConfig Cfg;
+		llvm::ShieldConfig Cfg;
 		FunctionObfContext& FOC;
 		llvm::obf::Rng SelectRng;
 		llvm::obf::Rng NoiseRng;
@@ -104,7 +84,7 @@ namespace {
 
 		ShieldCtx(Function& F, FunctionAnalysisManager& AM)
 			: FuncPassCtx(F, AM, "shield"),
-			Cfg(ShieldConfig::fromFunction(F, AM)),
+			Cfg(buildShieldConfig(F, AM)),
 			FOC(*AM.getResult<FunctionObfContextAnalysis>(F)),
 			SelectRng(R.fork("select")), NoiseRng(R.fork("noise")),
 			Opaque(M, NoiseRng, "shield.opaque.salt.i32",
