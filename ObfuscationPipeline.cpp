@@ -155,13 +155,13 @@ std::vector<std::string> ObfuscationPipeline::topologicalSort(
 
 		const PassOrderingRules& r = it->second;
 
-		// after: a -> p
-		for (const auto& a : r.after)
-			addEdge(a, p);
-
-		// before: p -> b
+		// before: b runs before p  =>  edge b -> p
 		for (const auto& b : r.before)
-			addEdge(p, b);
+			addEdge(b, p);
+
+		// after: a runs after p   =>  edge p -> a
+		for (const auto& a : r.after)
+			addEdge(p, a);
 	}
 
 	std::set<std::string> ready;
