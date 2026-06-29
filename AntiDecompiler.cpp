@@ -23,6 +23,7 @@
 #include "llvm/Transforms/Obfuscator/ObfuscationAnnotationAnalysis.h"
 #include "llvm/Transforms/Obfuscator/ObfuscationConfig.h"
 #include "llvm/Transforms/Obfuscator/ObfuscationOptions.h"
+#include "llvm/Transforms/Obfuscator/Utils.h"
 
 #define DEBUG_TYPE "adec"
 
@@ -230,6 +231,8 @@ PreservedAnalyses AntiDecompilerPass::run(Function& F,
 			if (ObfVerbose)
 				errs() << "[adec] Skipping " << F.getName()
 				       << " (" << OS.str() << ")\n";
+			llvm::obf::recordObfPassSkip(Foc, "adec",
+				R.empty() ? "ineligible" : R);
 			return PreservedAnalyses::all();
 		}
 	}

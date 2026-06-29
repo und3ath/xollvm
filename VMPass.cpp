@@ -21,6 +21,8 @@
 #include "llvm/Transforms/Obfuscator/VMPass.h"
 #include "llvm/Transforms/Obfuscator/VMPass_Impl.h"
 #include "llvm/Transforms/Obfuscator/ObfuscationOptions.h"
+#include "llvm/Transforms/Obfuscator/FunctionObfContextAnalysis.h"
+#include "llvm/Transforms/Obfuscator/Utils.h"
 
 using namespace llvm;
 
@@ -85,6 +87,9 @@ PreservedAnalyses VMPass::run(Function& F, FunctionAnalysisManager& AM) {
 		if (!isVMEligible(F, VCtx.FOC, VCtx.Cfg, &RS)) {
 			LLVM_DEBUG(dbgs() << "[vm] skip '" << F.getName() << "': " << RS.str() << "\n");
 			if (ObfVerbose) errs() << "[vm] skip '" << F.getName() << "': " << Reason << "\n";
+			auto& MutFOC = *AM.getResult<FunctionObfContextAnalysis>(F);
+			llvm::obf::recordObfPassSkip(MutFOC, "vm",
+				Reason.empty() ? "ineligible" : Reason);
 			return PreservedAnalyses::all();
 		}
 	}
@@ -98,6 +103,9 @@ PreservedAnalyses VMPass::run(Function& F, FunctionAnalysisManager& AM) {
 			else
 				errs() << "[vm] fail '" << F.getName() << "'" << "\n";
 		}
+		auto& MutFOC = *AM.getResult<FunctionObfContextAnalysis>(F);
+		llvm::obf::recordObfPassSkip(MutFOC, "vm",
+			Impl.FailReason.empty() ? "impl_failed" : Impl.FailReason);
 		return PreservedAnalyses::all();
 	}
 

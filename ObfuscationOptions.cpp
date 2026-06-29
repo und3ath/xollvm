@@ -73,6 +73,13 @@ cl::opt<bool> llvm::ObfShieldAuto(
 	         "Off by default — explicit shield annotations are still honored."),
 	cl::init(false));
 
+cl::opt<bool> llvm::ObfNoSkips(
+	"obf-no-skips",
+	cl::desc("Escalate any pass skip (eligibility bail, budget exhaustion, "
+	         "function cap) to a fatal error. For test assertions; off by "
+	         "default in production."),
+	cl::init(false));
+
 cl::opt<std::string> llvm::ObfReportDir(
 	"obf-report-dir",
 	cl::desc("Directory to emit obfuscation report artifacts (CFG DOT + default JSON). Empty=off"),

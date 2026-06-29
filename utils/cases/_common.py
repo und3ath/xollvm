@@ -137,6 +137,17 @@ class TestCase:
     expect_enabled: list[str]                 = field(default_factory=list)
     expect_order:   list[str]                 = field(default_factory=list)
     expect_config:  Dict[str, Dict[str, str]] = field(default_factory=dict)
+    # Skip-channel assertions (Phase-1 of the skip-reporting feature).
+    # - expect_no_skips:
+    #     None  → inherit from runner CLI (--strict-skips); when strict mode
+    #             is on, any TestCase with >= 2 passes auto-strict.
+    #     True  → forced strict: -obf-no-skips appended, any skip aborts.
+    #     False → forced lenient: skips are tolerated regardless of CLI mode.
+    # - allowed_skip_reasons: when non-empty, the strict CLI gate is replaced
+    #   with a JSON post-check that allows only those reason tokens
+    #   (e.g. {"budget_exhausted"} for budget tests).
+    expect_no_skips: Optional[bool]           = None
+    allowed_skip_reasons: set[str]            = field(default_factory=set)
     correctness:  bool        = True
     ir_only:      bool        = False
     category:     str         = "pass"

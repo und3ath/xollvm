@@ -164,6 +164,30 @@ def register(reg: Registry, *, extended: bool = False, **_opts) -> None:
                           "bcf", "flattening", "shield", "strenc", "adec"],
             category="meta")
 
+    # Strict skip-channel assertion: same pipeline as meta_order_full_pipeline
+    # but with `expect_no_skips=True`. The annotated `obf_target` is a benign
+    # arithmetic function — none of the eligibility checks (EH, callbr, naked,
+    # too-few/many-blocks, etc.) should fire. If any pass silently skips, the
+    # obfuscator will fatal under -obf-no-skips and the test fails fast.
+    reg.add(name="meta_no_skips_full_pipeline",
+            passes=["flattening", "bcf", "sdiff", "split", "vcall",
+                    "substitution", "mba", "shield", "adec", "strenc"],
+            ann_override=ann_specs([
+                "flattening(minBlocks=2,maxBlocks=500)",
+                "bcf(prob=100,loop=2,maxBlocks=200)",
+                "sdiff(prob=80,slots=3,maxSites=50)",
+                "split(num=5)",
+                "vcall(prob=80,merge=1,addDecoyEntries=1)",
+                "substitution(loop=2,maxSites=2000)",
+                "mba(prob=100,depth=4,maxSites=400,termsMin=12,termsMax=20)",
+                "shield(maxSites=200,volatile=1,identity=1,dse=1,cfg=1)",
+                "adec(prob=90,strength=2,maxSites=80)",
+                "strenc(minlen=4,aes=1,keysplit=1)",
+            ]),
+            expect_no_skips=True,
+            no_config_check=True,  # order already covered by meta_order_full_pipeline
+            category="meta")
+
     all_for_matrix = [p for p in PASSES + ["adec"] if p in STRESS]
     for a_i in range(len(all_for_matrix)):
         for b_i in range(a_i + 1, len(all_for_matrix)):

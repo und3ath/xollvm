@@ -1545,6 +1545,8 @@ PreservedAnalyses FlatteningPass::run(Function& F, FunctionAnalysisManager& AM) 
 	raw_string_ostream RejectReason(Str);
 	if (!FlaImpl::isFlattenEligible(F, Ctx.FOC, Ctx.Cfg, &RejectReason)) {
 		LLVM_DEBUG(dbgs() << "Flattening skipped: " << RejectReason.str() << "\n");
+		llvm::obf::recordObfPassSkip(Ctx.FOC, "flattening",
+			Str.empty() ? "ineligible" : Str);
 		return PreservedAnalyses::all();
 	}
 
@@ -1568,5 +1570,6 @@ PreservedAnalyses FlatteningPass::run(Function& F, FunctionAnalysisManager& AM) 
 		return PreservedAnalyses::none();
 	}
 
+	llvm::obf::recordObfPassSkip(Ctx.FOC, "flattening", "flatten_failed");
 	return LowerPA;
 }

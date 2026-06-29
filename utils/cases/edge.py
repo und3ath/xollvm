@@ -49,6 +49,11 @@ def register(reg: Registry, **_opts) -> None:
     combo_passes = _combo_passes()
     combo_ann = ann_for(combo_passes)
 
+    # Edge IR shapes that legitimately trip pass eligibility — exempt them
+    # from strict skip enforcement. `indirectbr_cgoto` has `indirectbr` in
+    # the IR which flattening rejects up front.
+    _EDGE_SKIP_TOLERANT = {"indirectbr_cgoto"}
+
     # ── Edge × combo pipeline ──
     for name in _ALL_EDGE_PROGRAMS:
         src = programs.render(f"edge.{name}", annotation=combo_ann)
@@ -56,6 +61,7 @@ def register(reg: Registry, **_opts) -> None:
             name=f"rt_edge_{name}",
             passes=combo_passes,
             src_override=src,
+            expect_no_skips=False if name in _EDGE_SKIP_TOLERANT else None,
             category="edge",
         )
 

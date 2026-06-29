@@ -6,6 +6,8 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include <random>
+#include <string>
+#include <unordered_map>
 
 namespace llvm {
 
@@ -79,6 +81,13 @@ namespace llvm {
 		AllocaInst* StatePtrSlotFake = nullptr; // alloca i8*  (type is i8**)
 
 		unsigned BudgetRemaining = UINT_MAX;  // UINT_MAX = unlimited
+
+		/// Per-pass skip records published by individual passes via
+		/// `llvm::obf::recordObfPassSkip(FOC, "<passId>", "<reason>")` (Utils.h).
+		/// Keyed by canonical pass id. Empty value or missing entry = no skip.
+		/// The driver reads these after each pass run and feeds them into the
+		/// IRBudget record + JSON report, and fatals when `-obf-no-skips` is on.
+		std::unordered_map<std::string, std::string> PassSkipReasons;
 
 		FunctionObfContext() = default;
 		FunctionObfContext(Function& F, bool Debug)

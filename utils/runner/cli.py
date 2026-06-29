@@ -160,6 +160,13 @@ def main() -> int:
     ap.add_argument("--obf-report-tool", default="",
                     help="Path to obf_report_html.py (auto-detect if empty)")
 
+    ap.add_argument("--strict-skips", action="store_true",
+                    help=("Treat any multi-pass TestCase that does not "
+                          "explicitly set expect_no_skips as strict: a "
+                          "silent pass skip aborts the test. Tests with "
+                          "expect_no_skips=False or allowed_skip_reasons "
+                          "set retain their per-case behavior."))
+
     ap.add_argument("--targets", default="host",
                     help=("Comma-separated target list (default: host). "
                           f"Known: {','.join(TARGETS)}. Non-host targets run "
@@ -304,6 +311,7 @@ def main() -> int:
             report_tool=report_tool,
             config_check=(not args.no_config_check),
             cross_targets=cross_targets,
+            strict_skips=bool(args.strict_skips),
         )
 
     def _print_result(idx: int, tc, r, log: str) -> None:

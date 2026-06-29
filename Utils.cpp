@@ -137,7 +137,6 @@ namespace llvm::obf {
 		Function* F = BB ? BB->getParent() : nullptr;
 		LLVMContext& C = B.getContext();
 
-		Type* i8Ty = Type::getInt8Ty(C);
 		Type* i32Ty = Type::getInt32Ty(C);
 		Type* i64Ty = Type::getInt64Ty(C);
 
@@ -147,29 +146,13 @@ namespace llvm::obf {
 			return ConstantInt::get(i32Ty, 0xC0FFEEu);
 		}
 
-
-		static constexpr const char* EntropyAllocName = "obf.entropy.i8";
-
-
-		AllocaInst* Entropy = nullptr;
-		BasicBlock& Entry = F->getEntryBlock();
-		for (Instruction& I : Entry)
-		{
-			if (auto* AI = dyn_cast<AllocaInst>(&I))
-			{
-				if (AI->getName() == EntropyAllocName)
-				{
-					Entropy = AI;
-					break;
-				}
-			}
-		}
-
-
-		if (!Entropy) {
-			IRBuilder<> EB(&*Entry.getFirstInsertionPt());
-			Entropy = EB.CreateAlloca(i8Ty, nullptr, EntropyAllocName);
-		}
+		// Always go through ensureEntropyAllocaAtEntryBegin so the alloca is
+		// pinned to the *current* first non-PHI position in entry. When a
+		// prior pass (substitution, mba, ...) created obf.entropy.i8 and a
+		// later pass (flattening, bcf, ...) pushed its own allocas in front,
+		// the entropy alloca would otherwise no longer dominate the
+		// ptrtoint we are about to emit at B's insertion point.
+		AllocaInst* Entropy = ensureEntropyAllocaAtEntryBegin(*F);
 
 		Value* P2I = B.CreatePtrToInt(Entropy, i64Ty, "obf.entropy.p2i");
 		Value* Tr = B.CreateTrunc(P2I, i32Ty, "obf.entropy.i32");
@@ -569,6 +552,14 @@ namespace llvm::obf {
 		return true;
 	}
 
-	
-	
+	void recordObfPassSkip(llvm::FunctionObfContext& FOC,
+		llvm::StringRef passId,
+		llvm::StringRef reason) {
+		// Empty reason is treated as a no-op rather than an error; callers may
+		// build the reason conditionally and we'd rather drop than mis-record.
+		if (reason.empty())
+			return;
+		FOC.PassSkipReasons[passId.str()] = reason.str();
+	}
+
 }

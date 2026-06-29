@@ -142,7 +142,7 @@ namespace {
 	}
 
 	void SplitImpl::shuffle(std::vector<int>& vec, llvm::obf::Rng& R) {
-		// Fisher–Yates
+		// Fisherï¿½Yates
 		for (size_t i = vec.size(); i > 1; --i) {
 			size_t j = (size_t)R.range((uint32_t)i); // 0..i-1
 			std::swap(vec[i - 1], vec[j]);
@@ -281,6 +281,8 @@ PreservedAnalyses SplitBasicBlockPass::run(Function& F, FunctionAnalysisManager&
 		if (!SplitImpl::isSplitEligible(Ctx.FOC, &OS)) {
 			if (ObfVerbose)
 				errs() << "[split] Skipping: " << F.getName() << " (" << OS.str() << ")\n";
+			llvm::obf::recordObfPassSkip(Ctx.FOC, "split",
+				R.empty() ? "ineligible" : R);
 			return PreservedAnalyses::all();
 
 		}
@@ -295,6 +297,7 @@ PreservedAnalyses SplitBasicBlockPass::run(Function& F, FunctionAnalysisManager&
 	if (!((Ctx.Cfg.num > 1) && (Ctx.Cfg.num <= 10))) {
 		if (ObfVerbose)
 			errs() << "Split application basic block percentage -split_num=x must be 1 < x <= 10";
+		llvm::obf::recordObfPassSkip(Ctx.FOC, "split", "invalid_num_param");
 		return PreservedAnalyses::all();
 	}
 

@@ -164,6 +164,18 @@ namespace llvm::obf {
 			Records.push_back(std::move(R));
 		}
 
+		/// Promote the most recent record (created via recordPassStart) to a
+		/// skip, with the given reason. Used by the driver when a pass
+		/// self-reports a skip via FunctionObfContext::PassSkipReasons after
+		/// already being recorded as started. No-op if no records exist.
+		void markLastRecordSkipped(StringRef Reason) {
+			if (Records.empty())
+				return;
+			Records.back().Skipped = true;
+			Records.back().SkipReason = Reason.str();
+			Records.back().Changed = false;
+		}
+
 
 		/// All recorded pass snapshots.
 		const std::vector<PassBudgetRecord>& records() const { return Records; }

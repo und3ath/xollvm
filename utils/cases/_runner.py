@@ -184,6 +184,7 @@ def run_test(
     o2_gate: bool, no_metrics: bool, no_gates: bool, verbose: bool,
     report_enabled: bool, report_root: Path, report_html: bool, report_tool: Optional[Path],
     config_check: bool, cross_targets: Optional[list[Target]] = None,
+    strict_skips: bool = False,
 ) -> TestResult:
     t0 = time.monotonic()
     res = TestResult(name=tc.name, category=tc.category)
@@ -195,14 +196,62 @@ def run_test(
         test_report_root = report_root / tc.name
         test_report_root.mkdir(parents=True, exist_ok=True)
 
+    # Effective skip-strictness:
+    #   explicit per-test value wins; otherwise --strict-skips applies to
+    #   multi-pass tests (>= 2 passes) only. Single-pass tests are
+    #   irrelevant to "passes silently dropping from a multi-pass run".
+    if tc.expect_no_skips is not None:
+        eff_no_skips = bool(tc.expect_no_skips)
+    else:
+        eff_no_skips = bool(strict_skips and len(tc.passes) >= 2)
+
     def _report_opts(label: str) -> tuple[list[str], Optional[Path]]:
-        if not report_enabled or test_report_root is None:
-            return (list(tc.extra_opts or []), None)
+        base_opts = list(tc.extra_opts or [])
+        # No allowlist + strict mode → use the CLI fatal gate (cheap,
+        # fail-fast). With an allowlist we need the JSON post-check
+        # below to filter on reason tokens.
+        if eff_no_skips and not tc.allowed_skip_reasons:
+            if "-obf-no-skips" not in base_opts:
+                base_opts.append("-obf-no-skips")
+        # JSON post-check still needs the report dir.
+        need_report = report_enabled or (
+            eff_no_skips and tc.allowed_skip_reasons
+        )
+        if not need_report or test_report_root is None:
+            return (base_opts, None)
         rdir = test_report_root / label
         rdir.mkdir(parents=True, exist_ok=True)
-        opts = list(tc.extra_opts or [])
-        opts.append(f"--obf-report-dir={rdir}")
-        return (opts, rdir)
+        base_opts.append(f"--obf-report-dir={rdir}")
+        return (base_opts, rdir)
+
+    def _check_no_skips(rdir: Optional[Path]) -> Optional[str]:
+        """Post-run assertion when allowed_skip_reasons restricts the strict
+        CLI gate. Returns a failure reason string or None when OK."""
+        if not eff_no_skips or not tc.allowed_skip_reasons:
+            return None
+        if rdir is None:
+            return "expect_no_skips: report dir missing"
+        j = rdir / "obf_report.json"
+        if not j.exists():
+            return "expect_no_skips: obf_report.json not produced"
+        try:
+            data = json.loads(j.read_text(encoding="utf-8"))
+        except Exception as e:
+            return f"expect_no_skips: report parse: {e}"
+        for fn in data.get("functions", []):
+            if fn.get("skipped"):
+                reason = fn.get("skip_reason", "")
+                if reason not in tc.allowed_skip_reasons:
+                    return (f"expect_no_skips: function {fn.get('name')!r} "
+                            f"skipped: {reason!r}")
+            for p in fn.get("passes", []):
+                if p.get("status") != "skipped":
+                    continue
+                reason = p.get("skip_reason", "")
+                if reason not in tc.allowed_skip_reasons:
+                    return (f"expect_no_skips: pass {p.get('id')!r} on "
+                            f"{fn.get('name')!r} skipped: {reason!r}")
+        return None
 
     ann = tc.ann_override or ann_for(tc.passes)
 
@@ -315,6 +364,12 @@ def run_test(
         except Exception as e:
             res.status = "FAIL"
             res.reason = f"seed {seed}: opt: {e}"
+            break
+
+        skip_why = _check_no_skips(rdir)
+        if skip_why:
+            res.status = "FAIL"
+            res.reason = f"seed {seed}: {skip_why}"
             break
 
         obf_ir = read_text(obf_ll)

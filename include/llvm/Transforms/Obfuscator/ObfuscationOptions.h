@@ -38,6 +38,12 @@ namespace llvm {
 	// legacy behavior.
 	extern llvm::cl::opt<bool> ObfShieldAuto;
 
+	// When true, any pass skip recorded by the driver (eligibility bail-out,
+	// budget exhaustion, function cap) is escalated to report_fatal_error.
+	// Tests enable this to assert "nothing got silently skipped". Off by
+	// default in production builds.
+	extern llvm::cl::opt<bool> ObfNoSkips;
+
 	// Reporting / artifacts
 	extern llvm::cl::opt<std::string> ObfReportDir;
 	extern llvm::cl::opt<std::string> ObfReportJson;

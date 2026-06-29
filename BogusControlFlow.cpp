@@ -448,8 +448,10 @@ PreservedAnalyses BogusControlFlowPass::run(Function& F, FunctionAnalysisManager
 		if (!BcfImpl::isBcfEligible(Ctx.FOC, &OS)) {
 			if (ObfVerbose)
 				errs() << "[BCF] Skipping: " << F.getName() << " (" << OS.str() << ")\n";
+			llvm::obf::recordObfPassSkip(Ctx.FOC, "bcf",
+				R.empty() ? "ineligible" : R);
 			return PreservedAnalyses::all();
-			
+
 		}
 	}
 	

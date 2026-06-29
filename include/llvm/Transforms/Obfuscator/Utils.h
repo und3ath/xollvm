@@ -1,5 +1,6 @@
 #pragma once
 #include "llvm/Transforms/Obfuscator/Rng.h"
+#include "llvm/Transforms/Obfuscator/FunctionObfContext.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
@@ -57,6 +58,26 @@ namespace llvm::obf {
 
 	// global SSA/dominance repair (reg2mem)
 	bool repairSSA(Function& F);
+
+
+	// ----------------------------------------------------------------------
+	// Pass skip channel
+	//
+	// A pass that decides to bail out (e.g. eligibility check failed,
+	// candidate set empty) records a structured skip reason via this helper.
+	// The driver reads `FOC.PassSkipReasons` after the pass returns and:
+	//   - marks the IRBudget record as Skipped + SkipReason
+	//   - flushes into the per-pass JSON report
+	//   - aborts with report_fatal_error when `-obf-no-skips` is enabled
+	//
+	// `passId` should be the canonical pass id (e.g. "vm", "flattening").
+	// `reason` should be a short stable token (e.g. "eh_unsupported",
+	// "callbr", "too_few_blocks") suitable for matching in tests.
+	// Repeated calls for the same passId on the same function overwrite
+	// the previous reason (last wins).
+	void recordObfPassSkip(llvm::FunctionObfContext& FOC,
+		llvm::StringRef passId,
+		llvm::StringRef reason);
 
 
 } // namespace llvm::obf

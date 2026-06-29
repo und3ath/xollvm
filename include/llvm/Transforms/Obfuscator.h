@@ -59,6 +59,14 @@ namespace llvm {
 				FuncSkipReason = "cap_max_loop_depth";
 			}
 
+			// Function-level cap: optionally fatal under -obf-no-skips.
+			if (!FuncSkipReason.empty() && llvm::ObfNoSkips) {
+				report_fatal_error(
+					Twine("obfuscator: -obf-no-skips: function '")
+					+ F.getName() + "' skipped: " + FuncSkipReason,
+					/*gen_crash_diag=*/false);
+			}
+
 			// If capped, optionally emit a report entry (only if the function actually
 			// has passes enabled).
 			if (!FuncSkipReason.empty()) {
@@ -291,6 +299,12 @@ namespace llvm {
 						Budget.recordPassSkip(Entries[J].Name, CurrentInsts, "budget_exhausted",
 							PassSeed);
 					}
+					if (llvm::ObfNoSkips) {
+						report_fatal_error(
+							Twine("obfuscator: -obf-no-skips: budget exhausted on '")
+							+ F.getName() + "' before pass '" + Entry.Name + "'",
+							/*gen_crash_diag=*/false);
+					}
 					break;
 				}
 
@@ -310,6 +324,28 @@ namespace llvm {
 				if (Changed) {
 					AnyChanged = true;
 					FAM.invalidate(F, PA);
+				}
+
+				// --- Pass-published skip channel ---
+				// Refresh FOC handle (analyses may have been invalidated above).
+				{
+					auto& FOC3 = *FAM.getResult<FunctionObfContextAnalysis>(F);
+					auto It = FOC3.PassSkipReasons.find(Entry.Name);
+					if (It != FOC3.PassSkipReasons.end() && !It->second.empty()) {
+						Budget.markLastRecordSkipped(It->second);
+						if (ObfVerbose)
+							errs() << "[skip] " << F.getName() << ": " << Entry.Name
+							       << ": " << It->second << "\n";
+						if (llvm::ObfNoSkips) {
+							report_fatal_error(
+								Twine("obfuscator: -obf-no-skips: pass '") + Entry.Name
+								+ "' skipped on '" + F.getName() + "': " + It->second,
+								/*gen_crash_diag=*/false);
+						}
+						// Clear so the same record is not re-flagged on subsequent
+						// invocations against the same FAM-cached context.
+						FOC3.PassSkipReasons.erase(It);
+					}
 				}
 
 				// --- Optional SSA repair ---

@@ -707,6 +707,7 @@ PreservedAnalyses SubstitutionPass::run(Function& F,
 		if (ObfVerbose) {
 			errs() << "Substitution: Invalid loop count " << Ctx.Cfg.loop << "\n";
 		}
+		llvm::obf::recordObfPassSkip(Ctx.FOC, "substitution", "invalid_loop_count");
 		return PreservedAnalyses::all();
 	}
 
