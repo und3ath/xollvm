@@ -31,6 +31,13 @@ namespace llvm {
 	extern llvm::cl::opt<bool> ObfStripDebug;
 	extern llvm::cl::opt<bool> ObfPreserveDebugSynthetic;
 
+	// When true, the AntiOptimizationShield pass auto-enables itself with
+	// default knobs for any function that has any obfuscation pass annotated
+	// but no explicit `shield(...)` token. Default off — silent auto-enable
+	// surprised users + consumed IR budget invisibly. Opt-in restores the
+	// legacy behavior.
+	extern llvm::cl::opt<bool> ObfShieldAuto;
+
 	// Reporting / artifacts
 	extern llvm::cl::opt<std::string> ObfReportDir;
 	extern llvm::cl::opt<std::string> ObfReportJson;

@@ -63,11 +63,11 @@ namespace {
 		if (shieldPC.has_value())
 			return llvm::ShieldConfig::fromPassConfig(*shieldPC);
 
-		// Auto-enable: any other obfuscation pass annotated implies shield runs
-		// with defaults. See NEW-10 — this heuristic will be gated behind an
-		// explicit flag in a follow-up.
+		// Auto-enable: opt-in via -obf-shield-auto. Default off — silently
+		// adding shield + budget on every annotated function was surprising.
 		llvm::ShieldConfig SC;
-		SC.enable = !Cfg.passes.empty();
+		if (llvm::ObfShieldAuto)
+			SC.enable = !Cfg.passes.empty();
 		return SC;
 	}
 

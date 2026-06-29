@@ -66,6 +66,13 @@ cl::opt<bool> llvm::ObfPreserveDebugSynthetic(
 	cl::desc("Assign synthetic line-0 debug locs to obfuscated instructions."),
 	cl::init(true));
 
+cl::opt<bool> llvm::ObfShieldAuto(
+	"obf-shield-auto",
+	cl::desc("Auto-enable AntiOptimizationShield for any function with "
+	         "obfuscation passes but no explicit `shield(...)` token. "
+	         "Off by default — explicit shield annotations are still honored."),
+	cl::init(false));
+
 cl::opt<std::string> llvm::ObfReportDir(
 	"obf-report-dir",
 	cl::desc("Directory to emit obfuscation report artifacts (CFG DOT + default JSON). Empty=off"),
