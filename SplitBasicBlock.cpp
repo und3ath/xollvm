@@ -159,6 +159,7 @@ namespace {
 
 		std::vector<BasicBlock*> origBB;
 		const int RequestedSplits = split_num;
+		BasicBlock* EntryBB = &F.getEntryBlock();
 
 		// Save all basic blocks
 		for (Function::iterator I = F.begin(), IE = F.end(); I != IE; ++I) {
@@ -172,6 +173,14 @@ namespace {
 
 			if (TotalSplits >= MaxSplitsPerFunction)
 				break;
+
+			// Never split the entry block. User-declared allocas live in
+			// entry and must dominate their uses across the function. If
+			// a later pass (flattening, bcf) pulls the split fragment of
+			// entry into a dispatcher case, those allocas lose dominance
+			// because they no longer execute unconditionally.
+			if (curr == EntryBB)
+				continue;
 
 			int splitN = RequestedSplits;
 
