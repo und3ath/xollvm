@@ -473,7 +473,8 @@ namespace llvm::obf {
 		if (!Slot)
 			return hardTrue(B);
 
-		Value* p0 = B.CreateBitCast(Slot, I8->getPointerTo(), "obf.ptr.p0");
+		// Opaque pointers: alloca already yields `ptr`; no bitcast needed.
+		Value* p0 = Slot;
 		Value* off0 = opaqueZero64(B); // runtime 0, not provably constant
 		Value* p1 = B.CreateGEP(I8, p0, off0, "obf.ptr.p1"); // non-inbounds to avoid UB assumptions
 		return B.CreateICmpEQ(p0, p1, "obf.ptr.true");
@@ -488,7 +489,8 @@ namespace llvm::obf {
 		if (!Slot)
 			return hardFalse(B);
 
-		Value* p0 = B.CreateBitCast(Slot, I8->getPointerTo(), "obf.ptrf.p0");
+		// Opaque pointers: alloca already yields `ptr`; no bitcast needed.
+		Value* p0 = Slot;
 		Value* off0 = opaqueZero64(B);
 		Value* off1 = B.CreateAdd(off0, ConstantInt::get(I64, 1), "obf.ptrf.off1");
 		Value* p1 = B.CreateGEP(I8, p0, off1, "obf.ptrf.p1");
