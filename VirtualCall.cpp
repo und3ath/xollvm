@@ -360,14 +360,8 @@ namespace {
 				// In non-merged mode, keep stable behavior by using normal thunks here.
 				Thunk = getOrCreateThunk(M, Callee, i);
 
-				// Ensure type matches
-				if (Thunk->getType() != Callee->getType()) {
-					// Bitcast defensively if needed (rare)
-					Entries.push_back(ConstantExpr::getBitCast(Thunk, Callee->getType()));
-				}
-				else {
-					Entries.push_back(Thunk);
-				}
+				// Opaque pointers: Function* is always `ptr`; no bitcast needed.
+				Entries.push_back(Thunk);
 			}
 		}
 
@@ -489,9 +483,8 @@ namespace {
 				Fp = getOrCreateThunk(M, Callee, i);
 			}
 
-			// Store as opaque ptr in the merged table
-			Constant* CFn = ConstantExpr::getBitCast(Fp, PtrTy);
-			Segment.push_back(CFn);
+			// Opaque pointers: Function* is `ptr`; store directly.
+			Segment.push_back(Fp);
 		}
 
 		// Append segment by rebuilding array (immutable)
@@ -521,7 +514,8 @@ namespace {
 		NewGV->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
 		NewGV->setAlignment(Info.GV->getAlign().valueOrOne());
 
-		Info.GV->replaceAllUsesWith(ConstantExpr::getBitCast(NewGV, Info.GV->getType()));
+		// Opaque pointers: both globals are `ptr`; no bitcast needed.
+		Info.GV->replaceAllUsesWith(NewGV);
 		Info.GV->eraseFromParent();
 		Info.GV = NewGV;
 		Info.Size = (unsigned)NewElems.size();
