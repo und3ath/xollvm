@@ -7,16 +7,24 @@ from ._common import (
 )
 
 
+# `vm` conflicts with `flattening` (both restructure the entire CFG —
+# enforceConflicts fatal). Strip vm from combos that include flattening so
+# rt_combo_all and rt_kitchen_sink can actually run end-to-end. Dedicated
+# vm tests live in cases/vm.py.
+_COMBO_PASSES         = [p for p in PASSES              if p != "vm"]
+_COMBO_PASSES_W_ADEC  = [p for p in ALL_PASSES_WITH_ADEC if p != "vm"]
+
+
 def register(reg: Registry, **_opts) -> None:
     # ── Individual Pass Correctness ───────────────────────────────────
     for p in PASSES:
         reg.add(name=f"rt_{p}", passes=[p], category="pass")
 
     # ── Combos ────────────────────────────────────────────────────────
-    reg.add(name="rt_combo_all", passes=PASSES[:], category="pass")
+    reg.add(name="rt_combo_all", passes=_COMBO_PASSES, category="pass")
     reg.add(
         name="rt_kitchen_sink",
-        passes=ALL_PASSES_WITH_ADEC[:],
+        passes=_COMBO_PASSES_W_ADEC,
         ann_override=ann_extra("kitchen_sink"),
         expect_enabled=["mba", "substitution", "vcall", "split", "bcf",
                         "sdiff", "flattening", "shield", "strenc", "adec"],

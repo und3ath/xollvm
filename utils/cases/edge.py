@@ -50,9 +50,29 @@ def register(reg: Registry, **_opts) -> None:
     combo_ann = ann_for(combo_passes)
 
     # Edge IR shapes that legitimately trip pass eligibility — exempt them
-    # from strict skip enforcement. `indirectbr_cgoto` has `indirectbr` in
-    # the IR which flattening rejects up front.
-    _EDGE_SKIP_TOLERANT = {"indirectbr_cgoto"}
+    # from strict skip enforcement. These are correctness tests (verify
+    # the obfuscator does not break the program), not strength tests, so
+    # a pass bailing on an unsupported IR shape is the right behavior.
+    #   indirectbr_cgoto      → flattening rejects indirectbr up front
+    #   switch_jumptable      → flattening rejects too many incoming edges
+    #   switch_sparse         → same
+    #   recursion_direct      → bcf/mba bail on tail-recursive shape
+    #   recursion_mutual      → same
+    #   struct_value          → mba/substitution have no i32 candidates
+    #   vector_i32x4          → vector ops not in mba candidate set
+    #   tail_calls            → musttail blocks flattening / bcf
+    #   int_widths            → mixed i8/i16/i64 leaves few mba sites
+    _EDGE_SKIP_TOLERANT = {
+        "indirectbr_cgoto",
+        "switch_jumptable",
+        "switch_sparse",
+        "recursion_direct",
+        "recursion_mutual",
+        "struct_value",
+        "vector_i32x4",
+        "tail_calls",
+        "int_widths",
+    }
 
     # ── Edge × combo pipeline ──
     for name in _ALL_EDGE_PROGRAMS:
