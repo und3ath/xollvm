@@ -10,6 +10,7 @@
 
 #include "llvm/Transforms/Obfuscator/PassCtx.h"
 #include "llvm/Transforms/Obfuscator/FunctionObfContextAnalysis.h"
+#include "llvm/Transforms/Obfuscator/IRBudget.h"
 #include "llvm/Transforms/Obfuscator/MBAObfuscation.h"
 #include "llvm/Transforms/Obfuscator/MBAUtils.h"
 #include "llvm/Transforms/Obfuscator/ObfuscationAnnotationAnalysis.h"
@@ -264,6 +265,17 @@ namespace {
 			}
 		}
 
+		// Live mid-pass cap — mirrors Substitution. Catches the cases
+		// where instsPerSite under-estimates actual growth (deep MBA on
+		// small functions can blow up faster than the linear estimate).
+		unsigned BudgetCap = UINT_MAX;
+		if (Ctx.BudgetRemaining != UINT_MAX) {
+			unsigned StartInsts = llvm::obf::countInstructions(F);
+			BudgetCap = (Ctx.BudgetRemaining > UINT_MAX - StartInsts)
+				? UINT_MAX
+				: StartInsts + Ctx.BudgetRemaining;
+		}
+
 		SmallVector<BinaryOperator*, 32> toTransform;
 
 		// Collect candidates from all basic blocks
@@ -278,6 +290,14 @@ namespace {
 		for (BinaryOperator* BO : toTransform) {
 			if (SitesDone >= maxSites)
 				break;
+			if (BudgetCap != UINT_MAX && (SitesDone & 31u) == 0u) {
+				if (llvm::obf::countInstructions(F) >= BudgetCap) {
+					if (ObfVerbose)
+						errs() << "[mba] live budget reached at "
+						<< SitesDone << " sites\n";
+					break;
+				}
+			}
 			// Safety guards
 			if (!BO->getType()->isIntegerTy())
 				continue;

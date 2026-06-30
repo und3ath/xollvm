@@ -5,6 +5,7 @@
 #include "llvm/Transforms/Obfuscator/ObfuscationAnnotationAnalysis.h"
 #include "llvm/Transforms/Obfuscator/PassCtx.h"
 #include "llvm/Transforms/Obfuscator/FunctionObfContextAnalysis.h"
+#include "llvm/Transforms/Obfuscator/IRBudget.h"
 
 #include "llvm/ADT/Statistic.h"
 #include "llvm/IR/Constants.h"
@@ -630,14 +631,31 @@ namespace {
 		Function& F = Ctx.F;
 		bool modified = false;
 
-		// Budget-aware: each substitution generates ~3-5 new instructions.
+		// Budget-aware throttle. Observed worst-case cost-per-site after MBA
+		// has inflated the input IR is ~10 insts (noise loads + add/xor zsub
+		// + rand-fr chains stack up). Use 12 for headroom — the prior
+		// estimate of 4 made `rt_combo_all` overshoot budget by 167%.
+		constexpr unsigned kInstsPerSite = 12;
 		if (Ctx.FOC.BudgetRemaining != UINT_MAX) {
-			unsigned budgetSites = std::max(1u, Ctx.FOC.BudgetRemaining / 4);
+			unsigned budgetSites = std::max(1u, Ctx.FOC.BudgetRemaining / kInstsPerSite);
 			if (budgetSites < MaxSites) {
 				MaxSites = budgetSites;
 				if (ObfVerbose)
 					errs() << "[sub] budget-throttled MaxSites to " << MaxSites << "\n";
 			}
+		}
+
+		// Live mid-pass cap: the kInstsPerSite estimate can still under-
+		// shoot for pathological inputs. Track an absolute instruction
+		// ceiling and break early if reached, polling every 32 sites
+		// (countInstructions is O(blocks); 32-stride keeps it cheap).
+		unsigned BudgetCap = UINT_MAX;
+		if (Ctx.FOC.BudgetRemaining != UINT_MAX) {
+			unsigned StartInsts = llvm::obf::countInstructions(F);
+			// Saturate-add: never wrap.
+			BudgetCap = (Ctx.FOC.BudgetRemaining > UINT_MAX - StartInsts)
+				? UINT_MAX
+				: StartInsts + Ctx.FOC.BudgetRemaining;
 		}
 
 		unsigned SitesDone = 0;
@@ -659,6 +677,14 @@ namespace {
 				if (SitesDone >= MaxSites)
 					break;
 
+				if (BudgetCap != UINT_MAX && (SitesDone & 31u) == 0u) {
+					if (llvm::obf::countInstructions(F) >= BudgetCap) {
+						if (ObfVerbose)
+							errs() << "[sub] live budget reached at "
+							<< SitesDone << " sites\n";
+						return modified;
+					}
+				}
 
 				if (!BO || !BO->getParent())
 					continue;
