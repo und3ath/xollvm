@@ -145,23 +145,35 @@ def register(reg: Registry, *, extended: bool = False, **_opts) -> None:
             ann_override=ann_specs([pass_spec("antiopt", {"maxSites": 50})]),
             expect_enabled=["shield"], category="options")
 
+    # Pipeline order moved vcall after flattening (vcall introduces
+    # indirect calls that would make flattening bail). Block-count caps
+    # bumped to absorb bcf-inflated block counts; budget multiplier
+    # bumped so flattening fits under strict-skip mode.
+    _META_FULL_ANN = [
+        "flattening(minBlocks=2,maxBlocks=4000)",
+        "bcf(prob=100,loop=2,maxBlocks=200)",
+        "sdiff(prob=80,slots=3,maxSites=50)",
+        "split(num=5)",
+        "vcall(prob=80,merge=1,addDecoyEntries=1)",
+        "substitution(loop=2,maxSites=2000)",
+        "mba(prob=100,depth=4,maxSites=400,termsMin=12,termsMax=20)",
+        "shield(maxSites=200,volatile=1,identity=1,dse=1,cfg=1)",
+        "adec(prob=90,strength=2,maxSites=80)",
+        "strenc(minlen=4,aes=1,keysplit=1)",
+    ]
+    # depth-4 MBA + 2000-site substitution + bcf+flattening stack hard.
+    # 500x is enough for kitchen-sink with default params; meta_* uses
+    # maxed-out per-pass params so it needs a wider ceiling.
+    _META_FULL_OPTS = ["--obf-ir-budget-multiplier=1000"]
+
     reg.add(name="meta_order_full_pipeline",
             passes=["flattening", "bcf", "sdiff", "split", "vcall",
                     "substitution", "mba", "shield", "adec", "strenc"],
-            ann_override=ann_specs([
-                "flattening(minBlocks=2,maxBlocks=500)",
-                "bcf(prob=100,loop=2,maxBlocks=200)",
-                "sdiff(prob=80,slots=3,maxSites=50)",
-                "split(num=5)",
-                "vcall(prob=80,merge=1,addDecoyEntries=1)",
-                "substitution(loop=2,maxSites=2000)",
-                "mba(prob=100,depth=4,maxSites=400,termsMin=12,termsMax=20)",
-                "shield(maxSites=200,volatile=1,identity=1,dse=1,cfg=1)",
-                "adec(prob=90,strength=2,maxSites=80)",
-                "strenc(minlen=4,aes=1,keysplit=1)",
-            ]),
-            expect_order=["mba", "substitution", "vcall", "split", "sdiff",
-                          "bcf", "flattening", "shield", "strenc", "adec"],
+            ann_override=ann_specs(_META_FULL_ANN),
+            extra_opts=_META_FULL_OPTS,
+            expect_order=["mba", "substitution", "split", "sdiff",
+                          "bcf", "flattening", "vcall", "shield",
+                          "strenc", "adec"],
             category="meta")
 
     # Strict skip-channel assertion: same pipeline as meta_order_full_pipeline
@@ -172,18 +184,8 @@ def register(reg: Registry, *, extended: bool = False, **_opts) -> None:
     reg.add(name="meta_no_skips_full_pipeline",
             passes=["flattening", "bcf", "sdiff", "split", "vcall",
                     "substitution", "mba", "shield", "adec", "strenc"],
-            ann_override=ann_specs([
-                "flattening(minBlocks=2,maxBlocks=500)",
-                "bcf(prob=100,loop=2,maxBlocks=200)",
-                "sdiff(prob=80,slots=3,maxSites=50)",
-                "split(num=5)",
-                "vcall(prob=80,merge=1,addDecoyEntries=1)",
-                "substitution(loop=2,maxSites=2000)",
-                "mba(prob=100,depth=4,maxSites=400,termsMin=12,termsMax=20)",
-                "shield(maxSites=200,volatile=1,identity=1,dse=1,cfg=1)",
-                "adec(prob=90,strength=2,maxSites=80)",
-                "strenc(minlen=4,aes=1,keysplit=1)",
-            ]),
+            ann_override=ann_specs(_META_FULL_ANN),
+            extra_opts=_META_FULL_OPTS,
             expect_no_skips=True,
             no_config_check=True,  # order already covered by meta_order_full_pipeline
             category="meta")

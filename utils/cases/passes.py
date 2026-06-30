@@ -21,11 +21,20 @@ def register(reg: Registry, **_opts) -> None:
         reg.add(name=f"rt_{p}", passes=[p], category="pass")
 
     # ── Combos ────────────────────────────────────────────────────────
-    reg.add(name="rt_combo_all", passes=_COMBO_PASSES, category="pass")
+    # Combo pipelines stack MBA + Substitution + flattening + bcf etc.,
+    # each of which can multiply IR independently. The default 50x IR
+    # budget is calibrated for a single pass; under strict-skip
+    # enforcement the kitchen-sink pipeline needs a much larger headroom
+    # so flattening (post-bcf) does not bail out via the budget gate.
+    _COMBO_BUDGET = ["--obf-ir-budget-multiplier=500"]
+
+    reg.add(name="rt_combo_all", passes=_COMBO_PASSES,
+            extra_opts=_COMBO_BUDGET, category="pass")
     reg.add(
         name="rt_kitchen_sink",
         passes=_COMBO_PASSES_W_ADEC,
         ann_override=ann_extra("kitchen_sink"),
+        extra_opts=_COMBO_BUDGET,
         expect_enabled=["mba", "substitution", "vcall", "split", "bcf",
                         "sdiff", "flattening", "shield", "strenc", "adec"],
         category="pass",
@@ -35,4 +44,5 @@ def register(reg: Registry, **_opts) -> None:
     reg.add(name="rt_complex_logic_flat",
             passes=["flattening"], category="pass")
     reg.add(name="rt_complex_logic_heavy",
-            passes=["flattening", "bcf", "mba", "split"], category="pass")
+            passes=["flattening", "bcf", "mba", "split"],
+            extra_opts=_COMBO_BUDGET, category="pass")

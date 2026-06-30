@@ -390,12 +390,23 @@ namespace {
 
 		bool modified = false;
 		unsigned bcfStartInsts = llvm::obf::countInstructions(F);
+		unsigned bcfBudgetCap = (budgetLeft != UINT_MAX)
+			? (bcfStartInsts > UINT_MAX - budgetLeft
+				? UINT_MAX
+				: bcfStartInsts + budgetLeft)
+			: UINT_MAX;
+		// Observed worst-case per-site delta (each addBogusFlow can add
+		// 20-200 insts depending on opaque predicate complexity and post-MBA
+		// block size). Tracked dynamically so the predictive check below
+		// tightens after the first few applications.
+		unsigned bcfMaxObservedDelta = 50;
+		unsigned bcfLastInsts = bcfStartInsts;
 
 		for (int iter = 0; iter < iterations; ++iter) {
 			// Live budget check: stop if we've blown past our allocation
-			if (budgetLeft != UINT_MAX) {
+			if (bcfBudgetCap != UINT_MAX) {
 				unsigned now = llvm::obf::countInstructions(F);
-				if (now >= bcfStartInsts + budgetLeft) {
+				if (now >= bcfBudgetCap) {
 					if (ObfVerbose)
 						errs() << "[bcf] budget exhausted mid-loop at iter "
 						<< iter << "\n";
@@ -404,20 +415,42 @@ namespace {
 			}
 
 			SmallVector<BasicBlock*, 64> blocks = BaseBlocks;
-			
+
 			// Stable-but-randomized per-iteration order (does not affect SelectRng)
 			std::string L = ("iter" + std::to_string(iter));
 			auto IterShuffle = Ctx.ShuffleRng.fork(L);
 			IterShuffle.shuffle(llvm::MutableArrayRef<BasicBlock*>(blocks.data(), blocks.size()));
-			
+
 			if (MaxBlocks && blocks.size() > MaxBlocks)
 				blocks.resize(MaxBlocks);
 
 			for (BasicBlock* BB : blocks) {
+				// Predictive cap: never start a site whose worst-case cost
+				// would push us past the budget.
+				if (bcfBudgetCap != UINT_MAX) {
+					unsigned cur = llvm::obf::countInstructions(F);
+					if (cur + bcfMaxObservedDelta >= bcfBudgetCap) {
+						if (ObfVerbose)
+							errs() << "[bcf] live budget reached (cur=" << cur
+							<< " +next~" << bcfMaxObservedDelta
+							<< " >= " << bcfBudgetCap << ")\n";
+						return modified;
+					}
+					bcfLastInsts = cur;
+				}
+
 				if (Ctx.SelectRng.range(100) < (uint32_t)probability) {
 					addBogusFlow(BB, F, Ctx);
 					++NumModifiedBasicBlocks;
 					modified = true;
+
+					if (bcfBudgetCap != UINT_MAX) {
+						unsigned after = llvm::obf::countInstructions(F);
+						unsigned delta = after > bcfLastInsts ? after - bcfLastInsts : 0;
+						if (delta > bcfMaxObservedDelta)
+							bcfMaxObservedDelta = delta;
+						bcfLastInsts = after;
+					}
 				}
 			}
 		}

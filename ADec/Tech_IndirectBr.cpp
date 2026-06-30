@@ -61,13 +61,15 @@ public:
 		Ctx.ShuffleRng.shuffle(llvm::MutableArrayRef<llvm::BranchInst*>(
 		    Cands.data(), Cands.size()));
 
-		llvm::SmallVector<llvm::BasicBlock*, 16> DecoyPool;
-		for (llvm::BasicBlock& BB : Ctx.F) {
-			if (&BB == &Ctx.F.getEntryBlock())
-				continue;
-			if (!BB.isEHPad() && !blockHasPhis(&BB))
-				DecoyPool.push_back(&BB);
-		}
+		// Decoy destinations cannot be picked from existing BBs: adding a
+		// new edge SrcBB→ExistingBB can violate SSA dominance for any
+		// value used downstream of ExistingBB whose definition is not on
+		// every path through SrcBB. The runtime branch always lands on
+		// the real Target (the slot is loaded with that BlockAddress), so
+		// decoys exist only to keep `indirectbr` honest for the verifier
+		// and to confuse static analysis. Use synthetic dead BBs
+		// containing only `unreachable` — they have zero SSA operands
+		// and zero successors, so they are always safe to list.
 
 		llvm::LLVMContext& C = Ctx.F.getContext();
 		llvm::BasicBlock& Entry = Ctx.F.getEntryBlock();
@@ -83,7 +85,6 @@ public:
 				continue;
 
 			llvm::BasicBlock* Target = BI->getSuccessor(0);
-			llvm::BasicBlock* SrcBB = BI->getParent();
 
 			llvm::IRBuilder<> EntryB(&*Entry.getFirstInsertionPt());
 			llvm::AllocaInst* Slot =
@@ -97,24 +98,23 @@ public:
 			auto* Ld = B.CreateLoad(PtrTy, Slot, Ctx.prefixed("ibr.addr"));
 			Ld->setVolatile(true);
 
-			unsigned NumDecoys =
-			    std::min<unsigned>(3u, (unsigned)DecoyPool.size());
+			// Build N synthetic dead decoys (each = empty BB with
+			// `unreachable`). These never execute (the loaded slot
+			// holds Target's BlockAddress) but make the indirectbr
+			// destination list non-trivial. Synthetic BBs have zero
+			// SSA operands and zero successors, so they cannot
+			// violate dominance regardless of where SrcBB sits in
+			// the CFG.
+			constexpr unsigned kNumDecoys = 3;
 			auto* IBr =
-			    llvm::IndirectBrInst::Create(Ld, 1 + NumDecoys, BI);
+			    llvm::IndirectBrInst::Create(Ld, 1 + kNumDecoys, BI);
 			IBr->addDestination(Target);
 
-			unsigned Added = 0;
-			for (unsigned i = 0;
-			     i < DecoyPool.size() && Added < NumDecoys; ++i) {
-				unsigned Pick =
-				    Ctx.GadgetRng.range((uint32_t)DecoyPool.size());
-				llvm::BasicBlock* Decoy = DecoyPool[Pick];
-				if (Decoy == Target || Decoy == SrcBB)
-					continue;
-				if (blockHasPhis(Decoy))
-					continue;
+			for (unsigned i = 0; i < kNumDecoys; ++i) {
+				llvm::BasicBlock* Decoy = llvm::BasicBlock::Create(
+				    C, Ctx.prefixed("ibr.decoy"), &Ctx.F);
+				new llvm::UnreachableInst(C, Decoy);
 				IBr->addDestination(Decoy);
-				++Added;
 			}
 
 			BI->eraseFromParent();

@@ -253,10 +253,12 @@ namespace {
 		Function& F = PCtx.F;
 		FunctionObfContext& Ctx = PCtx.FOC;
 
-		// Budget-aware site cap: estimate ~15-40 insts per site depending on depth.
+		// Budget-aware site cap: estimate ~15-40 insts per site depending on
+		// depth.  This is the *initial* estimate; the live cap below tightens
+		// it dynamically once we observe actual per-site growth.
+		unsigned InstsPerSiteEst = 10 * (1 + depth);
 		if (Ctx.BudgetRemaining != UINT_MAX) {
-			unsigned instsPerSite = 10 * (1 + depth);
-			unsigned budgetSites = Ctx.BudgetRemaining / std::max(1u, instsPerSite);
+			unsigned budgetSites = Ctx.BudgetRemaining / std::max(1u, InstsPerSiteEst);
 			budgetSites = std::max(1u, budgetSites);
 			if (budgetSites < maxSites) {
 				maxSites = budgetSites;
@@ -265,15 +267,20 @@ namespace {
 			}
 		}
 
-		// Live mid-pass cap — mirrors Substitution. Catches the cases
-		// where instsPerSite under-estimates actual growth (deep MBA on
-		// small functions can blow up faster than the linear estimate).
+		// Live mid-pass cap with observed-cost tracking.  The static
+		// per-site estimate routinely undershoots (deep MBA + non-linear
+		// addends + layered window can stack to 300+ insts/site).  Poll
+		// before each site using the maximum *observed* delta so far —
+		// guarantees we never start a site whose worst-case cost would
+		// push us past the cap.
 		unsigned BudgetCap = UINT_MAX;
+		unsigned LastInsts = 0;
+		unsigned MaxObservedDelta = InstsPerSiteEst;
 		if (Ctx.BudgetRemaining != UINT_MAX) {
-			unsigned StartInsts = llvm::obf::countInstructions(F);
-			BudgetCap = (Ctx.BudgetRemaining > UINT_MAX - StartInsts)
+			LastInsts = llvm::obf::countInstructions(F);
+			BudgetCap = (Ctx.BudgetRemaining > UINT_MAX - LastInsts)
 				? UINT_MAX
-				: StartInsts + Ctx.BudgetRemaining;
+				: LastInsts + Ctx.BudgetRemaining;
 		}
 
 		SmallVector<BinaryOperator*, 32> toTransform;
@@ -290,13 +297,16 @@ namespace {
 		for (BinaryOperator* BO : toTransform) {
 			if (SitesDone >= maxSites)
 				break;
-			if (BudgetCap != UINT_MAX && (SitesDone & 31u) == 0u) {
-				if (llvm::obf::countInstructions(F) >= BudgetCap) {
+			if (BudgetCap != UINT_MAX) {
+				unsigned cur = llvm::obf::countInstructions(F);
+				if (cur + MaxObservedDelta >= BudgetCap) {
 					if (ObfVerbose)
-						errs() << "[mba] live budget reached at "
-						<< SitesDone << " sites\n";
+						errs() << "[mba] live budget reached at " << SitesDone
+						<< " sites (cur=" << cur << " +next~" << MaxObservedDelta
+						<< " >= " << BudgetCap << ")\n";
 					break;
 				}
+				LastInsts = cur;
 			}
 			// Safety guards
 			if (!BO->getType()->isIntegerTy())
@@ -370,6 +380,16 @@ namespace {
 			BO->eraseFromParent();
 			++SitesDone;
 			Changed = true;
+
+			// Track observed per-site cost so the predictive cap above
+			// can tighten on subsequent iterations.
+			if (BudgetCap != UINT_MAX) {
+				unsigned after = llvm::obf::countInstructions(F);
+				unsigned delta = after > LastInsts ? after - LastInsts : 0;
+				if (delta > MaxObservedDelta)
+					MaxObservedDelta = delta;
+				LastInsts = after;
+			}
 		}
 
 		return Changed;

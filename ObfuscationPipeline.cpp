@@ -46,38 +46,44 @@ ObfuscationPipeline::getOrderingRules() {
 
 
 
-	// Virtual calls should run early
+	// Virtual calls must run *after* flattening: vcall converts direct
+	// calls to indirect, but flattening bails out on functions that
+	// already contain indirect calls (Cfg.AllowIndirect=false by
+	// default). Sequencing flattening first lets both passes coexist
+	// in combo pipelines under strict-skip enforcement.
 	rules["vcall"] = PassOrderingRules{
-		{"mba"},
-		{"split", "bcf", "flattening"},
+		{"mba", "split", "sdiff", "bcf", "flattening"},
+		{},
 		{}
 	};
 
-	// Split should run before structural changes
+	// Split should run before structural changes (vcall moved after flattening)
 	rules["split"] = PassOrderingRules{
-		{"mba", "substitution", "vcall"},
+		{"mba", "substitution"},
 		{"bcf", "flattening"},
 		{}
 	};
 
 	// Semantic diffusion should happen before CFG-heavy passes.
 	rules["sdiff"] = PassOrderingRules{
-		{"mba", "substitution", "vcall", "split"},
+		{"mba", "substitution", "split"},
 		{"bcf", "flattening"},
 		{}
 	};
 
 	// BCF can run independently but better before flattening
 	rules["bcf"] = PassOrderingRules{
-		{"mba", "substitution", "split", "sdiff", "vcall"},
+		{"mba", "substitution", "split", "sdiff"},
 		{"flattening"},
 		{}
 	};
 
-	// Flattening should run before anti-decompiler
+	// Flattening should run before anti-decompiler. vcall must follow
+	// flattening (see vcall rule above) so the flattening transformer
+	// sees only direct calls.
 	rules["flattening"] = PassOrderingRules{
-		{"mba", "substitution", "split","sdiff", "bcf", "vcall"},
-		{"adec"},
+		{"mba", "substitution", "split","sdiff", "bcf"},
+		{"vcall", "adec"},
 		{}
 	};
 
@@ -107,8 +113,12 @@ ObfuscationPipeline::getOrderingRules() {
 	};
 
 	rules["vm"] = PassOrderingRules{
-		/*before=*/ {"mba", "substitution", "vcall", "split", "sdiff", "bcf"},
-		/*after=*/  {"shield", "adec"},
+		// vm rewrites the function body into a bytecode interpreter and
+		// builds a static callee table. It must run *before* vcall —
+		// after vcall the call sites have indirect (runtime) callees,
+		// which vm cannot emit into its constant CalleeTab.
+		/*before=*/ {"mba", "substitution", "split", "sdiff", "bcf"},
+		/*after=*/  {"vcall", "shield", "adec"},
 		/*conflicts=*/ {"flattening"},  // both restructure the whole CFG
     };
 

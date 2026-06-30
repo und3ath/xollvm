@@ -17,6 +17,13 @@ def register(reg: Registry, *,
     all_passes = PASSES + ["adec"]
     max_k = max(1, combo_max_size)
 
+    # Combinations that include any inflating CFG pass overflow the
+    # default 50x IR budget when stacked. Bump the budget for any
+    # subset that contains at least one of the heavy passes so the
+    # downstream passes do not get strict-skip-fataled.
+    _HEAVY = {"flattening", "bcf", "mba"}
+    _COMBO_OPTS = ["--obf-ir-budget-multiplier=500"]
+
     for k in range(2, max_k + 1):
         for subset in itertools.combinations(all_passes, k):
             subset_list = list(subset)
@@ -30,6 +37,10 @@ def register(reg: Registry, *,
             # would surface as a legitimate "too few blocks" skip, not a
             # regression.
             tolerate = "vm" in subset_list
+            extra: list[str] = []
+            if any(p in _HEAVY for p in subset_list):
+                extra = list(_COMBO_OPTS)
             reg.add(name="exh_" + "_".join(subset_list),
                     passes=subset_list, category="exhaustive",
+                    extra_opts=extra,
                     expect_no_skips=False if tolerate else None)

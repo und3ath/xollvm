@@ -314,9 +314,14 @@ namespace {
 
 			BO->setOperand(1, OpaqueRHS);
 
-			// Drop nsw/nuw flags — the opaque replacement may violate them
-			BO->setHasNoSignedWrap(false);
-			BO->setHasNoUnsignedWrap(false);
+			// Drop nsw/nuw flags — the opaque replacement may violate them.
+			// Only Add/Sub/Mul/Shl carry these (OverflowingBinaryOperator);
+			// And/Or/Xor are in our candidate set but the setters crash via
+			// cast<OverflowingBinaryOperator> in LLVM 22 builds.
+			if (isa<OverflowingBinaryOperator>(BO)) {
+				BO->setHasNoSignedWrap(false);
+				BO->setHasNoUnsignedWrap(false);
+			}
 
 			tagShielded(BO);
 			++Count;

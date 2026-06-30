@@ -88,7 +88,11 @@ EXTRA_ANN: Dict[str, str] = {
         "split(num=2), "
         "bcf(prob=60,loop=1), "
         "sdiff(prob=80,slots=2,maxSites=30), "
-        "flattening(prob=100,minBlocks=3,maxBlocks=120), "
+        # bcf inflates the block count well past flattening's default
+        # maxBlocks before flattening sees the IR. Allow up to 4000 to
+        # keep the kitchen-sink pipeline runnable end-to-end under strict
+        # skip enforcement.
+        "flattening(prob=100,minBlocks=3,maxBlocks=4000), "
         "shield(maxSites=200,volatile=1,identity=1,dse=1,cfg=1), "
         "strenc(minlen=4,aes=1,keysplit=1), "
         "adec(prob=50,strength=1,maxSites=20)"

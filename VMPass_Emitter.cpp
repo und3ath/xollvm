@@ -873,9 +873,26 @@ bool BytecodeEmitter::run(Function& F, uint8_t S, const DataLayout& D) {
 		else { markUnsupportedValue(&A); }
 	}
 
-	// Assign preg slots for demoted-PHI allocas (first insts in entry block)
+	// Assign preg slots for every alloca in the entry block.
+	//
+	// Originally this loop terminated at the first non-alloca instruction on
+	// the assumption that all entry-block allocas form a contiguous prefix
+	// (true for PHI-demoted IR coming straight out of clang -O0). Earlier
+	// passes can break that invariant — vcall inserts
+	//     %vcall.slot = alloca i32
+	//     %vcall.slot.p2i = ptrtoint ptr %vcall.slot to i64
+	//     %vcall.slot.p2i32 = trunc i64 ... to i32
+	//     %vcall.slot.init = xor i32 ...
+	//     store i32 ..., ptr %vcall.slot
+	// at the top of entry, sandwiching the user allocas behind non-alloca
+	// init code. With `break`, the user allocas (%x.addr, %y.addr, ...) were
+	// silently dropped from slot assignment, and the bytecode emitter then
+	// asserted "pr(): untracked non-const ptr" on the first store that
+	// referenced one. Scan the whole entry block instead and register every
+	// alloca we find.
 	for (Instruction& I : F.getEntryBlock()) {
-		auto* AI = dyn_cast<AllocaInst>(&I); if (!AI) break;
+		auto* AI = dyn_cast<AllocaInst>(&I);
+		if (!AI) continue;
 		PhiAllocaDesc D;
 		D.Slot = newPR(AI);
 		D.AllocTy = AI->getAllocatedType();

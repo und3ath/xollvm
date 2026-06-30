@@ -66,9 +66,17 @@ def register(reg: Registry, **_opts) -> None:
     reg.add(name="strenc_seed_divergence", passes=["strenc"],
             ann_override=_AES, gates=["seed_divergence"], category="strenc")
 
+    # Stub functions have very different shapes (some 1-BB after -O2,
+    # some many-BB workhorses). Flattening/bcf/sdiff legitimately skip
+    # the small ones with "too few blocks". Substitution skips
+    # vector-only stubs with "no candidates". These skips are by design
+    # — gate the stub *workhorse* growth, not per-function strictness.
+    _STUB_OK_SKIPS = {"too few blocks", "no candidates", "no scalar ops"}
+
     reg.add(name="aes_stub_passes_mba_bcf", passes=["strenc"],
             ann_override=_STUB_MBA_BCF,
             expect_enabled=["strenc", "aes_stub"],
+            allowed_skip_reasons=_STUB_OK_SKIPS,
             gates=["strenc_no_plaintext", "strenc_decrypt_present",
                    "strenc_key_providers", "strenc_keysplit_sections",
                    "aes_stub_grew", "aes_stub_no_plaintext_key"],
@@ -76,18 +84,21 @@ def register(reg: Registry, **_opts) -> None:
     reg.add(name="aes_stub_passes_fla", passes=["strenc"],
             ann_override=_STUB_FLA,
             expect_enabled=["strenc", "aes_stub"],
+            allowed_skip_reasons=_STUB_OK_SKIPS,
             gates=["strenc_no_plaintext", "strenc_decrypt_present",
                    "aes_stub_grew"],
             category="strenc")
     reg.add(name="aes_stub_passes_sub", passes=["strenc"],
             ann_override=_STUB_SUB,
             expect_enabled=["strenc", "aes_stub"],
+            allowed_skip_reasons=_STUB_OK_SKIPS,
             gates=["strenc_no_plaintext", "strenc_decrypt_present",
                    "strenc_key_providers", "strenc_keysplit_sections"],
             category="strenc")
     reg.add(name="aes_stub_passes_full", passes=["strenc"],
             ann_override=_STUB_FULL,
             expect_enabled=["strenc", "aes_stub"],
+            allowed_skip_reasons=_STUB_OK_SKIPS,
             gates=["strenc_no_plaintext", "strenc_decrypt_present",
                    "strenc_key_providers", "strenc_keysplit_sections",
                    "aes_stub_grew", "aes_stub_no_plaintext_key"],
