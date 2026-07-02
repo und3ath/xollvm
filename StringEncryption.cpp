@@ -203,13 +203,23 @@ namespace {
             : ModPassCtx(M, MAM, "strenc"),
             KeyRng(R.fork("keys")) {
 
-            // Merge StringEncryptionConfig across all annotated functions
+            // Merge StringEncryptionConfig across all annotated functions.
+            //
+            // useAES/keySplit merge with OR semantics (D1(a) module-wide model):
+            // the module runs the AES path iff *any* enabled function requests
+            // AES, and only falls back to the legacy XOR path when every enabled
+            // function explicitly opted out (aes=0). This is deliberate — the AES
+            // key schedule and shared decrypt stub are set up once per module
+            // (see below), so the cipher choice cannot be soundly varied
+            // per-function. Init to false so a per-function `strenc(aes=0)` is
+            // honored instead of silently ignored (was a bug: Acc.useAES started
+            // true and was only ever OR'd true, so aes=0 never took effect).
             bool Any = false;
             StringEncryptionConfig Acc;
             Acc.enable = false;
             Acc.minLength = 0;
-            Acc.useAES = true;
-            Acc.keySplit = true;
+            Acc.useAES = false;
+            Acc.keySplit = false;
 
             for (auto& It : Ann.PerFunction) {
                 auto PC = It.second.getPassConfig("strenc");
@@ -219,7 +229,7 @@ namespace {
                 Any = true;
                 Acc.enable = true;
                 Acc.minLength = std::max(Acc.minLength, Local.minLength);
-                // If any function requests AES, use AES for all
+                // Any function requesting AES / keySplit turns it on module-wide.
                 if (Local.useAES)    Acc.useAES = true;
                 if (Local.keySplit)  Acc.keySplit = true;
             }
