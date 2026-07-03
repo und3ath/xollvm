@@ -2,17 +2,21 @@
 #include "llvm/Transforms/Obfuscator/ObfuscationAnnotationAnalysis.h"
 #include "llvm/Transforms/Obfuscator/ObfuscationConfig.h"
 #include "llvm/Transforms/Obfuscator/ObfuscationOptions.h"
+#include "llvm/Transforms/Obfuscator/OpaqueUtils.h"
+#include "llvm/Transforms/Obfuscator/MBAUtils.h"
 #include "llvm/Transforms/Obfuscator/PassCtx.h"
 #include "llvm/Transforms/Obfuscator/Utils.h"
 
 #include "llvm/Transforms/Obfuscator/AESStubBitcode.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/Dominators.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
@@ -20,6 +24,7 @@
 #include "llvm/Linker/Linker.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 
 
@@ -164,6 +169,91 @@ namespace {
         }
     }
 
+    // ============================================================================
+    // Compile-time ChaCha20 engine (RFC 8439, tableless ARX)
+    // Used only inside the pass to encrypt strings offline. MUST produce
+    // byte-for-byte identical keystream to __strenc_chacha_decrypt in
+    // aes_stub.c — same constants, word layout, counter/nonce positions,
+    // rotation amounts, and round count. If these disagree, runtime decrypt
+    // yields garbage.
+    // ============================================================================
+
+    static inline uint32_t chacha_rotl32(uint32_t x, int n) {
+        return (uint32_t)((x << n) | (x >> (32 - n)));
+    }
+
+    static inline uint32_t chacha_load32_le(const uint8_t* p) {
+        return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
+            ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+    }
+
+    static inline void chacha_store32_le(uint8_t* p, uint32_t v) {
+        p[0] = (uint8_t)(v);
+        p[1] = (uint8_t)(v >> 8);
+        p[2] = (uint8_t)(v >> 16);
+        p[3] = (uint8_t)(v >> 24);
+    }
+
+    static inline void chacha_qr(uint32_t& a, uint32_t& b, uint32_t& c, uint32_t& d) {
+        a += b; d ^= a; d = chacha_rotl32(d, 16);
+        c += d; b ^= c; b = chacha_rotl32(b, 12);
+        a += b; d ^= a; d = chacha_rotl32(d, 8);
+        c += d; b ^= c; b = chacha_rotl32(b, 7);
+    }
+
+    // Produce one 64-byte ChaCha20 keystream block from the given state.
+    static void chacha20_block(const uint32_t in[16], uint8_t out[64]) {
+        uint32_t x[16];
+        for (int i = 0; i < 16; i++) x[i] = in[i];
+
+        for (int i = 0; i < 10; i++) {
+            // Column rounds
+            chacha_qr(x[0], x[4], x[8], x[12]);
+            chacha_qr(x[1], x[5], x[9], x[13]);
+            chacha_qr(x[2], x[6], x[10], x[14]);
+            chacha_qr(x[3], x[7], x[11], x[15]);
+            // Diagonal rounds
+            chacha_qr(x[0], x[5], x[10], x[15]);
+            chacha_qr(x[1], x[6], x[11], x[12]);
+            chacha_qr(x[2], x[7], x[8], x[13]);
+            chacha_qr(x[3], x[4], x[9], x[14]);
+        }
+
+        for (int i = 0; i < 16; i++)
+            chacha_store32_le(out + 4 * i, x[i] + in[i]);
+    }
+
+    // ChaCha20 keystream XOR (symmetric encrypt/decrypt) — used at pass time
+    // to produce ciphertext that will be embedded as constant globals.
+    // key    : 32-byte key.
+    // nonce  : 12-byte nonce.
+    // counter: initial 32-bit block counter (call sites use 0).
+    static void chacha20_xor(const uint8_t key[32], const uint8_t nonce[12],
+        uint32_t counter, uint8_t* buf, size_t len) {
+        uint32_t state[16];
+        state[0] = 0x61707865u;
+        state[1] = 0x3320646eu;
+        state[2] = 0x79622d32u;
+        state[3] = 0x6b206574u;
+        for (int i = 0; i < 8; i++)
+            state[4 + i] = chacha_load32_le(key + 4 * i);
+        state[12] = counter;
+        for (int i = 0; i < 3; i++)
+            state[13 + i] = chacha_load32_le(nonce + 4 * i);
+
+        size_t off = 0;
+        while (off < len) {
+            uint8_t ks[64];
+            chacha20_block(state, ks);
+
+            size_t n = std::min<size_t>(64, len - off);
+            for (size_t i = 0; i < n; i++) buf[off + i] ^= ks[i];
+            off += 64;
+
+            state[12]++;   // increment block counter
+        }
+    }
+
     // FNV-64 nonce derivation: unique per (string_index, content)
     static uint64_t fnv64_nonce(size_t idx, StringRef content) {
         constexpr uint64_t FNV_OFFSET = 14695981039346656037ULL;
@@ -193,11 +283,18 @@ namespace {
         uint8_t MasterKey[16] = {};
         uint8_t ExpandedKeys[176] = {};
 
+        // ChaCha20 compile-time key material
+        uint8_t ChaChaKey[32] = {};
+        // Phase B: pass-time-known mask words used to obfuscate the key global
+        // (see @.strenc.ck below — it stores key XOR mask, never the flat key).
+        uint32_t MaskWords[8] = {};
+
         // IR objects created once, reused for all strings
         GlobalVariable* KeyDataGV = nullptr;   // @.strenc.kd  — data half (bytes 0–87)
         Function* KeyCodeFn = nullptr;   // __strenc_key_b — code half (bytes 88–175)
         Function* KeyDataFn = nullptr;   // __strenc_key_a — wrapper memcpy
         Function* DecryptFn = nullptr;   // __strenc_decrypt (from linked stub)
+        GlobalVariable* ChaChaKeyGV = nullptr;   // @.strenc.ck — shared 32-byte ChaCha key
 
         StrEncCtx(Module& M, ModuleAnalysisManager& MAM)
             : ModPassCtx(M, MAM, "strenc"),
@@ -220,6 +317,7 @@ namespace {
             Acc.minLength = 0;
             Acc.useAES = false;
             Acc.keySplit = false;
+            Acc.useChaCha = false;
 
             for (auto& It : Ann.PerFunction) {
                 auto PC = It.second.getPassConfig("strenc");
@@ -232,6 +330,7 @@ namespace {
                 // Any function requesting AES / keySplit turns it on module-wide.
                 if (Local.useAES)    Acc.useAES = true;
                 if (Local.keySplit)  Acc.keySplit = true;
+                if (Local.useChaCha) Acc.useChaCha = true;
             }
 
             // ── NEW: collect strenc_stub config ──────────────────────────────────────
@@ -246,6 +345,23 @@ namespace {
 
             Cfg = Acc;
             if (!Any) { Cfg.enable = false; return; }
+
+            if (Cfg.useChaCha) {
+                // ── Generate compile-time ChaCha20 32-byte key from RNG ──
+                // Same byte-splat style as the AES MasterKey loop below.
+                for (int i = 0; i < 8; i++) {
+                    uint32_t W = KeyRng.u32();
+                    ChaChaKey[4 * i + 0] = (W >> 0) & 0xFF;
+                    ChaChaKey[4 * i + 1] = (W >> 8) & 0xFF;
+                    ChaChaKey[4 * i + 2] = (W >> 16) & 0xFF;
+                    ChaChaKey[4 * i + 3] = (W >> 24) & 0xFF;
+                }
+                // Phase B: mask words used to obfuscate the key in @.strenc.ck.
+                // Pass-time-known; reconstructed at runtime via opaque constants.
+                for (int w = 0; w < 8; w++)
+                    MaskWords[w] = KeyRng.u32();
+                return;   // skip AES key expansion — chacha path doesn't need it
+            }
 
             if (!Cfg.useAES) return;   // legacy XOR path — key gen not needed
 
@@ -332,6 +448,12 @@ namespace {
             uint64_t nonce,
             unsigned idx);
 
+        /// Create a private constant global holding a 12-byte ChaCha20 nonce.
+        /// Sibling of createNonceGlobal, mirrored for the 12-byte layout.
+        static GlobalVariable* createNonce12Global(Module& M,
+            const uint8_t nonce12[12],
+            unsigned idx);
+
         // ── Opaque-pointer GEP helper ─────────────────────────────────────────────
         static Value* gepI8(IRBuilder<>& B, Type* ArrTy, Value* ArrPtr);
 
@@ -340,6 +462,9 @@ namespace {
 
         // ── Top-level entry ───────────────────────────────────────────────────────
         static bool encryptStrings(Module& M, StrEncCtx& Ctx);
+
+        // ── ChaCha20 path (used when useChaCha=true) ──────────────────────────────
+        static bool encryptStringsChaCha(Module& M, StrEncCtx& Ctx);
 
         // ── Legacy XOR path (fallback when useAES=false) ──────────────────────────
         static bool encryptStringsXOR(Module& M, StrEncCtx& Ctx);
@@ -397,7 +522,8 @@ namespace {
     void StrEncImpl::hardenStubFunctions(Module& M,
         const ObfuscationConfig& StubPasses,
         ObfuscationAnnotationCache& Cache) {
-        // All stub functions are prefixed with "__aes_" or "__obf_aes_".
+        // All stub functions are prefixed with "__aes_", "__obf_aes_", or
+        // "__strenc_" (e.g. the ChaCha20 path's __strenc_chacha_decrypt).
         // After linking they may still have ExternalLinkage from their C
         // definition.  Make them private so:
         //   (a) the OS linker strips them from exports,
@@ -405,7 +531,8 @@ namespace {
         //   (c) they get individual obfuscation seeds from the function driver.
         for (Function& F : M) {
             if (!F.getName().starts_with("__aes_") &&
-                !F.getName().starts_with("__obf_aes_")) continue;
+                !F.getName().starts_with("__obf_aes_") &&
+                !F.getName().starts_with("__strenc_")) continue;
             if (F.isDeclaration()) continue;
 
             F.setLinkage(GlobalValue::PrivateLinkage);
@@ -599,6 +726,30 @@ namespace {
         return GV;
     }
 
+    GlobalVariable* StrEncImpl::createNonce12Global(Module& M,
+        const uint8_t nonce12[12],
+        unsigned idx) {
+        LLVMContext& C = M.getContext();
+        ArrayType* Ty = ArrayType::get(Type::getInt8Ty(C), 12);
+
+        std::vector<Constant*> Bytes;
+        Bytes.reserve(12);
+        for (int i = 0; i < 12; i++)
+            Bytes.push_back(ConstantInt::get(Type::getInt8Ty(C), nonce12[i]));
+
+        std::string Name = ".strenc.nc12." + std::to_string(idx);
+        GlobalVariable* GV = new GlobalVariable(
+            M, Ty, /*isConstant=*/true,
+            GlobalValue::PrivateLinkage,
+            ConstantArray::get(Ty, Bytes),
+            Name);
+
+        GV->setSection(".strenc.n");
+        GV->setAlignment(Align(8));
+        GV->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
+        return GV;
+    }
+
     Value* StrEncImpl::gepI8(IRBuilder<>& B, Type* ArrTy, Value* ArrPtr) {
         Value* Z = ConstantInt::get(Type::getInt32Ty(B.getContext()), 0);
         return B.CreateInBoundsGEP(ArrTy, ArrPtr, { Z, Z }, "strenc.gep");
@@ -755,6 +906,451 @@ namespace {
             if (GV->use_empty())
                 GV->eraseFromParent();
         }
+
+        return Changed;
+    }
+
+    // ── StrEncImpl::encryptStringsChaCha ─────────────────────────────────────────
+    // The hardened string-encryption path (redesign phases A-E). Mirrors
+    // encryptStrings() but replaces the AES/choke-point-call design:
+    //   A. Tableless ChaCha20 (no AES S-box static signature). Nonce is 12
+    //      bytes (low 8 = fnv64_nonce, high 4 = candidate index, LE).
+    //   B. Key never stored flat: @.strenc.ck holds key XOR mask; the real key
+    //      is reconstructed per-function at runtime from opaque-constant masks
+    //      (defeats offline static bulk-decrypt via a flat key read).
+    //   C. Decrypt is INLINED at pass time — no callable __*_decrypt boundary
+    //      and no single "first call = decrypt" locate point.
+    //   D. Lazy materialization at the uses' dominator + scrub before each ret.
+    //   E. Key recombination MBA-encoded (no plain-xor provenance).
+    //
+    // CEILING (fundamental, not fixable in IR): a string consumed by an
+    // external callee (strcmp/printf/...) MUST be plaintext in memory at the
+    // point of use, so an attacker who taps that consumer at runtime can still
+    // read it. A-E defeat STATIC recovery (no key, no signature, no plain xor)
+    // and the DYNAMIC decrypt-hook attack (nothing locatable to hook) — see the
+    // deobf_bench strenc_*_chacha cases (100% vs 0% for the AES call path) —
+    // but they do not and cannot beat a point-of-use consumer tap. True
+    // offline-impossibility + tamper-evidence (code-hash keying) needs a
+    // post-link patch tool, out of scope for an IR pass.
+
+    bool StrEncImpl::encryptStringsChaCha(Module& M, StrEncCtx& Ctx) {
+        // link the stub (brings in __strenc_chacha_decrypt alongside the rest)
+        Function* LinkedDecFn = linkStub(M);
+        if (!LinkedDecFn) {
+            errs() << "strenc: stub link failed — skipping chacha encryption\n";
+            return false;
+        }
+
+        Function* ChaChaDecryptFn = M.getFunction("__strenc_chacha_decrypt");
+        if (!ChaChaDecryptFn) {
+            errs() << "strenc: __strenc_chacha_decrypt missing from linked stub "
+                "— skipping chacha encryption\n";
+            return false;
+        }
+
+        // Get a mutable reference to the annotation cache directly from the
+        // MAM (see encryptStrings() for why we don't const_cast Ctx.Ann).
+        auto& MutableCache =
+            Ctx.MAM.getResult<ObfuscationAnnotationAnalysis>(M);
+        hardenStubFunctions(M, Ctx.Cfg.stubPasses, MutableCache);
+
+        Ctx.DecryptFn = ChaChaDecryptFn;
+
+        // Phase D: per-function DominatorTree, fetched via the
+        // FunctionAnalysisManager reachable from the module's MAM. Must be
+        // queried per-function BEFORE that function is mutated; inserting
+        // instructions (as Phase 2 below does) does not change the block-level
+        // CFG, so a DT computed here stays valid across those insertions.
+        // Phase C's later inlining DOES change the CFG, so DT must not be
+        // queried after that point (it isn't — Phase C runs once, after all
+        // Phase 2 placement, and doesn't touch DT at all).
+        auto& FAM =
+            Ctx.MAM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
+
+        // collect string candidates
+        struct Candidate {
+            GlobalVariable* GV;
+            std::string     Plaintext;
+            unsigned        Index;
+        };
+        std::vector<Candidate> Cands;
+
+        unsigned idx = 0;
+        for (GlobalVariable& GV : M.globals()) {
+            if (!shouldEncrypt(GV, Ctx.Cfg.minLength)) continue;
+            auto* CDA = dyn_cast<ConstantDataArray>(GV.getInitializer());
+            if (!CDA || !CDA->isString()) continue;
+            Cands.push_back({ &GV, CDA->getAsCString().str(), idx++ });
+        }
+
+        if (Cands.empty()) return false;
+
+        bool Changed = false;
+
+        LLVMContext& C = M.getContext();
+        Type* I8Ty = Type::getInt8Ty(C);
+        Type* I32Ty = Type::getInt32Ty(C);
+        Type* I64Ty = Type::getInt64Ty(C);
+
+        // Phase B: single OpaqueUtils instance for the whole call — it caches
+        // its per-function volatile slot internally and is safe to reuse
+        // across functions/sites (see OpaqueUtils.h).
+        llvm::obf::OpaqueUtils::Options OptsO;
+        OptsO.EnableOpaqueConsts = true;
+        OptsO.PredStrength = 2;
+        llvm::obf::OpaqueUtils Opaque(M, Ctx.R, "strenc.opaque.salt.i32", OptsO);
+
+        // Phase E: MBA factory used to encode the key recombination. The
+        // per-word recovery `key = ck XOR mask` is the one operation that
+        // materialises key bytes from the (masked) global + opaque mask, so a
+        // static lifter that recognises a plain `xor` there could fold the two
+        // together. Rewriting it through MBA (equivalent value, boolean/
+        // arithmetic identity + runtime-zero noise anchored to a volatile
+        // slot) removes that plain-xor signature. Same instance reused across
+        // functions; caches its own per-function noise slot.
+        //
+        // NOTE on the *control-flow-bound* half of the original Phase-E plan:
+        // deliberately NOT implemented. Offline encryption forces the runtime
+        // mask to equal a build-time constant (MaskWords[w]), so a genuine
+        // path accumulator would have to be path-invariant anyway; and the
+        // benchmark's string attack is a *concrete* dynamic memory tap that
+        // runs the real code, so any value correct for genuine execution is
+        // equally correct for the attacker's concrete replay. True
+        // offline-impossibility / tamper-evidence needs the post-link
+        // code-hash patch tool (separate track), not an IR transform.
+        llvm::obf::MbaUtils Mba(M, Ctx.R, "strenc.mba.noise.i32");
+
+        // ── Phase 1: per candidate — offline crypto + globals, no IR yet ──────
+        // Dominance fix: we no longer inject a self-contained cluster per
+        // (string, using-function) pair at getFirstInsertionPt() — doing so
+        // front-inserts each new cluster ahead of previously-inserted ones,
+        // so a function using 2+ encrypted strings ends up with its second
+        // cluster's key-reconstruction loads referencing an OpaqueUtils
+        // volatile-slot alloca created by the first cluster, which no longer
+        // dominates it (physically after in the block). Instead we collect
+        // per-candidate data here, grouped by using function, and emit all
+        // IR for a function in one forward-advancing pass (Phase 2).
+        struct CandInj {
+            GlobalVariable* GV;       // original plaintext global (to RAUW + maybe erase)
+            GlobalVariable* CtGV;     // ciphertext global
+            GlobalVariable* NonceGV;  // 12-byte nonce global
+            ArrayType* CtTy;          // CtGV value type
+            ArrayType* NonceTy;       // NonceGV value type
+            uint64_t CtBytes;         // CtTy->getNumElements() (plaintext len + 1)
+        };
+
+        llvm::MapVector<Function*, SmallVector<CandInj, 4>> ByFn;
+        SmallVector<GlobalVariable*, 16> AllCandGVs;
+
+        for (auto& Cand : Cands) {
+            GlobalVariable* GV = Cand.GV;
+            const std::string& Plain = Cand.Plaintext;
+
+            // Materialise ConstantExpr users so we can find using functions
+            materializeConstExprUsers(GV);
+
+            // Derive per-string 12-byte nonce: low 8 bytes = fnv64_nonce
+            // (little-endian), high 4 bytes = candidate index (little-endian).
+            uint64_t Nonce64 = fnv64_nonce(Cand.Index, Plain);
+            uint8_t Nonce12[12];
+            for (int i = 0; i < 8; i++)
+                Nonce12[i] = (uint8_t)((Nonce64 >> (8 * i)) & 0xFF);
+            uint32_t IdxWord = (uint32_t)Cand.Index;
+            for (int i = 0; i < 4; i++)
+                Nonce12[8 + i] = (uint8_t)((IdxWord >> (8 * i)) & 0xFF);
+
+            // Encrypt offline
+            std::string Cipher = Plain;
+            chacha20_xor(Ctx.ChaChaKey, Nonce12, /*counter=*/0,
+                reinterpret_cast<uint8_t*>(Cipher.data()),
+                Cipher.size());
+
+            // Create per-string globals
+            GlobalVariable* CtGV = createCiphertextGlobal(M, Cipher, Cand.Index);
+            GlobalVariable* NonceGV = createNonce12Global(M, Nonce12, Cand.Index);
+
+            // Create the single module-shared 32-byte key global lazily.
+            // Phase B: this global never holds the flat ChaCha key. It holds
+            // (key XOR mask) — ck_byte[i] = ChaChaKey[i] ^ MaskWords[i/4]'s
+            // little-endian byte i%4. The real key is reconstructed at each
+            // using function's entry at runtime (see Phase 2) by XORing this
+            // global back with the mask, where the mask arrives as an opaque
+            // constant (equals MaskWords[w] at runtime, not statically
+            // foldable).
+            if (!Ctx.ChaChaKeyGV) {
+                ArrayType* KeyTy = ArrayType::get(I8Ty, 32);
+                std::vector<Constant*> KeyBytes;
+                KeyBytes.reserve(32);
+                for (int i = 0; i < 32; i++) {
+                    uint8_t MaskByte =
+                        (uint8_t)((Ctx.MaskWords[i / 4] >> (8 * (i % 4))) & 0xFF);
+                    KeyBytes.push_back(
+                        ConstantInt::get(I8Ty, Ctx.ChaChaKey[i] ^ MaskByte));
+                }
+                Ctx.ChaChaKeyGV = new GlobalVariable(
+                    M, KeyTy, /*isConstant=*/true,
+                    GlobalValue::PrivateLinkage,
+                    ConstantArray::get(KeyTy, KeyBytes),
+                    ".strenc.ck");
+                Ctx.ChaChaKeyGV->setSection(".strenc.ck");
+                Ctx.ChaChaKeyGV->setAlignment(Align(16));
+                Ctx.ChaChaKeyGV->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
+            }
+
+            ArrayType* CtTy = cast<ArrayType>(CtGV->getValueType());
+            ArrayType* NonceTy = cast<ArrayType>(NonceGV->getValueType());
+            const uint64_t CtBytes = CtTy->getNumElements();  // plaintext len + 1
+
+            // Find all functions that use this string global
+            std::set<Function*> Users;
+            for (User* U : GV->users())
+                if (auto* I = dyn_cast<Instruction>(U))
+                    Users.insert(I->getFunction());
+
+            for (Function* F : Users) {
+                if (!F || F->isDeclaration()) continue;
+                // Skip the stub functions themselves (avoids self-re-encryption)
+                if (F->getName().starts_with("__strenc_")) continue;
+
+                ByFn[F].push_back(CandInj{ GV, CtGV, NonceGV, CtTy, NonceTy, CtBytes });
+            }
+
+            AllCandGVs.push_back(GV);
+            ++EncryptedStrings;
+        }
+
+        // ── Phase 2: per using function — single forward-advancing IRBuilder ──
+        // The key reconstruction is emitted ONCE per function, first, so it
+        // dominates every decrypt cluster that follows in the same block.
+        ArrayType* KeyTy = cast<ArrayType>(Ctx.ChaChaKeyGV->getValueType());
+
+        // Phase C: decrypt calls are collected here during emission and
+        // inlined in a separate pass below, after all emission is done.
+        // Inlining during emission would split the caller block at the call
+        // site and invalidate the live, forward-advancing IRBuilder B.
+        SmallVector<CallInst*, 16> DecCalls;
+
+        for (auto& Entry : ByFn) {
+            Function* F = Entry.first;
+            SmallVectorImpl<CandInj>& CandsForFn = Entry.second;
+
+            Instruction* IP = &*F->getEntryBlock().getFirstInsertionPt();
+            IRBuilder<> B(IP);
+
+            // Phase B: reconstruct the real ChaCha key at runtime into a
+            // stack buffer, rather than pointing decrypt calls at the flat
+            // @.strenc.ck global. @.strenc.ck holds key XOR mask; XOR it
+            // back with each mask word (delivered as an opaque constant, not
+            // statically foldable) to recover the key.
+            // Phase E will replace the opaque-const mask with a
+            // control-flow-bound path accumulator (genuine path ->
+            // MaskWords[w], forced path -> garbage). For now MaskWords are
+            // opaque constants.
+            AllocaInst* Rk = B.CreateAlloca(ArrayType::get(I8Ty, 32),
+                nullptr, "strenc.rk");
+            Rk->setAlignment(Align(16));
+
+            Value* CkBasePtr = gepI8(B, KeyTy, Ctx.ChaChaKeyGV);
+            for (unsigned w = 0; w < 8; w++) {
+                Value* CkWordPtr = B.CreateInBoundsGEP(
+                    I8Ty, CkBasePtr, ConstantInt::get(I64Ty, 4ULL * w),
+                    "strenc.ck.word.ptr");
+                Value* CkWord = B.CreateAlignedLoad(
+                    I32Ty, CkWordPtr, Align(1), "strenc.ck.word");
+
+                Value* MaskW = Opaque.opaqueI32Const(B, Ctx.MaskWords[w]);
+                // Phase E: MBA-encode the recombination instead of a plain xor.
+                // bitwiseXor returns a value equal to (CkWord ^ MaskW) but
+                // expressed as an MBA identity; inflateLinear then folds in
+                // runtime-zero terms so the recovered key word has no clean
+                // static provenance. Runtime value is unchanged → decrypt stays
+                // correct.
+                Value* KeyW = Mba.bitwiseXor(B, CkWord, MaskW);
+                KeyW = Mba.inflateLinear(B, KeyW, /*DepthHint=*/0);
+
+                Value* RkWordPtr = B.CreateInBoundsGEP(
+                    I8Ty, Rk, ConstantInt::get(I64Ty, 4ULL * w),
+                    "strenc.rk.word.ptr");
+                B.CreateAlignedStore(KeyW, RkWordPtr, Align(1));
+            }
+
+            Value* KeyPtr = gepI8(B, ArrayType::get(I8Ty, 32), Rk);
+
+            // Phase D: per-function dominator tree, used to place each string's
+            // decrypt lazily (at the NCD of its uses). Scrub is emitted before
+            // every return (see below), so no post-dominator tree is needed.
+            // Fetched once per function, before any Phase 2 mutation of F —
+            // inserting instructions doesn't change the CFG, so it stays valid
+            // for the rest of this function's processing.
+            DominatorTree& DT = FAM.getResult<DominatorTreeAnalysis>(*F);
+
+            // Note: Buf is emitted below via the same, now-advanced builder
+            // B, so it lands after the key-reconstruction instructions
+            // rather than at the very top of entry. That is valid IR —
+            // allocas need not be at block top — and is required for
+            // dominance: do not re-anchor to entry's insertion point here.
+            for (CandInj& ci : CandsForFn) {
+                // alloca [N x i8]  (stack buffer for in-place decryption)
+                AllocaInst* Buf = B.CreateAlloca(ci.CtTy, nullptr, "strenc.buf");
+                Buf->setAlignment(Align(16));
+
+                // Gather in-function use instructions of the plaintext global
+                // before deciding on placement — RAUW below invalidates GV's
+                // use-list, so snapshot first.
+                SmallVector<Instruction*, 8> Uses;
+                for (User* U : ci.GV->users())
+                    if (auto* I = dyn_cast<Instruction>(U))
+                        if (I->getFunction() == F) Uses.push_back(I);
+
+                // Fallback conditions: reproduce current (Phase C) behavior —
+                // materialize at entry, no scrub — whenever lazy placement
+                // would be unsound or ill-defined:
+                //   - no in-function uses at all;
+                //   - a PHI use (PHI operand uses are logically "on the edge"
+                //     from the predecessor, not at the PHI's block, so NCD/NCPD
+                //     over the PHI's own block would be wrong);
+                //   - an EH-pad use (funclet/landingpad/catchswitch), where
+                //     ordinary dominance-based insertion is not meaningful.
+                bool NeedsFallback = Uses.empty();
+                for (Instruction* U : Uses) {
+                    if (isa<PHINode>(U) || isa<FuncletPadInst>(U) ||
+                        isa<LandingPadInst>(U) || isa<CatchSwitchInst>(U)) {
+                        NeedsFallback = true;
+                        break;
+                    }
+                }
+
+                BasicBlock* NCD = nullptr;
+                if (!NeedsFallback) {
+                    NCD = Uses[0]->getParent();
+                    for (Instruction* U : Uses)
+                        NCD = DT.findNearestCommonDominator(NCD, U->getParent());
+                    if (!NCD) NeedsFallback = true;
+                }
+
+                CallInst* DecCall = nullptr;
+
+                if (NeedsFallback) {
+                    // Current behavior: memcpy+decrypt right after key recon,
+                    // via the entry builder B, no scrub.
+                    Value* Dst = gepI8(B, ci.CtTy, Buf);
+                    Value* Src = gepI8(B, ci.CtTy, ci.CtGV);
+                    B.CreateMemCpy(Dst, Align(1), Src, Align(1),
+                        ConstantInt::get(I64Ty, ci.CtBytes));
+
+                    Value* NoncePtr = gepI8(B, ci.NonceTy, ci.NonceGV);
+
+                    DecCall = B.CreateCall(ChaChaDecryptFn, {
+                        Dst,
+                        ConstantInt::get(I32Ty, (uint32_t)(ci.CtBytes - 1)),
+                        KeyPtr,
+                        NoncePtr,
+                        ConstantInt::get(I32Ty, 0)
+                        });
+                } else {
+                    // LAZY: insert memcpy+decrypt at the earliest point in NCD
+                    // that still dominates all uses — either right before the
+                    // earliest use instruction physically in NCD, or (if no
+                    // use lives in NCD itself, only in blocks it dominates)
+                    // before NCD's terminator.
+                    Instruction* InsertPt = nullptr;
+                    for (Instruction& I : *NCD) {
+                        if (is_contained(Uses, &I)) { InsertPt = &I; break; }
+                    }
+                    if (!InsertPt) InsertPt = NCD->getTerminator();
+
+                    IRBuilder<> MB(InsertPt);
+                    Value* Dst = gepI8(MB, ci.CtTy, Buf);
+                    Value* Src = gepI8(MB, ci.CtTy, ci.CtGV);
+                    MB.CreateMemCpy(Dst, Align(1), Src, Align(1),
+                        ConstantInt::get(I64Ty, ci.CtBytes));
+
+                    Value* NoncePtr = gepI8(MB, ci.NonceTy, ci.NonceGV);
+
+                    DecCall = MB.CreateCall(ChaChaDecryptFn, {
+                        Dst,
+                        ConstantInt::get(I32Ty, (uint32_t)(ci.CtBytes - 1)),
+                        KeyPtr,
+                        NoncePtr,
+                        ConstantInt::get(I32Ty, 0)
+                        });
+                }
+
+                DecCalls.push_back(DecCall);
+
+                // Replace all uses of the original GV in this function with Buf.
+                // Buf and GV both have type 'ptr' in opaque-pointer mode.
+                for (User* U : make_early_inc_range(ci.GV->users())) {
+                    auto* I = dyn_cast<Instruction>(U);
+                    if (!I || I->getFunction() != F) continue;
+                    I->replaceUsesOfWith(ci.GV, Buf);
+                }
+
+                // SCRUB (non-fallback): wipe Buf before every function return.
+                // We scrub at returns, NOT at the "last GV use": the tracked GV
+                // uses are pointer/address operations (e.g. the
+                // `store ptr @.str, ptr %local` of `const char* a = "..."`),
+                // while the actual plaintext READS happen later through that
+                // pointer (loads feeding strcmp/printf). Scrubbing after the
+                // last GV *use* wiped the buffer before those reads (a real
+                // miscompile). Scrubbing before every ret is sound — Buf is an
+                // entry alloca that dominates all rets, and all reads precede
+                // the return on every path — and gives "no plaintext resident
+                // after the function returns". Tighter per-read windowing would
+                // need consumer-level data-flow / escape analysis (out of
+                // scope; marginal given the consumer must see plaintext at
+                // point-of-use anyway).
+                if (!NeedsFallback) {
+                    for (BasicBlock& BB : *F) {
+                        auto* Ret = dyn_cast<ReturnInst>(BB.getTerminator());
+                        if (!Ret) continue;
+                        IRBuilder<> SB(Ret);
+                        SB.CreateMemSet(gepI8(SB, ci.CtTy, Buf),
+                            ConstantInt::get(I8Ty, 0),
+                            ConstantInt::get(I64Ty, ci.CtBytes),
+                            Align(16));
+                    }
+                }
+
+                ++DecryptCallsInserted;
+                Changed = true;
+            }
+        }
+
+        // Phase C: inline every decrypt call so no callable decrypt boundary
+        // remains in the using functions (defeats "first direct call" tap +
+        // symbol/choke-point hooks). __strenc_chacha_decrypt is self-contained
+        // (-O2 stub, helpers already inlined) and its NoInline was stripped by
+        // hardenStubFunctions, so a single InlineFunction per site fully inlines.
+        // Collected first and inlined here (not during emission) because
+        // InlineFunction splits the caller block and would invalidate the live
+        // emission IRBuilder.
+        for (CallInst* DC : DecCalls) {
+            InlineFunctionInfo IFI;
+            InlineResult Res = InlineFunction(*DC, IFI);
+            (void)Res;  // on the rare failure the call simply remains — still correct
+        }
+
+        // linkStub() pulls in the WHOLE aes stub, including the AES decrypt
+        // chain (__aes_decrypt → __obf_aes_ctr_decrypt, plus extern
+        // __aes_key_a/__aes_key_b that only the AES path defines). The chacha
+        // path never calls that chain and never emits the key providers, so at
+        // -O0 (no globaldce) the dead __aes_decrypt keeps unresolved references
+        // to __aes_key_a/b and the final link fails. Erase the dead AES chain
+        // here. use_empty-guarded + ordered (drop __aes_decrypt first so
+        // __obf_aes_ctr_decrypt becomes dead too) so a module that also runs
+        // the AES strenc path, or the VM's own __obf_aes_ctr_decrypt ctor, is
+        // untouched (those keep a live use and are skipped).
+        for (const char* Name : { "__aes_decrypt", "__obf_aes_ctr_decrypt" }) {
+            if (Function* Dead = M.getFunction(Name))
+                if (Dead->use_empty())
+                    Dead->eraseFromParent();
+        }
+
+        // ── Phase 3: cleanup — erase candidate globals now fully replaced ──
+        for (GlobalVariable* GV : AllCandGVs)
+            if (GV->use_empty())
+                GV->eraseFromParent();
 
         return Changed;
     }
@@ -917,12 +1513,15 @@ PreservedAnalyses StringEncryptionPass::run(Module& M,
             << " minlen=" << Ctx.Cfg.minLength
             << " aes=" << Ctx.Cfg.useAES
             << " keysplit=" << Ctx.Cfg.keySplit
+            << " chacha=" << Ctx.Cfg.useChaCha
             << "\n";
     }
 
-    bool Changed = Ctx.Cfg.useAES
-        ? StrEncImpl::encryptStrings(M, Ctx)
-        : StrEncImpl::encryptStringsXOR(M, Ctx);
+    bool Changed = Ctx.Cfg.useChaCha
+        ? StrEncImpl::encryptStringsChaCha(M, Ctx)
+        : Ctx.Cfg.useAES
+            ? StrEncImpl::encryptStrings(M, Ctx)
+            : StrEncImpl::encryptStringsXOR(M, Ctx);
 
     if (Changed && ObfVerbose)
         errs() << "[strenc] done: " << (uint64_t)EncryptedStrings

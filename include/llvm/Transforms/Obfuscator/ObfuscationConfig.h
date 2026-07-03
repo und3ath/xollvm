@@ -155,6 +155,8 @@ namespace llvm {
 		//         data segment + code segment (stores)
 		// false → store all 176 bytes in data only
 		//         (simpler, weaker)
+		bool useChaCha = false;      // true → ChaCha20 (tableless). Takes precedence
+		                             // over useAES in dispatch. Opt-in via cipher=chacha.
 		// Passes to apply to the linked stub functions.
 		// Populated from a sibling strenc_stub(...) annotation token.
 		ObfuscationConfig stubPasses;

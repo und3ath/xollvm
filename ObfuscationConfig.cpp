@@ -682,6 +682,14 @@ StringEncryptionConfig::fromPassConfig(const PassConfig& pc) {
 		// keysplit=0|1  � split key across segments (default: 1)
 		if (pc.params.count("keysplit"))
 			cfg.keySplit = (pc.params.at("keysplit") != "0");
+
+		// cipher=chacha|aes|xor  (default: aes/legacy). chacha -> tableless path.
+		if (pc.params.count("cipher")) {
+			const std::string& v = pc.params.at("cipher");
+			if (v == "chacha")   { cfg.useChaCha = true;  cfg.useAES = true;  }
+			else if (v == "aes") { cfg.useChaCha = false; cfg.useAES = true;  }
+			else if (v == "xor") { cfg.useChaCha = false; cfg.useAES = false; }
+		}
 	}
 	catch (const std::exception& e) {
 		errs() << "[strenc] error parsing params: " << e.what() << "\n";

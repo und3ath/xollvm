@@ -4,6 +4,7 @@
  * Public entry points:
  *   __aes_decrypt()       — used by strenc (reconstructs key from providers)
  *   __obf_aes_ctr_decrypt()  — used by vmpass (caller supplies expanded key)
+ *   __strenc_chacha_decrypt() — used by strenc's ChaCha20 (cipher=chacha) path
  *
  * Both passes link this same bitcode; the linker-level dedup check in
  * This file is compiled to LLVM bitcode during the LLVM build and embedded
@@ -196,6 +197,106 @@ void __obf_aes_ctr_decrypt(uint8_t *buf, uint32_t len,
     }
 }
 
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * ChaCha20 (RFC 8439) — tableless ARX stream cipher, runtime decrypt path.
+ *
+ * Self-contained: no libc, no tables, no globals. Encrypt == decrypt (XOR
+ * with keystream), so this single function serves both directions.
+ *
+ * Word layout of the 16-word (64-byte) state:
+ *   words 0..3   : constants "expand 32-byte k"
+ *   words 4..11  : 256-bit key (little-endian)
+ *   word  12     : block counter
+ *   words 13..15 : 96-bit nonce (little-endian)
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Rotate-left for the ChaCha quarter round. */
+static inline uint32_t se_rotl32(uint32_t x, int n) {
+    return (uint32_t)((x << n) | (x >> (32 - n)));
+}
+
+/* Little-endian 32-bit load from a 4-byte buffer. */
+static inline uint32_t se_load32_le(const uint8_t *p) {
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
+           ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+/* Little-endian 32-bit store into a 4-byte buffer. */
+static inline void se_store32_le(uint8_t *p, uint32_t v) {
+    p[0] = (uint8_t)(v);
+    p[1] = (uint8_t)(v >> 8);
+    p[2] = (uint8_t)(v >> 16);
+    p[3] = (uint8_t)(v >> 24);
+}
+
+/* One ChaCha quarter-round over four state words. */
+static inline void chacha_qr(uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d) {
+    *a += *b; *d ^= *a; *d = se_rotl32(*d, 16);
+    *c += *d; *b ^= *c; *b = se_rotl32(*b, 12);
+    *a += *b; *d ^= *a; *d = se_rotl32(*d, 8);
+    *c += *d; *b ^= *c; *b = se_rotl32(*b, 7);
+}
+
+/* Produce one 64-byte ChaCha20 keystream block from the given state. */
+static void chacha20_block(const uint32_t in[16], uint8_t out[64]) {
+    uint32_t x[16];
+    se_memcpy(x, in, 16 * sizeof(uint32_t));
+
+    for (int i = 0; i < 10; i++) {
+        /* Column rounds */
+        chacha_qr(&x[0], &x[4], &x[8],  &x[12]);
+        chacha_qr(&x[1], &x[5], &x[9],  &x[13]);
+        chacha_qr(&x[2], &x[6], &x[10], &x[14]);
+        chacha_qr(&x[3], &x[7], &x[11], &x[15]);
+        /* Diagonal rounds */
+        chacha_qr(&x[0], &x[5], &x[10], &x[15]);
+        chacha_qr(&x[1], &x[6], &x[11], &x[12]);
+        chacha_qr(&x[2], &x[7], &x[8],  &x[13]);
+        chacha_qr(&x[3], &x[4], &x[9],  &x[14]);
+    }
+
+    for (int i = 0; i < 16; i++)
+        se_store32_le(out + 4 * i, x[i] + in[i]);
+}
+
+/*
+ * __strenc_chacha_decrypt — runtime ChaCha20 keystream XOR, in-place.
+ *
+ * buf     : buffer to decrypt in-place (also the encrypt direction, symmetric).
+ * len     : number of bytes to process.
+ * key32   : 32-byte key (little-endian word packing, standard RFC 8439).
+ * nonce12 : 12-byte nonce (little-endian word packing).
+ * counter : initial 32-bit block counter.
+ */
+__attribute__((noinline))
+void __strenc_chacha_decrypt(uint8_t *buf, uint32_t len,
+                              const uint8_t *key32, const uint8_t *nonce12,
+                              uint32_t counter) {
+    uint32_t state[16];
+    state[0] = 0x61707865u;
+    state[1] = 0x3320646eu;
+    state[2] = 0x79622d32u;
+    state[3] = 0x6b206574u;
+    for (int i = 0; i < 8; i++)
+        state[4 + i] = se_load32_le(key32 + 4 * i);
+    state[12] = counter;
+    for (int i = 0; i < 3; i++)
+        state[13 + i] = se_load32_le(nonce12 + 4 * i);
+
+    uint32_t offset = 0;
+    while (offset < len) {
+        uint8_t ks[64];
+        chacha20_block(state, ks);
+
+        uint32_t n = (len - offset < 64u) ? (len - offset) : 64u;
+        for (uint32_t i = 0; i < n; i++)
+            buf[offset + i] ^= ks[i];
+
+        offset += 64u;
+        state[12]++;   /* increment block counter */
+    }
+}
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * __strenc_decrypt
