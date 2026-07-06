@@ -1,0 +1,32 @@
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+// i64-returning functions whose return-value register slot exceeds the i32
+// vreg count (NVR). Exercises the OP_RET_INT verifier path: that opcode is
+// emitted for BOTH i32 (vreg) and i64 (vreg64) returns, so the verifier must
+// accept a slot valid in EITHER integer file. Regression guard for the
+// "vreg index N out of range (limit=NVR)" false-positive that silently skipped
+// i64-returning fns under -obf-verify. (vm.i64_ops has a low return slot and
+// does not trigger it.)
+
+__attribute__((noinline, annotate("{annotation}")))
+uint64_t obf_leaf(uint64_t x) {{
+    uint64_t r = x;
+    for (int i = 0; i < 5; i++) r = r * 2654435761ull + (uint64_t)i;
+    return r ^ (x << 13);
+}}
+
+__attribute__((noinline, annotate("{annotation}")))
+uint64_t obf_target(uint64_t x, uint64_t y) {{
+    uint64_t s = obf_leaf(x);
+    if (s > 1000ull) s -= y; else s += y;
+    return s * 3ull ^ obf_leaf(y);
+}}
+
+int main(int argc, char** argv) {{
+    uint64_t x = (argc > 1) ? strtoull(argv[1], 0, 10) : 42;
+    uint64_t y = (argc > 2) ? strtoull(argv[2], 0, 10) : 17;
+    printf("%llu\n", (unsigned long long)obf_target(x, y));
+    return 0;
+}}

@@ -250,9 +250,14 @@ namespace llvm {
 		unsigned maxBlocks = 400;     // 0 = no limit
 		bool     useAES = true;       // AES-CTR replaces LCG (Layer 2)
 		bool     obfRegIdx = true;    // XOR register indices with compile-time salt
+		bool     encDispatch = true;   // P2: encrypted per-opcode->handler index indirection (on)
+		unsigned handlerVariants = 3;  // K handler-body variants per opcode (P1 polymorphism on; 1 = off)
 		bool     encBytecode = true;  // LCG-encrypt bytecode stream at load time
+		bool     strongBytecode = true;   // P3: per-position PRF Layer-1 keystream (on; 0 = weak salt^index)
+		bool     blindTargets = true;   // P3: XOR-blind bytecode branch targets (on)
 		bool     hardened = false;    // MBA + opaque predicates on handler blocks
 		bool     regEncrypt = false;  // XOR-encrypt register values at rest
+		bool     rollingRegKey = false;  // P4-C: evolve per-slot reg XOR key on each store
 		bool     antiDebug = true;    // anti-debug traps (active when hardened=1)
 		// configurable anti-debug thresholds
 		unsigned adDispatchThreshold = 5000;  // rdtsc delta for dispatch-level gate (cycles)

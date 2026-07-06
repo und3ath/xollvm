@@ -14,8 +14,21 @@ using namespace llvm;
 namespace llvm {
 
 	bool verifyBytecode(const BytecodeEmitter& E, uint8_t CTSalt, const VMOpcodeMap& OpMap,
-		std::string& OutErr, uint32_t& OutBadIP) {
+		std::string& OutErr, uint32_t& OutBadIP,
+		uint32_t SaltFull, bool BlindTargets) {
 		const auto& BC = E.BC;
+
+		// P3-B: branch targets are stored XOR-blinded with tgtKey(SaltFull).
+		// Mirror BytecodeEmitter::tgtKeyCT / VMImpl::tgtKeyIR so chkTarget can
+		// recover the real offset before range-checking. TgtKey==0 (identity)
+		// when blinding is off, so existing behavior is preserved.
+		auto tgtKeyCT = [](uint32_t salt) -> uint32_t {
+			uint32_t k = salt ^ 0x2545F491u;
+			k *= 0x9E3779B1u;
+			k ^= k >> 16;
+			return k;
+			};
+		const uint32_t TgtKey = BlindTargets ? tgtKeyCT(SaltFull) : 0u;
 		if (BC.empty()) {
 			OutErr = "bytecode empty";
 			OutBadIP = 0;
@@ -53,7 +66,8 @@ namespace llvm {
 				((uint32_t)BC[Off + 3] << 24);
 			};
 
-		auto chkTarget = [&](uint32_t IP, uint32_t Tgt, const char* Which) -> bool {
+		auto chkTarget = [&](uint32_t IP, uint32_t RawTgt, const char* Which) -> bool {
+			uint32_t Tgt = RawTgt ^ TgtKey;   // P3-B un-blind (TgtKey=0 when off)
 			if (Tgt >= BC.size())
 				return fail(IP, Twine(Which) + " target " + Twine(Tgt) + " out of bounds (bc=" + Twine(BC.size()) + ")");
 			if (!BlockStarts.count(Tgt))
@@ -280,7 +294,12 @@ namespace llvm {
 			}
 			case OP_RET_INT: {
 				if (IP + 2 > BC.size()) return fail(IP, "OP_RET_INT truncated");
-				if (!chk(IP, "vreg", decIdx(BC[IP + 1]), E.NVR)) return false;
+				// OP_RET_INT is emitted for BOTH i32 (vreg slot) and i64
+				// (vreg64 slot) returns — the opcode does not encode which.
+				// Accept a slot valid in EITHER integer register file, else an
+				// i64 return whose vreg64 slot index exceeds NVR false-fails.
+				unsigned RetLim = E.NVR > E.NVR64 ? E.NVR : E.NVR64;
+				if (!chk(IP, "vreg/vreg64", decIdx(BC[IP + 1]), RetLim)) return false;
 				IP += 2; break;
 			}
 			case OP_RET_PTR: {

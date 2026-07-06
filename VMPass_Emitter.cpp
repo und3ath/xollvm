@@ -945,6 +945,7 @@ bool BytecodeEmitter::run(Function& F, uint8_t S, const DataLayout& D) {
 	// Patch all forward-branch placeholders now that every BlockIP is known.
 	for (const Fixup& FX : Fixups) {
 		uint32_t V = BlockIP.lookup(FX.Target);
+		if (BlindTargets) V ^= tgtKeyCT(SaltFull);
 		BC[FX.Offset + 0] = (uint8_t)(V);
 		BC[FX.Offset + 1] = (uint8_t)(V >> 8);
 		BC[FX.Offset + 2] = (uint8_t)(V >> 16);

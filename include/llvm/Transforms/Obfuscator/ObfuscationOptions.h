@@ -44,6 +44,11 @@ namespace llvm {
 	// default in production builds.
 	extern llvm::cl::opt<bool> ObfNoSkips;
 
+	// When true, the VM anti-debug gate emits a getenv("__OBF_DISABLE_ANTIDEBUG")
+	// escape hatch. For CI/testing only. Default off — no kill-switch string in
+	// shipped binaries.
+	extern llvm::cl::opt<bool> ObfVMAllowAntiDebugBypass;
+
 	// Reporting / artifacts
 	extern llvm::cl::opt<std::string> ObfReportDir;
 	extern llvm::cl::opt<std::string> ObfReportJson;

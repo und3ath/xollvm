@@ -104,6 +104,10 @@ namespace llvm {
 		/// Set the per-function opcode permutation map before calling run().
 		void setOpcodeMap(const VMOpcodeMap* M) { OpMap = M; }
 
+		/// P3-B: configure branch-target blinding. saltFull is the full 32-bit
+		/// per-function salt (SaltConst); on is the blindTargets knob.
+		void setTargetBlind(uint32_t saltFull, bool on) { SaltFull = saltFull; BlindTargets = on; }
+
 		/// Compile F into bytecode.  Salt is the CTSalt byte used to XOR register
 		/// index bytes (0 when obfRegIdx is disabled).
 		/// Returns false on failure; FailReason is populated.
@@ -113,6 +117,18 @@ namespace llvm {
 		uint8_t            Salt = 0;
 		const DataLayout* DL = nullptr;
 		const VMOpcodeMap* OpMap = nullptr;
+		uint32_t           SaltFull = 0;
+		bool               BlindTargets = false;
+
+		// P3-B: compile-time branch-target blinding key mix. Mirrors VMImpl::tgtKeyIR
+		// op-for-op; distinct constants from ksByteCT (Layer-1 keystream) so the two
+		// blinding layers don't share a constant.
+		static uint32_t tgtKeyCT(uint32_t salt) {
+			uint32_t k = salt ^ 0x2545F491u;
+			k *= 0x9E3779B1u;
+			k ^= k >> 16;
+			return k;
+		}
 
 		// ── Idempotent slot allocation (safe to call in both passes) ─────────
 

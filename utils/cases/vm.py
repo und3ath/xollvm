@@ -21,6 +21,8 @@ from ._common import (
     render_vm_v7_memory_program,
     render_vm_v7_multi_fn_aes_program,
     render_vm_v7_multi_function_program,
+    render_vm_v7_switch_dispatch_program,
+    render_vm_v7_i64_ret_highslot_program,
     render_vm_v7_multiblock_program,
 )
 
@@ -189,6 +191,123 @@ def register(reg: Registry, **_opts) -> None:
             category="vm",
             src_override=render_vm_v7_multi_fn_aes_program(vm_v7))
 
+    # ── P1 handler polymorphism (handlerVariants=3) ──
+    # Multi-function programs so per-function random variant binding is
+    # actually exercised across >1 virtualised function sharing one engine.
+    # Differential-output check (built in) proves the K distinct MBA-diversified
+    # handler variants are semantics-preserving; VM_SHARED_GATES proves the
+    # shared engine + expanded indirectbr still verify.
+    vm_v7_var3 = ann_extra("vm_v7_variants3")
+    vm_v7_var3_hard = ann_extra("vm_v7_variants3_hardened")
+
+    reg.add(name="rt_vm_v7_variants3_multi_fn", passes=["vm"],
+            ann_override=vm_v7_var3,
+            gates=VM_SHARED_GATES + ["vm_enc_ctor", "vm_callees_global",
+                                     "vm_multi_fn_shared", "vm_handlers_permuted"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_multi_function_program(vm_v7_var3))
+    reg.add(name="rt_vm_v7_variants3_multi_fn_aes", passes=["vm"],
+            ann_override=vm_v7_var3,
+            gates=VM_SHARED_GATES + VM_AES_GATES + [
+                "vm_enc_ctor", "vm_multi_fn_shared", "vm_engine_singleton"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_multi_fn_aes_program(vm_v7_var3))
+    reg.add(name="rt_vm_v7_variants3_hardened", passes=["vm"],
+            ann_override=vm_v7_var3_hard,
+            gates=VM_SHARED_GATES + ["vm_enc_ctor", "vm_multi_fn_shared"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_multi_function_program(vm_v7_var3_hard))
+    reg.add(name="rt_vm_v7_variants3_determinism", passes=["vm"],
+            ann_override=vm_v7_var3,
+            extra_opts=_DBG, gates=["seed_determinism"], category="vm",
+            src_override=render_vm_v7_multi_function_program(vm_v7_var3))
+
+    # ── P2 keyed dispatch (encDispatch=1) ──
+    # Encrypted per-opcode->handler index indirection. Correctness gate:
+    # differential-output check proves the dmap decrypt path recovers the
+    # right handler; run standalone, stacked with variants, and full-stack.
+    vm_v7_encd = ann_extra("vm_v7_encdispatch")
+    vm_v7_encd_var3 = ann_extra("vm_v7_encdispatch_variants3")
+    vm_v7_encd_hard = ann_extra("vm_v7_encdispatch_hardened")
+
+    reg.add(name="rt_vm_v7_encdispatch_multi_fn", passes=["vm"],
+            ann_override=vm_v7_encd,
+            gates=VM_SHARED_GATES + ["vm_enc_ctor", "vm_multi_fn_shared"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_multi_function_program(vm_v7_encd))
+    reg.add(name="rt_vm_v7_encdispatch_variants3", passes=["vm"],
+            ann_override=vm_v7_encd_var3,
+            gates=VM_SHARED_GATES + ["vm_enc_ctor", "vm_multi_fn_shared"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_multi_function_program(vm_v7_encd_var3))
+    reg.add(name="rt_vm_v7_encdispatch_hardened", passes=["vm"],
+            ann_override=vm_v7_encd_hard,
+            gates=VM_SHARED_GATES + ["vm_enc_ctor", "vm_multi_fn_shared"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_multi_function_program(vm_v7_encd_hard))
+    reg.add(name="rt_vm_v7_encdispatch_determinism", passes=["vm"],
+            ann_override=vm_v7_encd_var3,
+            extra_opts=_DBG, gates=["seed_determinism"], category="vm",
+            src_override=render_vm_v7_multi_function_program(vm_v7_encd_var3))
+
+    # ── P3-A strong bytecode keystream (strongBytecode=1) ──
+    # Correctness gate: the compile-time PRF keystream (ksByteCT) and the
+    # runtime IR mix (ksByteIR) must agree byte-for-byte; differential output
+    # proves the Layer-1 round-trip decodes. Standalone + full-stack + determinism.
+    vm_v7_sbc = ann_extra("vm_v7_strongbc")
+    vm_v7_sbc_full = ann_extra("vm_v7_strongbc_full")
+
+    reg.add(name="rt_vm_v7_strongbc_multi_fn", passes=["vm"],
+            ann_override=vm_v7_sbc,
+            gates=VM_SHARED_GATES + ["vm_enc_ctor", "vm_multi_fn_shared"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_multi_function_program(vm_v7_sbc))
+    reg.add(name="rt_vm_v7_strongbc_full", passes=["vm"],
+            ann_override=vm_v7_sbc_full,
+            gates=VM_SHARED_GATES + ["vm_enc_ctor", "vm_multi_fn_shared"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_multi_function_program(vm_v7_sbc_full))
+    reg.add(name="rt_vm_v7_strongbc_determinism", passes=["vm"],
+            ann_override=vm_v7_sbc,
+            extra_opts=_DBG, gates=["seed_determinism"], category="vm",
+            src_override=render_vm_v7_multi_function_program(vm_v7_sbc))
+
+    # ── P3-B branch-target blinding (blindTargets=1) + full P2/P3 stack ──
+    # multi_function has a loop + if/else => exercises JMP/JMPC target blinding;
+    # differential output proves the emitter blind (target^K) and the handler
+    # un-blind (via tgtKeyIR, MBA-diversified) agree. p3_full stacks every
+    # P1/P2/P3 hardening simultaneously.
+    vm_v7_bt = ann_extra("vm_v7_blindtgt")
+    vm_v7_p3full = ann_extra("vm_v7_p3_full")
+
+    reg.add(name="rt_vm_v7_blindtgt_multi_fn", passes=["vm"],
+            ann_override=vm_v7_bt,
+            gates=VM_SHARED_GATES + ["vm_enc_ctor", "vm_multi_fn_shared"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_multi_function_program(vm_v7_bt))
+    reg.add(name="rt_vm_v7_p3_full_multi_fn", passes=["vm"],
+            ann_override=vm_v7_p3full,
+            gates=VM_SHARED_GATES + ["vm_enc_ctor", "vm_multi_fn_shared"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_multi_function_program(vm_v7_p3full))
+    reg.add(name="rt_vm_v7_blindtgt_determinism", passes=["vm"],
+            ann_override=vm_v7_bt,
+            extra_opts=_DBG, gates=["seed_determinism"], category="vm",
+            src_override=render_vm_v7_multi_function_program(vm_v7_bt))
+    # Switch-heavy program: the ONLY case that exercises OP_SWITCH targets +
+    # blindTargets + the verifier's switch-target range check under -obf-verify.
+    # (Regression guard for the P3-B verifier miss — multi_function has no switch.)
+    reg.add(name="rt_vm_v7_blindtgt_switch", passes=["vm"],
+            ann_override=vm_v7_bt,
+            gates=VM_SHARED_GATES + ["vm_enc_ctor", "vm_multi_fn_shared"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_switch_dispatch_program(vm_v7_bt))
+    reg.add(name="rt_vm_v7_switch_default_stack", passes=["vm"],
+            ann_override=ann_extra("vm_v7_p3_full"),
+            gates=VM_SHARED_GATES + ["vm_enc_ctor", "vm_multi_fn_shared"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_switch_dispatch_program(ann_extra("vm_v7_p3_full")))
+
     # ── Hardened handlers (Step 04) ──
     reg.add(name="rt_vm_v7_hardened", passes=["vm"],
             ann_override=ann_extra("vm_v7_hardened"),
@@ -220,6 +339,47 @@ def register(reg: Registry, **_opts) -> None:
             ],
             category="vm",
             src_override=render_vm_v7_multi_function_program(vm_v7_regenc))
+
+    # ── P4-C rolling register cipher (rollingRegKey=1) ──
+    # Per-slot XOR key evolves on each store; the wrapper decrypts the return
+    # value with the final (mutated) keystate. Differential output proves the
+    # engine store-evolve and wrapper return-decrypt stay in sync across i32/
+    # i64/f64 register files.
+    vm_v7_roll = ann_extra("vm_v7_rolling")
+    reg.add(name="rt_vm_v7_rolling_multi_fn", passes=["vm"],
+            ann_override=vm_v7_roll,
+            gates=VM_SHARED_GATES + VM_REGENC_GATES + ["vm_enc_ctor", "vm_multi_fn_shared"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_multi_function_program(vm_v7_roll))
+    reg.add(name="rt_vm_v7_rolling_i64", passes=["vm"],
+            ann_override=vm_v7_roll,
+            gates=VM_CORE_GATES + VM_REGENC_GATES + ["vm_enc_ctor"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_i64_ops_program(vm_v7_roll))
+    reg.add(name="rt_vm_v7_rolling_float", passes=["vm"],
+            ann_override=vm_v7_roll,
+            gates=VM_FLOAT_GATES + VM_REGENC_GATES + ["vm_regenc_freg_key"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_float_basic_program(vm_v7_roll))
+    reg.add(name="rt_vm_v7_rolling_determinism", passes=["vm"],
+            ann_override=vm_v7_roll,
+            extra_opts=_DBG, gates=["seed_determinism"], category="vm",
+            src_override=render_vm_v7_multi_function_program(vm_v7_roll))
+
+    # i64-return-with-high-slot: regression guard for the OP_RET_INT verifier
+    # false-positive (i64 return slot >= NVR was rejected as a vreg index).
+    # Must VIRTUALIZE under -obf-verify (runner default), not skip to native.
+    reg.add(name="rt_vm_v7_i64_ret_highslot", passes=["vm"],
+            ann_override=vm_v7,
+            gates=VM_SHARED_GATES + ["vm_enc_ctor", "vm_multi_fn_shared"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_i64_ret_highslot_program(vm_v7))
+    reg.add(name="rt_vm_v7_i64_ret_highslot_rolling", passes=["vm"],
+            ann_override=vm_v7_roll,
+            gates=VM_SHARED_GATES + VM_REGENC_GATES + ["vm_enc_ctor", "vm_multi_fn_shared"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_i64_ret_highslot_program(vm_v7_roll))
+
     reg.add(name="rt_vm_v7_regenc_hardened", passes=["vm"],
             ann_override=ann_extra("vm_v7_regenc_hardened"),
             gates=VM_CORE_GATES + VM_REGENC_GATES + [

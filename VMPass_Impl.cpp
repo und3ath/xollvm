@@ -232,7 +232,8 @@ void VMImpl::buildBytecodeGlobal() {
 		uint8_t V = E.BC[I];
 		if (EncBytecode) {
 			// Layer 1: XOR-at-rest (removed by loadBC() at each fetch)
-			uint8_t K = (uint8_t)((SaltConst ^ (uint32_t)I) & 0xFFu);
+			uint8_t K = StrongBC ? ksByteCT(SaltConst, (uint32_t)I)
+			                     : (uint8_t)((SaltConst ^ (uint32_t)I) & 0xFFu);
 			V ^= K;
 
 			// Layer 2: keystream (removed by ctor before main())
@@ -411,12 +412,23 @@ void VMImpl::buildVMEntry()
 
 
 void VMImpl::buildOpcodeHandlers() {
-	buildHandlersIntArith();
-	buildHandlersConv();
-	buildHandlersMem();
-	buildHandlersControl();
-	buildHandlersFloat();
-	buildHandlersCall();
+	for (unsigned v = 0; v < NumVariants; ++v) {
+		CurVariant = v;
+		// Marker = last block before this variant's blocks are appended.
+		BasicBlock* Marker = HFn->empty() ? nullptr : &HFn->back();
+		buildHandlersIntArith();
+		buildHandlersConv();
+		buildHandlersMem();
+		buildHandlersControl();
+		buildHandlersFloat();
+		buildHandlersCall();
+		// Tag every block appended during this iteration as variant v.
+		Function::iterator It =
+			Marker ? std::next(Marker->getIterator()) : HFn->begin();
+		for (; It != HFn->end(); ++It)
+			VariantOf[&*It] = (uint8_t)v;
+	}
+	CurVariant = 0;
 }
 
 void VMImpl::buildHandlersIntArith() {
@@ -908,7 +920,9 @@ void VMImpl::buildHandlersControl() {
 	{
 		auto B = mkOpc(OP_JMP, "jmp");
 		Value* IP = advIP(B, 4);
-		B.CreateStore(rdU32(B, IP, 0, "vm.jm.t"), VMIP)->setVolatile(true);
+		Value* JT = rdU32(B, IP, 0, "vm.jm.t");
+		if (BlindTargets) JT = B.CreateXor(JT, tgtKeyIR(B, "vm.jm"), "vm.jm.ub");
+		B.CreateStore(JT, VMIP)->setVolatile(true);
 		B.CreateBr(Dispatch);
 	}
 
@@ -918,7 +932,9 @@ void VMImpl::buildHandlersControl() {
 		Value* IP = advIP(B, 9);
 		Value* Cond = rdVR(B, IP, 0, "vm.jc.c"), * Tt = rdU32(B, IP, 1, "vm.jc.t"), * Tf = rdU32(B, IP, 5, "vm.jc.f");
 		Value* Bool = B.CreateICmpNE(ldVR(B, Cond), B.getInt32(0), "vm.jc.b");
-		B.CreateStore(B.CreateSelect(Bool, Tt, Tf, "vm.jc.s"), VMIP)->setVolatile(true);
+		Value* Sel = B.CreateSelect(Bool, Tt, Tf, "vm.jc.s");
+		if (BlindTargets) Sel = B.CreateXor(Sel, tgtKeyIR(B, "vm.jc"), "vm.jc.ub");
+		B.CreateStore(Sel, VMIP)->setVolatile(true);
 		B.CreateBr(Dispatch);
 	}
 
@@ -981,7 +997,9 @@ void VMImpl::buildHandlersControl() {
 		R->addIncoming(NewR, BodyBB);
 
 		IRBuilder<> DB(DoneBB);
-		DB.CreateStore(R, VMIP)->setVolatile(true);
+		Value* SR = R;
+		if (BlindTargets) SR = DB.CreateXor(R, tgtKeyIR(DB, "vm.sw"), "vm.sw.ub");
+		DB.CreateStore(SR, VMIP)->setVolatile(true);
 		DB.CreateBr(Dispatch);
 	}
 
@@ -1582,21 +1600,56 @@ void VMImpl::buildHandlerTable() {
 	// entries so one more raw ptr adds no new information for the analyst.
 	// (constant blinding) will obfuscate the wrapper's runtime
 	// load path so the connection is not trivially visible in the wrapper.
-	static constexpr unsigned TableSize = OP_COUNT + 1;
-	SmallVector<Constant*, OP_COUNT + 1> Es;
+	// In shared engine mode, OpcBB[] lives in vm_engine.
+	VMEngine::SharedState* SS =
+		SharedEngineMode ? VMEngine::getSharedState(M) : nullptr;
+	Function* BAFn = SharedEngineMode ? SS->EngineFn : &F;
+	unsigned K = SharedEngineMode ? SS->NumVariants : NumVariants;
+	bool ED = SharedEngineMode ? SS->EncDispatch : EncDispatch;
+
+	// P2: table size grows to hold the encrypted dispatch map (dmap) when
+	// encDispatch is on. Off (default): TableSize == OP_COUNT+1, byte-identical
+	// to pre-P2.
+	unsigned TableSize = ED ? (2u * OP_COUNT + 1u) : (OP_COUNT + 1u);
+	SmallVector<Constant*, 2 * OP_COUNT + 1> Es;
 	Es.resize(TableSize, nullptr);
 
-	// In shared engine mode, OpcBB[] lives in vm_engine.
-	Function* BAFn = SharedEngineMode
-		? VMEngine::getSharedState(M)->EngineFn : &F;
-	BasicBlock** SrcBB = SharedEngineMode
-		? VMEngine::getSharedState(M)->OpcBB : OpcBB;
+	// Per-function random variant selection: fork does NOT consume the
+	// parent RNG stream, so at K==1 (vsel always 0, .range() never called)
+	// this is fully dormant and byte-identical to pre-variant behavior.
+	auto VarRng = VCtx.R.fork("vm.handler.variant");
+
+	// P2: secondary Fisher-Yates permutation of handler table slots.
+	// Identity when encDispatch is off (dormant, no RNG consumption).
+	uint8_t DispPerm[OP_COUNT];
+	for (unsigned i = 0; i < OP_COUNT; ++i) DispPerm[i] = (uint8_t)i;
+	if (ED) {
+		auto DR = VCtx.R.fork("vm.disp.perm");
+		for (unsigned i = OP_COUNT - 1; i > 0; --i) {
+			unsigned j = DR.range(i + 1);
+			uint8_t t = DispPerm[i]; DispPerm[i] = DispPerm[j]; DispPerm[j] = t;
+		}
+	}
 
 	for (unsigned L = 0; L < OP_COUNT; ++L) {
-		assert(SrcBB[L] && "missing opcode handler");
+		unsigned vsel = (K > 1) ? VarRng.range(K) : 0;
+		// CALL handlers wire the module-shared SS->CallSW[RK] switch, which
+		// keeps only the LAST-built variant's switch; ensureCallFTyCases()
+		// extends only that one as later functions register new FunctionTypes.
+		// Selecting any earlier CALL variant would route through a switch that
+		// never received those cases -> default (vm.cl.ur, unreachable) -> UB.
+		// Pin CALL opcodes to the last variant (K-1); all other opcodes keep
+		// full per-function variant diversity.
+		if (K > 1 && (L == OP_CALL_VOID || L == OP_CALL_INT || L == OP_CALL_PTR ||
+					  L == OP_CALL_INT64 || L == OP_CALL_F))
+			vsel = K - 1;
+		BasicBlock* HB = SharedEngineMode ? SS->OpcBB[L][vsel]
+										   : OpcBB[L][vsel];
+		assert(HB && "missing opcode handler variant");
 		unsigned P = (unsigned)OpMap.encode((VMOp)L);
 		assert(P < OP_COUNT && "opcode map out of range");
-		Es[P] = BlockAddress::get(BAFn, SrcBB[L]);
+		unsigned slot = DispPerm[P];               // identity when ED off
+		Es[slot] = BlockAddress::get(BAFn, HB);
 	}
 	for (unsigned P = 0; P < OP_COUNT; ++P)
 		assert(Es[P] && "unfilled handler table slot");
@@ -1607,6 +1660,21 @@ void VMImpl::buildHandlerTable() {
 		assert(EngFn && "vm_engine must exist before building handler table");
 		Es[OP_COUNT] = EngFn;
 	}
+
+	// P2: encrypted dispatch map (dmap) occupies slots [OP_COUNT+1 .. 2*OP_COUNT].
+	// dmap[P] = DispPerm[P] XOR SaltConst, stored as an inttoptr constant expr
+	// (LLVM allows ConstantExpr::getIntToPtr in global initializers; ptrtoint
+	// recovers the integer at runtime).
+	if (ED) {
+		for (unsigned P = 0; P < OP_COUNT; ++P) {
+			uint64_t enc = (uint64_t)((uint32_t)DispPerm[P] ^ SaltConst);
+			Es[OP_COUNT + 1 + P] =
+				ConstantExpr::getIntToPtr(ConstantInt::get(I64Ty, enc), PtrTy);
+		}
+	}
+
+	for (unsigned i = 0; i < TableSize; ++i)
+		assert(Es[i] && "unfilled handler table slot (incl. dmap)");
 
 	auto* ATy = ArrayType::get(PtrTy, TableSize);
 	GVHandlers = new GlobalVariable(M, ATy, true, GlobalValue::PrivateLinkage,
@@ -1648,15 +1716,36 @@ void VMImpl::buildDispatch() {
 
 		// Clamp opcode index (prevents out-of-bounds GEP on corrupted bytecode)
 		Value* OIdx = B.CreateZExt(OpB, I32Ty, "vm.oidx");
-		Value* Safe = B.CreateURem(OIdx, B.getInt32(OP_COUNT), "vm.safe");
+		Value* P = B.CreateURem(OIdx, B.getInt32(OP_COUNT), "vm.safe");
 
-		// GEP into handler table[safe_opcode]
-		Value* Slot = B.CreateGEP(PtrTy, EffHandlers, Safe, "vm.ohsl");
+		// P2: route through the encrypted dispatch map (dmap) when encDispatch
+		// is on. dmap lives at handlers[OP_COUNT+1 + P]; decrypt with the
+		// runtime salt to recover the permuted table slot.
+		Value* FinalSlot;
+		if (EncDispatch) {
+			Value* DmIdx  = B.CreateAdd(P, B.getInt32(OP_COUNT + 1), "vm.dm.i");
+			Value* DmPtr  = B.CreateGEP(PtrTy, EffHandlers, DmIdx, "vm.dm.p");
+			Value* DmRaw  = B.CreateLoad(PtrTy, DmPtr, "vm.dm.raw");
+			Value* DmInt  = B.CreateTrunc(
+								B.CreatePtrToInt(DmRaw, I64Ty, "vm.dm.i64"),
+								I32Ty, "vm.dm.i32");
+			auto*  SaltL  = B.CreateLoad(I32Ty, EffSalt, "vm.dm.salt");
+			SaltL->setVolatile(true);
+			Value* Dec    = B.CreateXor(DmInt, SaltL, "vm.dm.dec");
+			FinalSlot     = B.CreateURem(Dec, B.getInt32(OP_COUNT), "vm.dm.slot");
+		} else {
+			FinalSlot = P;
+		}
+
+		// GEP into handler table[final_slot]
+		Value* Slot = B.CreateGEP(PtrTy, EffHandlers, FinalSlot, "vm.ohsl");
 		Value* Hndl = B.CreateLoad(PtrTy, Slot, "vm.hndl");
 
-		// indirectbr with all opcode blocks declared as successors
-		IndirectBrInst* IBR = B.CreateIndirectBr(Hndl, OP_COUNT + 1);
-		for (unsigned i = 0; i < OP_COUNT; ++i) IBR->addDestination(OpcBB[i]);
+		// indirectbr with all opcode blocks (all variants) declared as successors
+		IndirectBrInst* IBR = B.CreateIndirectBr(Hndl, OP_COUNT * NumVariants + 1);
+		for (unsigned i = 0; i < OP_COUNT; ++i)
+			for (unsigned v = 0; v < NumVariants; ++v)
+				IBR->addDestination(OpcBB[i][v]);
 		IBR->addDestination(ExitBB);
 	}
 
@@ -2091,10 +2180,20 @@ void VMImpl::populateVMEngine() {
 	SS->Dispatch = Dispatch;
 
 	// Build all 51 opcode handlers
+	NumVariants = VCtx.Cfg.handlerVariants;
+	if (NumVariants < 1) NumVariants = 1;
+	if (NumVariants > kMaxHandlerVariants) NumVariants = kMaxHandlerVariants;
+	EncDispatch = VCtx.Cfg.encDispatch;
 	buildOpcodeHandlers();
 
+	// Make the K structurally-identical variants distinct (per-variant MBA).
+	diversifyHandlerVariants(EF);
+
+	SS->NumVariants = NumVariants;
+	SS->EncDispatch = EncDispatch;
 	for (unsigned i = 0; i < OP_COUNT; ++i)
-		SS->OpcBB[i] = OpcBB[i];
+		for (unsigned v = 0; v < NumVariants; ++v)
+			SS->OpcBB[i][v] = OpcBB[i][v];
 
 	// Build dispatch loop
 	buildDispatch();
@@ -2349,12 +2448,29 @@ void VMImpl::hardenVMEngine(Function* EF, VMEngine::SharedState* SS) {
 			if (!isHandlerBlock(BB)) continue;
 			if (BB.getName().contains(".ad.") || BB.getName().contains(".guard")
 				|| BB.getName().contains(".bogus")) continue;
+			// Only variant-0 handler blocks: injecting a spot-check into all K
+			// duplicated variant copies (handlerVariants>1) multiplies the traps
+			// and their cumulative false-positive exposure. Keep trap count
+			// independent of K. (At K=1 every handler block is variant 0.)
+			if (VariantOf.lookup(&BB) != 0) continue;
 			if (HardenRng.range(100) >= (int)VCtx.Cfg.adHandlerProb) continue;
 
-
+			TrapCandidates.push_back(&BB);
 		}
 
 		for (BasicBlock* HBB : TrapCandidates) {
+			// Per-trap ONE-SHOT flag in the engine entry. The timing spot-check
+			// may poison the shared salt only on this handler's FIRST execution.
+			// Without this the check runs every iteration, and a single
+			// scheduling hiccup over a hot loop (rdtsc delta > threshold) would
+			// false-poison the salt -> silent miscompute on a legitimate run.
+			AllocaInst* OSFlag;
+			{
+				IRBuilder<> EntB(SS->Entry->getTerminator());
+				OSFlag = EntB.CreateAlloca(I32Ty, nullptr, "vm.ad.h.os");
+				EntB.CreateStore(EntB.getInt32(0), OSFlag)->setVolatile(true);
+			}
+
 			// Insert at handler entry — before all existing instructions.
 			IRBuilder<> B(&*HBB->getFirstInsertionPt());
 
@@ -2370,13 +2486,22 @@ void VMImpl::hardenVMEngine(Function* EF, VMEngine::SharedState* SS) {
 				B.getInt64((uint64_t)VCtx.Cfg.adHandlerThreshold),
 				"vm.ad.h.slow");
 
+			// One-shot gate: poison only if slow AND not yet fired.
+			auto* Fired = B.CreateLoad(I32Ty, OSFlag, "vm.ad.h.fired");
+			cast<LoadInst>(Fired)->setVolatile(true);
+			Value* NotFired = B.CreateICmpEQ(Fired, B.getInt32(0), "vm.ad.h.nf");
+			Value* DoPoison = B.CreateAnd(Slow, NotFired, "vm.ad.h.dop");
+
 			// Branchless salt corruption: select poison or zero
-			Value* Poison = B.CreateSelect(Slow,
+			Value* Poison = B.CreateSelect(DoPoison,
 				B.getInt32(ADPoisonKey), B.getInt32(0), "vm.ad.h.pois");
 			auto* OldSalt = B.CreateLoad(I32Ty, SS->EngineSalt, "vm.ad.h.salt");
 			cast<LoadInst>(OldSalt)->setVolatile(true);
 			Value* NewSalt = B.CreateXor(OldSalt, Poison, "vm.ad.h.xsal");
 			B.CreateStore(NewSalt, SS->EngineSalt)->setVolatile(true);
+
+			// Mark fired after the first execution (regardless of result).
+			B.CreateStore(B.getInt32(1), OSFlag)->setVolatile(true);
 
 			++HandlerTraps;
 		}
@@ -2400,6 +2525,91 @@ void VMImpl::hardenVMEngine(Function* EF, VMEngine::SharedState* SS) {
 }
 
 
+// ============================================================================
+// diversifyHandlerVariants
+//
+// Makes the K structurally-identical handler-variant copies (built by
+// buildOpcodeHandlers() when VMPassConfig.handlerVariants > 1) structurally
+// DISTINCT. Each block tagged in VariantOf (populated by buildOpcodeHandlers)
+// gets its target integer BinaryOperators rewritten with an MBA identity
+// chosen deterministically from the block's variant index, then XORed with a
+// per-site opaque zero so even repeated identities diverge and the rewrite
+// resists -O2 folding. Semantics-preserving: mirrors hardenVMEngine's proven
+// construction/replacement pattern.
+// ============================================================================
+
+void VMImpl::diversifyHandlerVariants(Function* EF) {
+	if (!EF || NumVariants < 2) return;
+
+	auto DivRng = VCtx.R.fork("vm.variant.diversify");
+	llvm::obf::MbaUtils   MBA(M, DivRng, "obf.vm.variant.mba.i32");
+	llvm::obf::OpaqueUtils Opaque(M, DivRng, "vm.variant.opaque.i32");
+
+	// Collect first (cannot rewrite while iterating).
+	SmallVector<std::pair<BinaryOperator*, unsigned>, 256> Cands;
+	for (BasicBlock& BB : *EF) {
+		auto It = VariantOf.find(&BB);
+		if (It == VariantOf.end()) continue;      // not a handler-variant block
+		unsigned vi = It->second;
+		for (Instruction& I : BB) {
+			if (auto* BO = dyn_cast<BinaryOperator>(&I)) {
+				if (!BO->getType()->isIntegerTy()) continue;
+				if (!llvm::obf::MbaUtils::isTargetOpcode(BO->getOpcode())) continue;
+				Cands.push_back({ BO, vi });
+			}
+		}
+	}
+
+	unsigned Rewrites = 0;
+	for (auto& [BO, vi] : Cands) {
+		if (!BO->getParent()) continue; // already erased
+		IRBuilder<> B(BO);
+		Value* A = BO->getOperand(0);
+		Value* V = BO->getOperand(1);
+		Value* R = nullptr;
+		switch (BO->getOpcode()) {
+		case Instruction::Add:
+			switch (vi % 3) { case 0: R = MBA.add(B, A, V); break;
+							  case 1: R = MBA.addAlt(B, A, V); break;
+							  default: R = MBA.addAlt2(B, A, V); } break;
+		case Instruction::Sub:
+			switch (vi % 3) { case 0: R = MBA.sub(B, A, V); break;
+							  case 1: R = MBA.subAlt(B, A, V); break;
+							  default: R = MBA.subAlt2(B, A, V); } break;
+		case Instruction::Or:
+			switch (vi % 3) { case 0: R = MBA.bitwiseOr(B, A, V); break;
+							  case 1: R = MBA.bitwiseOrAlt(B, A, V); break;
+							  default: R = MBA.bitwiseOrAlt2(B, A, V); } break;
+		case Instruction::And:
+			R = (vi % 2) ? MBA.bitwiseAndAlt(B, A, V) : MBA.bitwiseAnd(B, A, V); break;
+		case Instruction::Xor:
+			R = (vi % 2) ? MBA.bitwiseXorAlt(B, A, V) : MBA.bitwiseXor(B, A, V); break;
+		default: break;
+		}
+		if (!R) continue;
+
+		// Variant-unique opaque-zero XOR (matches hardenVMEngine's noise pattern,
+		// incl. i64 width handling).
+		Value* Z = Opaque.opaqueZero32(B);
+		Type* RT = R->getType();
+		if (RT != Z->getType()) {
+			if (RT->getIntegerBitWidth() > 32) Z = B.CreateZExt(Z, RT, "vd.z.ext");
+			else                                Z = B.CreateTrunc(Z, RT, "vd.z.tr");
+		}
+		R = B.CreateXor(R, Z, "vd.noise");
+
+		BO->replaceAllUsesWith(R);
+		BO->eraseFromParent();
+		++Rewrites;
+	}
+
+	LLVM_DEBUG(dbgs() << "[vm] diversifyHandlerVariants: " << Rewrites
+		<< " per-variant MBA rewrites across "
+		<< NumVariants << " variants\n");
+	if (ObfVerbose)
+		errs() << "[vm] variant-diversify: " << Rewrites
+		<< " MBA rewrites (" << NumVariants << " variants)\n";
+}
 
 
 
@@ -2885,8 +3095,13 @@ void VMImpl::buildWrapper() {
 		switch (WrapRetKind) {
 		case VMEngine::RK2_I32: {
 			Value* V = B.CreateLoad(I32Ty, B.CreateGEP(I32Ty, WRegs, SlotIdx), "vm.ret.v");
-			if (DoRegEncrypt)
-				V = B.CreateXor(V, blindI32(RegKeys[WrapRetSlot]), "vm.ret.dec");
+			if (DoRegEncrypt) {
+				if (RollingRegKey)
+					V = B.CreateXor(V, B.CreateLoad(I32Ty,
+						B.CreateGEP(I32Ty, WRegKeys, SlotIdx), "vm.ret.rk"), "vm.ret.dec");
+				else
+					V = B.CreateXor(V, blindI32(RegKeys[WrapRetSlot]), "vm.ret.dec");
+			}
 			if (RT != I32Ty && RT->isIntegerTy())
 				V = B.CreateTrunc(V, RT, "vm.ret.tr");
 			B.CreateRet(V);
@@ -2894,8 +3109,13 @@ void VMImpl::buildWrapper() {
 		}
 		case VMEngine::RK2_I64: {
 			Value* V = B.CreateLoad(I64Ty, B.CreateGEP(I64Ty, WRegs64, SlotIdx), "vm.ret.v64");
-			if (DoRegEncrypt)
-				V = B.CreateXor(V, blindI64(Reg64Keys[WrapRetSlot]), "vm.ret.dec64");
+			if (DoRegEncrypt) {
+				if (RollingRegKey)
+					V = B.CreateXor(V, B.CreateLoad(I64Ty,
+						B.CreateGEP(I64Ty, WReg64Keys, SlotIdx), "vm.ret.rk64"), "vm.ret.dec64");
+				else
+					V = B.CreateXor(V, blindI64(Reg64Keys[WrapRetSlot]), "vm.ret.dec64");
+			}
 			B.CreateRet(V);
 			break;
 		}
@@ -2908,7 +3128,11 @@ void VMImpl::buildWrapper() {
 			Value* V = B.CreateLoad(DoubleTy, B.CreateGEP(DoubleTy, WFregs, SlotIdx), "vm.ret.vf");
 			if (DoRegEncrypt) {
 				Value* Bits = B.CreateBitCast(V, I64Ty, "vm.ret.fbits");
-				Bits = B.CreateXor(Bits, blindI64(FRegKeys[WrapRetSlot]), "vm.ret.fdec");
+				if (RollingRegKey)
+					Bits = B.CreateXor(Bits, B.CreateLoad(I64Ty,
+						B.CreateGEP(I64Ty, WFRegKeys, SlotIdx), "vm.ret.rkf"), "vm.ret.fdec");
+				else
+					Bits = B.CreateXor(Bits, blindI64(FRegKeys[WrapRetSlot]), "vm.ret.fdec");
 				V = B.CreateBitCast(Bits, DoubleTy, "vm.ret.fval");
 			}
 			if (RT->isFloatTy())
@@ -3134,7 +3358,8 @@ void VMImpl::buildCalleeXorCtor() {
 // the shared __vm_engine.  Every 64 fetch iterations the gate fires and:
 //   (a) reads the cycle counter twice with a small computation between,
 //       if delta > threshold → salt corruption (catches single-stepping)
-//   (b) on Windows, calls IsDebuggerPresent() → salt corruption
+//   (b) on Windows, calls IsDebuggerPresent(), CheckRemoteDebuggerPresent(),
+//       and NtQueryInformationProcess(ProcessDebugPort) → salt corruption
 //
 // On detection: emitSaltCorruption() XORs the salt, making all subsequent
 // bytecode decryptions produce garbage.  Execution continues — no crash.
@@ -3190,8 +3415,8 @@ void VMImpl::buildAntiDebugGate(VMEngine::SharedState* SS) {
 		Value* Detected = ConstantInt::getFalse(Ctx);
 
 
-		// CI safety — skip detection if __OBF_DISABLE_ANTIDEBUG is set
-		{
+		// CI-only escape hatch (off by default: no kill-switch string shipped)
+		if (ObfVMAllowAntiDebugBypass) {
 			FunctionCallee GetEnv = M.getOrInsertFunction("getenv",
 				FunctionType::get(PtrTy, { PtrTy }, false));
 			Value* EnvName = B.CreateGlobalStringPtr(
@@ -3227,7 +3452,7 @@ void VMImpl::buildAntiDebugGate(VMEngine::SharedState* SS) {
 			Detected = B.CreateOr(Detected, Slow, "vm.ad.det.time");
 		}
 
-		//  Windows: IsDebuggerPresent() 
+		//  Windows: IsDebuggerPresent()
 		if (TI.IsWindows) {
 			auto* IDPTy = FunctionType::get(I32Ty, false);
 			FunctionCallee IDP = M.getOrInsertFunction("IsDebuggerPresent", IDPTy);
@@ -3236,6 +3461,91 @@ void VMImpl::buildAntiDebugGate(VMEngine::SharedState* SS) {
 			auto* Dbg = B.CreateCall(IDP, {}, "vm.ad.idb");
 			auto* IsDbg = B.CreateICmpNE(Dbg, B.getInt32(0), "vm.ad.win");
 			Detected = B.CreateOr(Detected, IsDbg, "vm.ad.det.win");
+
+			// Shared pseudo-handle for the process-query checks.
+			FunctionCallee GCP = M.getOrInsertFunction(
+				"GetCurrentProcess", FunctionType::get(PtrTy, false));
+			if (auto* F2 = dyn_cast<Function>(GCP.getCallee()))
+				F2->setDLLStorageClass(GlobalValue::DLLImportStorageClass);
+			Value* HProc = B.CreateCall(GCP, {}, "vm.ad.hproc");
+
+			// Output buffers live in the engine entry (avoid dynamic allocas in the gate).
+			IRBuilder<> EntB(SS->Entry->getTerminator());
+
+			// (1) CheckRemoteDebuggerPresent(HANDLE, PBOOL) — kernel32. Sets *pbFlag
+			//     to nonzero when a (possibly remote/kernel) debugger is attached.
+			{
+				AllocaInst* Flag = EntB.CreateAlloca(I32Ty, nullptr, "vm.ad.crdp");
+				EntB.CreateStore(EntB.getInt32(0), Flag)->setVolatile(true);
+				FunctionCallee CRDP = M.getOrInsertFunction(
+					"CheckRemoteDebuggerPresent",
+					FunctionType::get(I32Ty, { PtrTy, PtrTy }, false));
+				if (auto* F3 = dyn_cast<Function>(CRDP.getCallee()))
+					F3->setDLLStorageClass(GlobalValue::DLLImportStorageClass);
+				B.CreateCall(CRDP, { HProc, Flag });
+				auto* FV = B.CreateLoad(I32Ty, Flag, "vm.ad.crdp.v");
+				cast<LoadInst>(FV)->setVolatile(true);
+				Value* IsRDbg = B.CreateICmpNE(FV, B.getInt32(0), "vm.ad.crdp.d");
+				Detected = B.CreateOr(Detected, IsRDbg, "vm.ad.det.crdp");
+			}
+
+			// (2) NtQueryInformationProcess(HANDLE, ProcessDebugPort=7, &port, 8, NULL)
+			//     resolved at RUNTIME via GetProcAddress so no static ntdll import
+			//     is needed (a static __imp_NtQueryInformationProcess breaks linking
+			//     — ntdll is not in a default import lib). A nonzero debug port means
+			//     a debugger is attached. The call is branch-guarded so a failed
+			//     resolve (null proc) is never called.
+			{
+				// port buffer in engine entry, default 0 (stays 0 if unresolved).
+				AllocaInst* Port = EntB.CreateAlloca(I64Ty, nullptr, "vm.ad.dport");
+				EntB.CreateStore(EntB.getInt64(0), Port)->setVolatile(true);
+
+				// HMODULE ntdll = GetModuleHandleA("ntdll.dll");
+				FunctionCallee GMH = M.getOrInsertFunction(
+					"GetModuleHandleA", FunctionType::get(PtrTy, { PtrTy }, false));
+				if (auto* Fh = dyn_cast<Function>(GMH.getCallee()))
+					Fh->setDLLStorageClass(GlobalValue::DLLImportStorageClass);
+				Value* DllName = B.CreateGlobalString("ntdll.dll", "vm.ad.ntdll");
+				Value* HMod = B.CreateCall(GMH, { DllName }, "vm.ad.hntdll");
+
+				// FARPROC p = GetProcAddress(HMODULE, "NtQueryInformationProcess");
+				FunctionCallee GPA = M.getOrInsertFunction(
+					"GetProcAddress", FunctionType::get(PtrTy, { PtrTy, PtrTy }, false));
+				if (auto* Fp = dyn_cast<Function>(GPA.getCallee()))
+					Fp->setDLLStorageClass(GlobalValue::DLLImportStorageClass);
+				Value* ProcName = B.CreateGlobalString(
+					"NtQueryInformationProcess", "vm.ad.ntqname");
+				Value* Proc = B.CreateCall(GPA, { HMod, ProcName }, "vm.ad.ntqaddr");
+				Value* HasProc = B.CreateICmpNE(
+					Proc, ConstantPointerNull::get(cast<PointerType>(PtrTy)),
+					"vm.ad.ntq.ok");
+
+				// Guard: call through Proc only when resolved (never call null).
+				BasicBlock* NtqCallBB = BasicBlock::Create(Ctx, "vm.ad.ntq.call", EF);
+				BasicBlock* NtqAfterBB = BasicBlock::Create(Ctx, "vm.ad.ntq.after", EF);
+				B.CreateCondBr(HasProc, NtqCallBB, NtqAfterBB);
+
+				// NtqCallBB: indirect call sets *Port.
+				{
+					IRBuilder<> CB(NtqCallBB);
+					FunctionType* NtqFTy = FunctionType::get(
+						I32Ty, { PtrTy, I32Ty, PtrTy, I32Ty, PtrTy }, false);
+					CB.CreateCall(NtqFTy, Proc,
+						{ HProc, CB.getInt32(7), Port, CB.getInt32(8),
+						  ConstantPointerNull::get(cast<PointerType>(PtrTy)) });
+					CB.CreateBr(NtqAfterBB);
+				}
+
+				// Continue in NtqAfterBB (preds: gate block [unresolved] + NtqCallBB).
+				// Detected is defined in the gate block which dominates NtqAfterBB,
+				// so it is available here without a PHI; Port defaults 0 on the
+				// unresolved path.
+				B.SetInsertPoint(NtqAfterBB);
+				auto* PV = B.CreateLoad(I64Ty, Port, "vm.ad.dport.v");
+				cast<LoadInst>(PV)->setVolatile(true);
+				Value* HasPort = B.CreateICmpNE(PV, B.getInt64(0), "vm.ad.dport.d");
+				Detected = B.CreateOr(Detected, HasPort, "vm.ad.det.dport");
+			}
 		}
 
 		B.CreateCondBr(Detected, CorruptBB, FetchBB);
@@ -3777,6 +4087,7 @@ bool VMImpl::run() {
 
 	// Compile function body to bytecode
 	E.setOpcodeMap(&OpMap);
+	E.setTargetBlind(SaltConst, BlindTargets);
 	if (!E.run(F, CTSalt, M.getDataLayout())) {
 		FailReason = E.getFailReason().str();
 		if (FailReason.empty()) FailReason = "bytecode emission failed";
@@ -3786,7 +4097,7 @@ bool VMImpl::run() {
 	if (ObfVerify) {
 		std::string VErr;
 		uint32_t BadIP = 0;
-		if (!verifyBytecode(E, CTSalt, OpMap, VErr, BadIP)) {
+		if (!verifyBytecode(E, CTSalt, OpMap, VErr, BadIP, SaltConst, BlindTargets)) {
 			FailReason = ("bytecode verify failed at ip " + std::to_string(BadIP) + ": " + VErr);
 			return false;
 		}

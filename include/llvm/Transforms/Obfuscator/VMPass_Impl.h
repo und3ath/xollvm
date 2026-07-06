@@ -180,7 +180,9 @@ namespace llvm {
 		// Module-level shared state for the vm_engine
 		struct SharedState {
 			Function* EngineFn = nullptr;
-			BasicBlock* OpcBB[OP_COUNT] = {};
+			BasicBlock* OpcBB[OP_COUNT][kMaxHandlerVariants] = {};
+			unsigned    NumVariants = 1;   // active variant count for this engine
+			bool        EncDispatch = false;   // engine-wide: dispatch uses encrypted index map
 			BasicBlock* Dispatch = nullptr;
 			BasicBlock* ExitBB = nullptr;
 			BasicBlock* Entry = nullptr;
@@ -220,8 +222,11 @@ namespace llvm {
 
 		const bool     ObfRegIdx;
 		const bool     EncBytecode;
+		const bool     StrongBC;     // P3: per-position PRF Layer-1 keystream
+		const bool     BlindTargets; // P3-B: XOR-blind bytecode branch targets
 		const bool     UseAES;       // AES-CTR replaces LCG
 		const bool     RegEncrypt;   // XOR-encrypt register values at rest
+		const bool     RollingRegKey; // P4-C: evolve per-slot reg XOR key on each store
 		const uint32_t SaltConst;    // full 32-bit salt stored in vm.salt
 		const uint8_t  CTSalt;       // low byte of SaltConst must match deobf() key
 		const uint64_t EncSeed;      // seed for bytecode LCG encryption
@@ -311,7 +316,15 @@ namespace llvm {
 		VMEngine::RetKind2 WrapRetKind = VMEngine::RK2_VOID;
 
 
-		BasicBlock* OpcBB[OP_COUNT] = {};
+		BasicBlock* OpcBB[OP_COUNT][kMaxHandlerVariants] = {};
+		unsigned CurVariant = 0;    // variant index currently being emitted
+		unsigned NumVariants = 1;   // active variant count (from Cfg, clamped)
+		bool EncDispatch = false;   // == SharedState::EncDispatch for this build
+
+		// Maps every block created during buildOpcodeHandlers() to its variant
+		// index (0..NumVariants-1). Populated by the emission loop; consumed by
+		// diversifyHandlerVariants(). Covers head AND sub-blocks.
+		DenseMap<const BasicBlock*, uint8_t> VariantOf;
 
 		// vm.regs/vm.regs64/vm.pregs are allocated with sizes rounded up to the next power of two.
 		// This ensures the bitmask in deobf() never produces an out-of-bounds index.
@@ -333,8 +346,11 @@ namespace llvm {
 			VCtx(VCtx),
 			ObfRegIdx(VCtx.Cfg.obfRegIdx),
 			EncBytecode(VCtx.Cfg.encBytecode),
+			StrongBC(VCtx.Cfg.strongBytecode),
+			BlindTargets(VCtx.Cfg.blindTargets),
 			UseAES(VCtx.Cfg.useAES),
 			RegEncrypt(VCtx.Cfg.regEncrypt),
+			RollingRegKey(VCtx.Cfg.rollingRegKey),
 			SaltConst(VCtx.R.u32()),
 			// IMPORTANT: indices are only XOR-salted when obfRegIdx=1.
 			// When obfRegIdx=0, emitter must write raw indices (CTSalt=0).
@@ -361,8 +377,45 @@ namespace llvm {
 		bool run();
 
 	private:
-		//  IR helpers 
-		// Key: byte ^= (vm.salt ^ absolute_byte_index) & 0xFF
+		//  IR helpers
+		// Key: byte ^= (vm.salt ^ absolute_byte_index) & 0xFF  (or PRF mix when StrongBC)
+
+		// Compile-time mix — mirrors ksByteIR() op-for-op. Used by buildBytecodeGlobal()
+		// to compute the Layer-1 keystream byte at compile time.
+		static uint8_t ksByteCT(uint32_t salt, uint32_t idx) {
+			uint32_t k = salt ^ (idx * 0x9E3779B1u);
+			k ^= k >> 15;
+			k *= 0x85EBCA77u;
+			k ^= k >> 13;
+			return (uint8_t)(k & 0xFFu);
+		}
+
+		// Runtime (IR) mix — mirrors ksByteCT() op-for-op. Emits the instructions that
+		// compute the Layer-1 keystream byte from the volatile runtime salt and index.
+		Value* ksByteIR(IRBuilder<>& B, Value* Salt, Value* Idx32, const Twine& N) {
+			Value* k = B.CreateXor(Salt,
+				B.CreateMul(Idx32, B.getInt32(0x9E3779B1u), N + ".k0m"),
+				N + ".k0");
+			k = B.CreateXor(k, B.CreateLShr(k, B.getInt32(15), N + ".k1s"), N + ".k1");
+			k = B.CreateMul(k, B.getInt32(0x85EBCA77u), N + ".k2");
+			k = B.CreateXor(k, B.CreateLShr(k, B.getInt32(13), N + ".k3s"), N + ".k3");
+			Value* Key32 = B.CreateAnd(k, B.getInt32(0xFF), N + ".km");
+			return B.CreateTrunc(Key32, I8Ty, N + ".k8");
+		}
+
+		// P3-B: runtime (IR) branch-target-blind key mix — mirrors
+		// BytecodeEmitter::tgtKeyCT() op-for-op. Loads the volatile runtime salt
+		// itself and returns the full 32-bit key. Distinct constants from
+		// ksByteIR() (Layer-1 keystream) so the two blinding layers don't share
+		// a constant.
+		Value* tgtKeyIR(IRBuilder<>& B, const Twine& N) {
+			auto* SL = B.CreateLoad(I32Ty, EffSalt, N + ".tks"); SL->setVolatile(true);
+			Value* k = B.CreateXor(SL, B.getInt32(0x2545F491u), N + ".tk0");
+			k = B.CreateMul(k, B.getInt32(0x9E3779B1u), N + ".tk1");
+			k = B.CreateXor(k, B.CreateLShr(k, B.getInt32(16), N + ".tk2s"), N + ".tk2");
+			return k;
+		}
+
 		Value* loadBC(IRBuilder<>& B, Value* IP, uint32_t Off, const Twine& N = "vm.bc") {
 			Value* Idx32 = Off ? B.CreateAdd(IP, B.getInt32(Off), N + ".i32") : IP;
 			Value* Idx64 = B.CreateSExt(Idx32, I64Ty, N + ".ip64");
@@ -372,8 +425,13 @@ namespace llvm {
 
 			auto* SL = B.CreateLoad(I32Ty, EffSalt, N + ".s");
 			SL->setVolatile(true);
-			Value* Key32 = B.CreateAnd(B.CreateXor(SL, Idx32, N + ".kx"), B.getInt32(0xFF), N + ".km");
-			Value* Key8 = B.CreateTrunc(Key32, I8Ty, N + ".k8");
+			Value* Key8;
+			if (StrongBC) {
+				Key8 = ksByteIR(B, SL, Idx32, N);
+			} else {
+				Value* Key32 = B.CreateAnd(B.CreateXor(SL, Idx32, N + ".kx"), B.getInt32(0xFF), N + ".km");
+				Key8 = B.CreateTrunc(Key32, I8Ty, N + ".k8");
+			}
 			return B.CreateXor(Raw, Key8, N + ".dec");
 		}
 
@@ -386,8 +444,13 @@ namespace llvm {
 
 			auto* SL = B.CreateLoad(I32Ty, EffSalt, N + ".s");
 			SL->setVolatile(true);
-			Value* Key32 = B.CreateAnd(B.CreateXor(SL, Idx32, N + ".kx"), B.getInt32(0xFF), N + ".km");
-			Value* Key8 = B.CreateTrunc(Key32, I8Ty, N + ".k8");
+			Value* Key8;
+			if (StrongBC) {
+				Key8 = ksByteIR(B, SL, Idx32, N);
+			} else {
+				Value* Key32 = B.CreateAnd(B.CreateXor(SL, Idx32, N + ".kx"), B.getInt32(0xFF), N + ".km");
+				Key8 = B.CreateTrunc(Key32, I8Ty, N + ".k8");
+			}
 			return B.CreateXor(Raw, Key8, N + ".dec");
 		}
 
@@ -444,6 +507,18 @@ namespace llvm {
 			return B.CreateOr(W, B.CreateShl(b3, 24, N + "s3"), N + "w03");
 		}
 
+		// P4-C: rolling register-key evolution (LCG step). Only invoked when
+		// RollingRegKey is set; keeps rollingRegKey=false byte-identical.
+		Value* evolveKey32(IRBuilder<>& B, Value* K) {
+			return B.CreateAdd(B.CreateMul(K, B.getInt32(0x9E3779B1u), "vm.rk.em"),
+				B.getInt32(0x85EBCA77u), "vm.rk.ev");
+		}
+		Value* evolveKey64(IRBuilder<>& B, Value* K) {
+			return B.CreateAdd(
+				B.CreateMul(K, B.getInt64(0x9E3779B97F4A7C15ull), "vm.rk64.em"),
+				B.getInt64(0x2545F4914F6CDD1Dull), "vm.rk64.ev");
+		}
+
 		// Load/store virtual registers
 		Value* ldVR(IRBuilder<>& B, Value* Idx) {
 			Value* Raw = B.CreateLoad(I32Ty, B.CreateGEP(I32Ty, EffRegs, Idx, "vm.rg.p"), "vm.rg.v");
@@ -456,8 +531,12 @@ namespace llvm {
 			if (V->getType() != I32Ty && V->getType()->isIntegerTy())
 				V = B.CreateZExt(V, I32Ty, "vm.rg.w");
 			if (RegEncrypt && EffRegKeys) {
-				Value* Key = B.CreateLoad(I32Ty,
-					B.CreateGEP(I32Ty, EffRegKeys, Idx, "vm.rk.p"), "vm.rk.v");
+				Value* KPtr = B.CreateGEP(I32Ty, EffRegKeys, Idx, "vm.rk.p");
+				Value* Key = B.CreateLoad(I32Ty, KPtr, "vm.rk.v");
+				if (RollingRegKey) {
+					Key = evolveKey32(B, Key);
+					B.CreateStore(Key, KPtr);
+				}
 				V = B.CreateXor(V, Key, "vm.rg.enc");
 			}
 			B.CreateStore(V, B.CreateGEP(I32Ty, EffRegs, Idx, "vm.rg.p"));
@@ -473,8 +552,12 @@ namespace llvm {
 			if (V->getType() != I64Ty && V->getType()->isIntegerTy())
 				V = B.CreateZExtOrTrunc(V, I64Ty, "vm.rg64.w");
 			if (RegEncrypt && EffReg64Keys) {
-				Value* Key = B.CreateLoad(I64Ty,
-					B.CreateGEP(I64Ty, EffReg64Keys, Idx, "vm.rk64.p"), "vm.rk64.v");
+				Value* KPtr64 = B.CreateGEP(I64Ty, EffReg64Keys, Idx, "vm.rk64.p");
+				Value* Key = B.CreateLoad(I64Ty, KPtr64, "vm.rk64.v");
+				if (RollingRegKey) {
+					Key = evolveKey64(B, Key);
+					B.CreateStore(Key, KPtr64);
+				}
 				V = B.CreateXor(V, Key, "vm.rg64.enc");
 			}
 			B.CreateStore(V, B.CreateGEP(I64Ty, EffRegs64, Idx, "vm.rg64.p"));
@@ -503,8 +586,12 @@ namespace llvm {
 			if (RegEncrypt && EffFRegKeys) {
 				// XOR on the i64 bit-pattern, then bitcast back to f64
 				Value* Bits = B.CreateBitCast(V, I64Ty, "vm.fg.bits");
-				Value* Key = B.CreateLoad(I64Ty,
-					B.CreateGEP(I64Ty, EffFRegKeys, Idx, "vm.fk.p"), "vm.fk.v");
+				Value* KPtr = B.CreateGEP(I64Ty, EffFRegKeys, Idx, "vm.fk.p");
+				Value* Key = B.CreateLoad(I64Ty, KPtr, "vm.fk.v");
+				if (RollingRegKey) {
+					Key = evolveKey64(B, Key);
+					B.CreateStore(Key, KPtr);
+				}
 				V = B.CreateBitCast(B.CreateXor(Bits, Key, "vm.fg.enc"),
 					DoubleTy, "vm.fg.eval");
 			}
@@ -520,8 +607,9 @@ namespace llvm {
 
 		// Build one opcode handler block and return an IRBuilder positioned in it
 		IRBuilder<> mkOpc(VMOp Opc, const Twine& Name) {
-			BasicBlock* BB = BasicBlock::Create(Ctx, "vm.opc." + Name, HFn);
-			OpcBB[Opc] = BB; return IRBuilder<>(BB);
+			BasicBlock* BB = BasicBlock::Create(Ctx,
+				"vm.opc." + Name + ".v" + Twine(CurVariant), HFn);
+			OpcBB[Opc][CurVariant] = BB; return IRBuilder<>(BB);
 		}
 
 		// ── CALL handler support ─────────────────────────────────────────────
@@ -568,6 +656,7 @@ namespace llvm {
 		void mbaHardenWrapper();      // MBA on wrapper arithmetic
 		void flattenWrapper();        // switch-dispatch flattening
 		void hardenVMEngine(Function* EF, VMEngine::SharedState* SS);
+		void diversifyHandlerVariants(Function* EF); // per-variant MBA metamorphism
 
 		// anti-debug infrastructure
 		/// Emit IR to silently corrupt the salt value (salt ^= PoisonKey).

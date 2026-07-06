@@ -46,15 +46,20 @@ VMPassConfig VMPassConfig::fromPassConfig(const PassConfig& PC) {
 	getUInt("minBlocks", Cfg.minBlocks);
 	getUInt("maxBlocks", Cfg.maxBlocks);
 	getBool("obfRegIdx", Cfg.obfRegIdx);
+	getBool("encDispatch", Cfg.encDispatch);
 	getBool("encBytecode", Cfg.encBytecode);
+	getBool("strongBytecode", Cfg.strongBytecode);
+	getBool("blindTargets", Cfg.blindTargets);
 	getBool("useAES", Cfg.useAES);
 	getBool("hardened", Cfg.hardened);
 	getBool("regEncrypt", Cfg.regEncrypt);
+	getBool("rollingRegKey", Cfg.rollingRegKey);
 	getBool("antiDebug", Cfg.antiDebug);
 	getUInt("adDispatchThreshold", Cfg.adDispatchThreshold);
 	getUInt("adHandlerThreshold", Cfg.adHandlerThreshold);
 	getUInt("adDispatchInterval", Cfg.adDispatchInterval);
 	getUInt("adHandlerProb", Cfg.adHandlerProb);
+	getUInt("handlerVariants", Cfg.handlerVariants);
 
 	// useAES requires encBytecode — if the user disabled encryption entirely,
 	// AES has nothing to replace.
@@ -63,6 +68,8 @@ VMPassConfig VMPassConfig::fromPassConfig(const PassConfig& PC) {
 	if (!Cfg.encBytecode) Cfg.hardened = false;
 	// hardened implies regEncrypt — encrypted registers complement MBA-obscured handlers
 	if (Cfg.hardened) Cfg.regEncrypt = true;
+	if (Cfg.handlerVariants < 1) Cfg.handlerVariants = 1;
+	if (Cfg.handlerVariants > kMaxHandlerVariants) Cfg.handlerVariants = kMaxHandlerVariants;
 	return Cfg;
 }
 

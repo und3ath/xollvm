@@ -1,0 +1,39 @@
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+// Switch-heavy program: exercises OP_SWITCH target emission + (P3-B) branch-
+// target blinding + the bytecode verifier's switch-target range check. Kept in
+// its own case so a blinded-target verifier regression is caught (multi_function
+// has only if/else, so it never triggers the OP_SWITCH.default verify path).
+
+__attribute__((noinline, annotate("{annotation}")))
+uint32_t obf_classify(uint32_t x) {{
+    uint32_t r = 0;
+    switch (x & 7u) {{
+        case 0: r = x * 3u; break;
+        case 1: r = x ^ 0xABCDu; break;
+        case 2: for (uint32_t i = 0; i < (x & 15u); i++) r += i * x; break;
+        case 3: r = (x > 100u) ? x - 50u : x + 50u; break;
+        case 4: r = x << 2; break;
+        case 5: r = x >> 1; break;
+        case 6: r = ~x; break;
+        default: r = x + 1u; break;
+    }}
+    for (uint32_t j = 0; j < 3u; j++) {{ if (r & 1u) r = r * 5u + 1u; else r = r / 2u; }}
+    return r;
+}}
+
+__attribute__((noinline, annotate("{annotation}")))
+uint32_t obf_target(uint32_t x, uint32_t y) {{
+    uint32_t s = 0;
+    for (uint32_t k = 0; k < (y & 7u); k++) s += obf_classify(x + k);
+    return s ^ obf_classify(y);
+}}
+
+int main(int argc, char** argv) {{
+    uint32_t x = (argc > 1) ? (uint32_t)atoi(argv[1]) : 42;
+    uint32_t y = (argc > 2) ? (uint32_t)atoi(argv[2]) : 17;
+    printf("%u\n", obf_target(x, y));
+    return 0;
+}}

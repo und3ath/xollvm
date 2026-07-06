@@ -80,6 +80,13 @@ cl::opt<bool> llvm::ObfNoSkips(
 	         "default in production."),
 	cl::init(false));
 
+cl::opt<bool> llvm::ObfVMAllowAntiDebugBypass(
+	"obf-vm-allow-antidebug-bypass",
+	cl::desc("Emit the __OBF_DISABLE_ANTIDEBUG env-var escape hatch in the "
+	         "VM anti-debug gate. For CI/testing only; OFF by default so "
+	         "shipped binaries carry no kill-switch string."),
+	cl::init(false));
+
 cl::opt<std::string> llvm::ObfReportDir(
 	"obf-report-dir",
 	cl::desc("Directory to emit obfuscation report artifacts (CFG DOT + default JSON). Empty=off"),

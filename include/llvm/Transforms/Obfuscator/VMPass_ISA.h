@@ -107,6 +107,11 @@ namespace llvm {
 		OP_COUNT = 0x33
 	};
 
+	// Max handler-body variants per opcode in the shared __vm_engine.
+	// Statically sizes the 2-D OpcBB arrays. Actual count comes from
+	// VMPassConfig.handlerVariants, clamped to [1, kMaxHandlerVariants].
+	static constexpr unsigned kMaxHandlerVariants = 4;
+
 	// ============================================================================
 	// BinSubop — sub-opcode byte for OP_BINOP and OP_BINOP64
 	// ============================================================================

@@ -37,6 +37,8 @@ namespace llvm {
 		uint8_t               CTSalt,
 		const VMOpcodeMap& OpMap,
 		std::string& OutErr,
-		uint32_t& OutBadIP);
+		uint32_t& OutBadIP,
+		uint32_t              SaltFull = 0,       // P3-B: full 32-bit salt for target un-blind
+		bool                  BlindTargets = false); // P3-B: branch targets are XOR-blinded
 
 } // namespace llvm

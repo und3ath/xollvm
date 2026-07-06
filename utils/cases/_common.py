@@ -104,6 +104,25 @@ EXTRA_ANN: Dict[str, str] = {
     "vm_v7_hardened":        "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,hardened=1)",
     "vm_v7_regenc":          "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,regEncrypt=1)",
     "vm_v7_regenc_hardened": "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,hardened=1)",
+    # P1 handler polymorphism (handlerVariants=K): K distinct handler-body
+    # variants per opcode in the shared engine, random per-function binding.
+    "vm_v7_variants3":          "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,handlerVariants=3)",
+    "vm_v7_variants3_hardened": "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,hardened=1,handlerVariants=3)",
+    # P2 keyed dispatch (encDispatch=1): encrypted per-opcode->handler index
+    # indirection via salt-keyed dmap folded into the handler-table global.
+    "vm_v7_encdispatch":          "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,encDispatch=1)",
+    "vm_v7_encdispatch_variants3": "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,encDispatch=1,handlerVariants=3)",
+    "vm_v7_encdispatch_hardened":  "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,hardened=1,encDispatch=1,handlerVariants=3)",
+    # P3-A strong bytecode keystream (strongBytecode=1): per-position PRF Layer-1
+    # keystream over the full 32-bit salt (vs weak salt^index).
+    "vm_v7_strongbc":       "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,strongBytecode=1)",
+    "vm_v7_strongbc_full":  "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,strongBytecode=1,hardened=1,encDispatch=1,handlerVariants=3)",
+    # P3-B branch-target blinding (blindTargets=1): XOR-blind JMP/JMPC/SWITCH targets.
+    "vm_v7_blindtgt":       "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,blindTargets=1)",
+    # P4-C rolling register cipher (rollingRegKey=1): per-slot XOR key evolves on each store.
+    "vm_v7_rolling":        "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,regEncrypt=1,rollingRegKey=1)",
+    # Full P2+P3 stack: variants + keyed dispatch + strong keystream + target blinding + hardened.
+    "vm_v7_p3_full":        "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,strongBytecode=1,blindTargets=1,encDispatch=1,hardened=1,handlerVariants=3)",
 }
 
 
@@ -290,3 +309,11 @@ def render_vm_v7_multi_function_program(annotation: str) -> str:
 
 def render_vm_v7_multi_fn_aes_program(annotation: str) -> str:
     return programs.render("vm.multi_fn_aes", annotation=annotation)
+
+
+def render_vm_v7_switch_dispatch_program(annotation: str) -> str:
+    return programs.render("vm.switch_dispatch", annotation=annotation)
+
+
+def render_vm_v7_i64_ret_highslot_program(annotation: str) -> str:
+    return programs.render("vm.i64_ret_highslot", annotation=annotation)
