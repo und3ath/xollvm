@@ -138,8 +138,8 @@ if(OBF_IN_TREE)
     ${AES_GENERATED_INC}
 
     ADDITIONAL_HEADER_DIRS
-    ${LLVM_MAIN_INCLUDE_DIR}/llvm/Transforms
-    ${LLVM_MAIN_INCLUDE_DIR}/llvm/Transforms/Obfuscator
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/llvm/Transforms
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/llvm/Transforms/Obfuscator
     DEPENDS
     intrinsics_gen
 
@@ -148,6 +148,14 @@ if(OBF_IN_TREE)
   )
   set(OBF_TARGET LLVMObfuscator)
 
+  # As a submodule the obfuscator headers live in the module's own include/
+  # tree (include/llvm/Transforms/Obfuscator/**), not in the LLVM include root.
+  # Export that root PUBLICly so LLVMPasses -- which links LLVMObfuscator and
+  # compiles PassBuilder.cpp / PassRegistry.def -- resolves
+  # "llvm/Transforms/Obfuscator*.h" transitively without any edit to the LLVM
+  # integration files.
+  target_include_directories(${OBF_TARGET} PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/include")
   target_include_directories(${OBF_TARGET}
     PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/aes_stub")
 else()
