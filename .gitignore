@@ -1,0 +1,30 @@
+# Build trees
+/build/
+/out/
+build-*/
+cmake-build-*/
+
+# CMake artifacts
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+
+# Compiled objects / libs / plugins
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dylib
+*.dll
+*.pdb
+
+# Generated AES stub (produced by the aes_stub_inc target at build time)
+aes_stub.bc
+aes_stub_bc.inc
+
+# Editor / IDE
+.vs/
+.idea/
+.vscode/
+*.user

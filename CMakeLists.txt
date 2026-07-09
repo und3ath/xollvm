@@ -157,9 +157,8 @@ else()
   # created rather than via target_* (which rejects non-compilable targets).
   add_compile_definitions(OBF_BUILD_PLUGIN)
   include_directories(
-    # Pre-carve: the obfuscator's own headers still live under the in-tree
-    # include root. Phase 3 relocates them into the plugin repo and drops this.
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../../include"
+    # Repo-local headers: include/llvm/Transforms/Obfuscator/** (prefix kept).
+    "${CMAKE_CURRENT_SOURCE_DIR}/include"
     "${CMAKE_CURRENT_BINARY_DIR}/aes_stub"
   )
 
