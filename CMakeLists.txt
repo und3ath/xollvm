@@ -155,7 +155,7 @@ if(OBF_IN_TREE)
   # "llvm/Transforms/Obfuscator*.h" transitively without any edit to the LLVM
   # integration files.
   target_include_directories(${OBF_TARGET} PUBLIC
-    "${CMAKE_CURRENT_SOURCE_DIR}/include")
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
   target_include_directories(${OBF_TARGET}
     PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/aes_stub")
 else()
