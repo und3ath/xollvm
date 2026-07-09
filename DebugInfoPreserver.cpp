@@ -14,10 +14,13 @@
 
 using namespace llvm;
 
-static cl::opt<bool> ObfStripDebug(
-	"obf-strip-debug",
-	cl::desc("Strip debug info from obfuscated functions (keep it elsewhere)"),
-	cl::init(false));
+// The -obf-strip-debug option is defined once in ObfuscationOptions.cpp and
+// declared `extern llvm::cl::opt<bool> ObfStripDebug;` in ObfuscationOptions.h
+// (included above). Defining a second cl::opt with the same name here caused a
+// duplicate "Option 'obf-strip-debug' registered more than once" abort whenever
+// all TUs are linked wholesale (e.g. the loadable plugin build); in the in-tree
+// static library it was masked only because this object was dropped when
+// unreferenced. Use the shared option below via `llvm::ObfStripDebug`.
 
 namespace llvm::obf {
 
