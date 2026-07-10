@@ -47,13 +47,19 @@ if(NOT DEFINED AES_STUB_TARGET)
       CACHE STRING "Target triple used when compiling the AES stub")
 endif()
 
-if(TARGET clang)
+# Pick the clang used to compile the AES stub to bitcode.
+#   * Component/loadable builds may use the in-tree clang target directly.
+#   * A static extension (LINK_INTO_TOOLS) must NOT depend on the in-tree clang:
+#     clang links LLVMExtensions -> Obfuscator -> (aes) -> clang would be a
+#     dependency cycle. Use an external clang in that case.
+if(TARGET clang AND NOT LLVM_OBFUSCATOR_LINK_INTO_TOOLS)
   set(_AES_CLANG_EXE "$<TARGET_FILE:clang>")
   set(_AES_CLANG_DEP clang)
 else()
   find_program(_AES_CLANG_EXE NAMES clang clang-22 clang-21 clang-20 clang-19)
   if(NOT _AES_CLANG_EXE)
-    message(FATAL_ERROR "aes stub: clang not found.")
+    message(FATAL_ERROR "aes stub: external clang not found (needed to break the "
+                        "LINK_INTO_TOOLS dependency cycle).")
   endif()
   set(_AES_CLANG_DEP "")
 endif()
