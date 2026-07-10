@@ -1,16 +1,21 @@
 # ============================================================================
-# LLVMObfuscator  /  Obfuscator pass plugin
+# xollvm — Obfuscator pass, built two ways from one source, with NO edits to
+# any LLVM file:
 #
-# Dual-mode build:
-#   * In-tree     (LLVM_MAIN_SRC_DIR defined): builds the LLVMObfuscator static
-#                 component that links into clang/opt. Registration flows
-#                 through llvm/lib/Passes/PassRegistry.def. Behavior unchanged.
-#   * Standalone  (configured on its own against an installed/exported LLVM):
-#                 builds the loadable `Obfuscator` pass plugin. Registration
-#                 flows through registration/PluginEntry.cpp (llvmGetPassPluginInfo,
-#                 gated by OBF_BUILD_PLUGIN). Loadable-plugin support is
-#                 Linux/macOS only -- Windows needs the host LLVM built with
-#                 -DLLVM_EXPORT_SYMBOLS_FOR_PLUGINS=ON, so Windows stays in-tree.
+#   * Loadable plugin (standalone, configured against an installed/exported
+#     LLVM): builds Obfuscator.so, loaded via clang -fpass-plugin= /
+#     opt -load-pass-plugin=. Linux/macOS only.
+#
+#   * Static in-tree extension (configured as part of an LLVM build via
+#     -DLLVM_EXTERNAL_PROJECTS=Obfuscator
+#     -DLLVM_EXTERNAL_OBFUSCATOR_SOURCE_DIR=<this dir>
+#     -DLLVM_OBFUSCATOR_LINK_INTO_TOOLS=ON): compiled straight into clang/opt.
+#     Works on Windows too. Registration flows through
+#     getObfuscatorPluginInfo() via LLVM's generated HANDLE_EXTENSION.
+#
+# Both modes use add_llvm_pass_plugin(); LLVM decides module-vs-object from
+# LLVM_OBFUSCATOR_LINK_INTO_TOOLS. There is no in-tree component library and no
+# PassRegistry.def / PassBuilder.cpp glue anymore.
 # ============================================================================
 
 cmake_minimum_required(VERSION 3.20)
@@ -18,12 +23,13 @@ cmake_minimum_required(VERSION 3.20)
 
 # ---------------------------------------------------------------------------
 # Build-mode detection
+#   In-LLVM-tree  : LLVM_MAIN_SRC_DIR is set (we were add_subdirectory'd by the
+#                   LLVM build, e.g. via LLVM_EXTERNAL_PROJECTS). LLVM's CMake
+#                   modules are already loaded.
+#   Standalone    : configure on our own against an installed/exported LLVM.
 # ---------------------------------------------------------------------------
-if(DEFINED LLVM_MAIN_SRC_DIR)
-  set(OBF_IN_TREE ON)
-else()
-  set(OBF_IN_TREE OFF)
-  project(ObfuscatorPlugin C CXX)
+if(NOT DEFINED LLVM_MAIN_SRC_DIR)
+  project(xollvm C CXX)
   find_package(LLVM REQUIRED CONFIG)
   list(APPEND CMAKE_MODULE_PATH "${LLVM_CMAKE_DIR}")
   include(AddLLVM)
@@ -41,7 +47,6 @@ if(NOT DEFINED AES_STUB_TARGET)
       CACHE STRING "Target triple used when compiling the AES stub")
 endif()
 
-
 if(TARGET clang)
   set(_AES_CLANG_EXE "$<TARGET_FILE:clang>")
   set(_AES_CLANG_DEP clang)
@@ -53,13 +58,12 @@ else()
   set(_AES_CLANG_DEP "")
 endif()
 
-
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 add_subdirectory(aes_stub)
 
 
 # ---------------------------------------------------------------------------
-# Shared source list
+# Sources
 # ---------------------------------------------------------------------------
 set(OBF_SOURCES
   Utils.cpp
@@ -105,83 +109,44 @@ set(OBF_SOURCES
   ObfuscationOptions.cpp
   ObfuscationConfig.cpp
 
-  # Out-of-tree plugin entry point. In-tree it is compiled for validation only;
-  # llvmGetPassPluginInfo() is gated behind OBF_BUILD_PLUGIN, so the in-tree
-  # static component is unchanged. Standalone it is the live registration path.
+  # Registration entry point (getObfuscatorPluginInfo / llvmGetPassPluginInfo).
   registration/PluginEntry.cpp
 )
 
 
 # ---------------------------------------------------------------------------
-# Library / plugin target
+# Target
 # ---------------------------------------------------------------------------
-set(OBF_LINK_COMPONENTS
-  Analysis
-  BitReader
-  Core
-  Linker
-  Support
-  TransformUtils
-)
-
-# ObfuscationConfig.cpp parses config using C++ exceptions (try/throw/catch,
-# all contained within that TU). LLVM compiles -fno-exceptions by default,
-# which MSVC tolerates but clang/gcc reject ("cannot use 'try' with exceptions
-# disabled"). Opt this module into EH so it builds identically in-tree
-# (Linux + Windows) and as the standalone plugin. AddLLVM applies the correct
-# per-compiler flag (-fexceptions / MSVC default) for both add_llvm_* calls.
+# ObfuscationConfig.cpp uses C++ exceptions (try/throw/catch, contained within
+# that TU). LLVM builds -fno-exceptions by default (MSVC tolerates, clang/gcc
+# reject); opt this module into EH. AddLLVM applies the right per-compiler flag.
 set(LLVM_REQUIRES_EH ON)
 
-if(OBF_IN_TREE)
-  add_llvm_component_library(LLVMObfuscator
-    ${OBF_SOURCES}
-    ${AES_GENERATED_INC}
+# Directory-scope includes: the module's own headers (include/llvm/Transforms/
+# Obfuscator/** — prefix preserved) and the generated AES bitcode header. Set
+# before the target so they apply whether add_llvm_pass_plugin builds a module
+# (.so) or an object library (static extension).
+include_directories(
+  "${CMAKE_CURRENT_SOURCE_DIR}/include"
+  "${CMAKE_CURRENT_BINARY_DIR}/aes_stub"
+)
 
-    ADDITIONAL_HEADER_DIRS
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/llvm/Transforms
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/llvm/Transforms/Obfuscator
-    DEPENDS
-    intrinsics_gen
-
-    LINK_COMPONENTS
-    ${OBF_LINK_COMPONENTS}
-  )
-  set(OBF_TARGET LLVMObfuscator)
-
-  # As a submodule the obfuscator headers live in the module's own include/
-  # tree (include/llvm/Transforms/Obfuscator/**), not in the LLVM include root.
-  # Export that root PUBLICly so LLVMPasses -- which links LLVMObfuscator and
-  # compiles PassBuilder.cpp / PassRegistry.def -- resolves
-  # "llvm/Transforms/Obfuscator*.h" transitively without any edit to the LLVM
-  # integration files.
-  target_include_directories(${OBF_TARGET} PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
-  target_include_directories(${OBF_TARGET}
-    PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/aes_stub")
+# intrinsics_gen only exists inside an LLVM build tree.
+if(TARGET intrinsics_gen)
+  set(_OBF_DEPENDS DEPENDS intrinsics_gen)
 else()
-  # add_llvm_pass_plugin may create a non-plain target (object/interface
-  # wrapper) depending on platform and LLVM_<name>_LINK_INTO_TOOLS, so inject
-  # the plugin macro and include paths at directory scope BEFORE the target is
-  # created rather than via target_* (which rejects non-compilable targets).
-  add_compile_definitions(OBF_BUILD_PLUGIN)
-  include_directories(
-    # Repo-local headers: include/llvm/Transforms/Obfuscator/** (prefix kept).
-    "${CMAKE_CURRENT_SOURCE_DIR}/include"
-    "${CMAKE_CURRENT_BINARY_DIR}/aes_stub"
-  )
-
-  # NOTE: deliberately NO LINK_COMPONENTS here. A loadable plugin must resolve
-  # LLVM symbols from the host (opt/clang) at dlopen time. Static-linking the
-  # LLVM components into the .so gives it a second copy of LLVM's global state
-  # (e.g. the CommandLine registry), which aborts at load with
-  # "Option '...' registered more than once". The in-tree static component
-  # above still needs LINK_COMPONENTS; the plugin does not.
-  add_llvm_pass_plugin(Obfuscator
-    ${OBF_SOURCES}
-    ${AES_GENERATED_INC}
-  )
-  set(OBF_TARGET Obfuscator)
+  set(_OBF_DEPENDS "")
 endif()
 
+# One call, both modes. NO LINK_COMPONENTS on purpose: a loadable plugin must
+# resolve LLVM symbols from the host at load, and a static extension resolves
+# them from the tool it is linked into -- static-linking LLVM here would give a
+# second copy of LLVM global state (e.g. the CommandLine registry) and abort at
+# load ("Option '...' registered more than once").
+add_llvm_pass_plugin(Obfuscator
+  ${OBF_SOURCES}
+  ${AES_GENERATED_INC}
+  ${_OBF_DEPENDS}
+)
 
-add_dependencies(${OBF_TARGET} aes_stub_inc)
+add_dependencies(Obfuscator aes_stub_inc)

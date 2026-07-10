@@ -1,22 +1,22 @@
 //===-- PluginEntry.cpp - out-of-tree obfuscator plugin entry ---*- C++ -*-===//
 //
-// Provides llvmGetPassPluginInfo() so the obfuscator can be loaded as an
-// out-of-tree LLVM pass plugin (`clang -fpass-plugin=` / `opt
-// -load-pass-plugin=`).
+// Single registration entry point for the obfuscator, driving both build
+// modes from one source (no edits to any LLVM file):
 //
-// Registration flows through the canonical name table in ObfPasses.inc, the
-// same table hand-mirrored by the in-tree PassRegistry.def entries. Authoring
-// the names once here keeps the plugin and in-tree builds from drifting.
+//   * Loadable plugin (add_llvm_pass_plugin MODULE): built as Obfuscator.so and
+//     loaded via `clang -fpass-plugin=` / `opt -load-pass-plugin=`. Here
+//     LLVM_OBFUSCATOR_LINK_INTO_TOOLS is NOT defined, so llvmGetPassPluginInfo()
+//     is emitted as the loadable entry. Linux/macOS only.
 //
-// Build modes:
-//   * In-tree (LLVMObfuscator static component): OBF_BUILD_PLUGIN is NOT
-//     defined. The plugin entry point is compiled out so the static library
-//     exports no stray llvmGetPassPluginInfo; only registerObfuscatorPasses()
-//     is compiled, purely to keep it validated against the real LLVM headers.
-//     In-tree pass registration continues to run through PassRegistry.def, so
-//     in-tree behavior is unchanged.
-//   * Standalone plugin (Phase 2): the build defines OBF_BUILD_PLUGIN and the
-//     entry point below is emitted and used.
+//   * Static in-tree extension (add_llvm_pass_plugin with
+//     LLVM_OBFUSCATOR_LINK_INTO_TOOLS=ON, wired via LLVM_EXTERNAL_PROJECTS):
+//     compiled into clang/opt. LLVM calls getObfuscatorPluginInfo() at startup
+//     through the generated HANDLE_EXTENSION(Obfuscator). Works on Windows too.
+//     LLVM defines LLVM_OBFUSCATOR_LINK_INTO_TOOLS, so llvmGetPassPluginInfo()
+//     is compiled out (the tool must not export a second copy).
+//
+// Registration itself flows through the canonical name table in ObfPasses.inc.
+// This mirrors the LLVM `Bye` example pattern.
 //
 //===----------------------------------------------------------------------===//
 
@@ -37,10 +37,8 @@
 
 using namespace llvm;
 
-// Canonical registration entry. Wires every name in ObfPasses.inc into the
-// PassBuilder via the new-PM callback surface. Reused (later) by the in-tree
-// PassBuilder hook so both builds share one registration path.
-LLVM_ATTRIBUTE_UNUSED
+// Canonical registration. Wires every name in ObfPasses.inc into the
+// PassBuilder via the new-PM callback surface. Shared by both build modes.
 static void registerObfuscatorPasses(PassBuilder &PB) {
   // Named module passes: -passes=obfuscation
   PB.registerPipelineParsingCallback(
@@ -82,10 +80,20 @@ static void registerObfuscatorPasses(PassBuilder &PB) {
   });
 }
 
-#ifdef OBF_BUILD_PLUGIN
-extern "C" LLVM_ATTRIBUTE_WEAK ::llvm::PassPluginLibraryInfo
-llvmGetPassPluginInfo() {
+// Extension entry point. LLVM's static-extension machinery declares and calls
+// `getObfuscatorPluginInfo()` (via HANDLE_EXTENSION(Obfuscator)). Always
+// emitted; also reused by the loadable entry below. Not extern "C" -- the
+// generated declaration is a plain C++ symbol, matching the Bye example.
+llvm::PassPluginLibraryInfo getObfuscatorPluginInfo() {
   return {LLVM_PLUGIN_API_VERSION, "Obfuscator", LLVM_VERSION_STRING,
           registerObfuscatorPasses};
 }
-#endif // OBF_BUILD_PLUGIN
+
+// Loadable-plugin entry, emitted only when NOT statically linked into tools
+// (so clang/opt don't end up with two definitions).
+#ifndef LLVM_OBFUSCATOR_LINK_INTO_TOOLS
+extern "C" LLVM_ATTRIBUTE_WEAK ::llvm::PassPluginLibraryInfo
+llvmGetPassPluginInfo() {
+  return getObfuscatorPluginInfo();
+}
+#endif // LLVM_OBFUSCATOR_LINK_INTO_TOOLS

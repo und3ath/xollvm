@@ -1,11 +1,10 @@
 //===-- ObfPasses.inc - canonical obfuscator pass/analysis table -*- C++ -*-===//
 //
-// THE single source of truth for the obfuscator's registered names. This
-// x-macro table is consumed by:
-//   * registration/PluginEntry.cpp   - out-of-tree plugin registration
-//   * llvm/lib/Passes/PassRegistry.def - in-tree registration (hand-mirrored)
+// THE single source of truth for the obfuscator's registered names. Consumed
+// by registration/PluginEntry.cpp for both build modes (loadable plugin and
+// static in-tree extension). No PassRegistry.def mirror anymore.
 //
-// Keep the two in sync. An include site defines any subset of the macros
+// An include site defines any subset of the macros
 // below; undefined ones expand to nothing. All are #undef'd at the end so the
 // file may be included repeatedly (once per macro context).
 //
