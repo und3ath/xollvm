@@ -1,0 +1,307 @@
+name: Release (manual)
+
+# Manual only. On launch:
+#   * toolchain  — builds stock LLVM + clang/opt with the obfuscator linked in
+#                  statically (LLVM_EXTERNAL_PROJECTS extension), for Linux and
+#                  Windows, with the cross-arch backends. The big (~1GB+) bundle.
+#   * plugin     — builds the loadable Obfuscator.so (-fpass-plugin) for Linux.
+#   * release    — attaches all artifacts to a DRAFT release for manual review.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v0.1.0)'
+        required: true
+      llvm_ref:
+        description: 'Stock LLVM branch or tag to build against'
+        required: true
+        default: 'release/22.x'
+
+jobs:
+  # ==========================================================================
+  # Full toolchain: stock LLVM + obfuscator as a static in-tree extension.
+  # ==========================================================================
+  toolchain:
+    name: toolchain / ${{ matrix.os }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows
+            runner: windows-2022
+          - os: linux
+            runner: ubuntu-24.04
+    env:
+      SCCACHE_IDLE_TIMEOUT: 0
+    steps:
+      - name: Checkout xollvm
+        uses: actions/checkout@v4
+        with:
+          path: xollvm
+          fetch-depth: 1
+
+      - name: Fetch stock LLVM (${{ inputs.llvm_ref }})
+        run: git clone --depth 1 --branch "${{ inputs.llvm_ref }}" https://github.com/llvm/llvm-project llvm-src
+        shell: bash
+
+      # ---------- Linux prep ----------
+      - name: Free disk space (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL "$AGENT_TOOLSDIRECTORY"
+          sudo apt-get clean
+          df -h
+
+      - name: Install deps (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          # `clang` here is the EXTERNAL clang used to compile the AES stub to
+          # bitcode -- the in-tree clang can't be used under LINK_INTO_TOOLS
+          # (it would form a dependency cycle).
+          sudo apt-get install -y ninja-build ccache python3 zstd clang
+
+      # ---------- Windows prep ----------
+      - name: Setup MSVC (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Setup sccache (Windows)
+        if: runner.os == 'Windows'
+        uses: mozilla-actions/sccache-action@v0.0.3
+
+      - name: Install Ninja + external clang (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          choco install ninja -y
+          choco install llvm -y   # external clang.exe for the AES stub
+        shell: pwsh
+
+      # ---------- Cache ----------
+      - name: ccache (Linux)
+        if: runner.os == 'Linux'
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ matrix.os }}-release
+          max-size: 2G
+          variant: ccache
+
+      - name: sccache cache (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/sccache
+          key: sccache-${{ matrix.os }}-release-${{ github.sha }}
+          restore-keys: sccache-${{ matrix.os }}-release-
+
+      - name: Start sccache (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:SCCACHE_DIR = "$env:GITHUB_WORKSPACE\sccache"
+          $env:SCCACHE_CACHE_SIZE = "2G"
+          echo "SCCACHE_DIR=$env:SCCACHE_DIR" >> $env:GITHUB_ENV
+          echo "SCCACHE_CACHE_SIZE=$env:SCCACHE_CACHE_SIZE" >> $env:GITHUB_ENV
+          sccache --start-server
+          sccache --version
+
+      # ---------- Configure (Windows) ----------
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          mkdir build
+          cd build
+          cmake -G Ninja ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DCMAKE_POLICY_DEFAULT_CMP0141=NEW ^
+            -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded ^
+            -DLLVM_ENABLE_PROJECTS="llvm;clang" ^
+            -DLLVM_ENABLE_RTTI=ON ^
+            -DLLVM_ENABLE_EH=ON ^
+            -DLLVM_TARGETS_TO_BUILD="X86;AArch64;ARM;RISCV" ^
+            -DLLVM_INCLUDE_TESTS=OFF ^
+            -DLLVM_BUILD_TESTS=OFF ^
+            -DLLVM_INCLUDE_BENCHMARKS=OFF ^
+            -DLLVM_BUILD_BENCHMARKS=OFF ^
+            -DLLVM_INCLUDE_EXAMPLES=OFF ^
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL ^
+            -DLLVM_ENABLE_ASSERTIONS=OFF ^
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON ^
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache ^
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache ^
+            -DLLVM_PARALLEL_LINK_JOBS=1 ^
+            -DLLVM_EXTERNAL_PROJECTS=Obfuscator ^
+            -DLLVM_EXTERNAL_OBFUSCATOR_SOURCE_DIR=%GITHUB_WORKSPACE%\xollvm ^
+            -DLLVM_OBFUSCATOR_LINK_INTO_TOOLS=ON ^
+            -DCMAKE_INSTALL_PREFIX=%GITHUB_WORKSPACE%\install ^
+            ..\llvm-src\llvm
+
+      # ---------- Configure (Linux) ----------
+      - name: Configure (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          mkdir build && cd build
+          cmake -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLLVM_ENABLE_PROJECTS="llvm;clang" \
+            -DLLVM_ENABLE_RTTI=ON \
+            -DLLVM_ENABLE_EH=ON \
+            -DLLVM_TARGETS_TO_BUILD="X86;AArch64;ARM;RISCV" \
+            -DLLVM_INCLUDE_TESTS=OFF \
+            -DLLVM_BUILD_TESTS=OFF \
+            -DLLVM_INCLUDE_BENCHMARKS=OFF \
+            -DLLVM_BUILD_BENCHMARKS=OFF \
+            -DLLVM_INCLUDE_EXAMPLES=OFF \
+            -DLLVM_ENABLE_ASSERTIONS=OFF \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DLLVM_EXTERNAL_PROJECTS=Obfuscator \
+            -DLLVM_EXTERNAL_OBFUSCATOR_SOURCE_DIR=$GITHUB_WORKSPACE/xollvm \
+            -DLLVM_OBFUSCATOR_LINK_INTO_TOOLS=ON \
+            -DCMAKE_INSTALL_PREFIX=$GITHUB_WORKSPACE/install \
+            ../llvm-src/llvm
+
+      # ---------- Build ----------
+      - name: Build
+        shell: bash
+        run: cmake --build build --parallel --target install
+
+      - name: sccache stats (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: sccache --show-stats
+
+      # ---------- Smoke test: obfuscation runs from the built toolchain ----------
+      - name: Smoke test
+        shell: bash
+        run: |
+          BIN=install/bin
+          CLANG=$BIN/clang; [ -x "$BIN/clang.exe" ] && CLANG=$BIN/clang.exe
+          OPT=$BIN/opt; [ -x "$BIN/opt.exe" ] && OPT=$BIN/opt.exe
+          cat > ann.c <<'EOF'
+          #define OBF(spec) __attribute__((annotate("obf: " spec)))
+          OBF("mba, bcf, split")
+          int secret(int x){ int a=x*3+7; for(int i=0;i<x;i++) a+=(i^a); return a; }
+          EOF
+          "$CLANG" -O0 -emit-llvm -S ann.c -o ann.ll
+          "$OPT" -passes=obfuscation ann.ll -S -o ann_obf.ll
+          before=$(awk '/define .*@secret\(/,/^}/' ann.ll | wc -l)
+          after=$(awk '/define .*@secret\(/,/^}/' ann_obf.ll | wc -l)
+          echo "secret: $before -> $after"
+          [ "$after" -gt "$before" ] || { echo "obfuscation did not transform"; exit 1; }
+          "$OPT" -passes=verify ann_obf.ll -disable-output
+
+      # ---------- Package ----------
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cd install
+          tar --zstd -cf ../xollvm-linux-Release.tar.zst .
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: 7z a -t7z -m0=lzma2 -mx=7 -mmt=on xollvm-windows-Release.7z .\install\*
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: xollvm-${{ matrix.os }}
+          path: |
+            xollvm-*.tar.zst
+            xollvm-*.7z
+          retention-days: 14
+          if-no-files-found: error
+
+  # ==========================================================================
+  # Loadable plugin: Obfuscator.so (-fpass-plugin), Linux.
+  # ==========================================================================
+  plugin:
+    name: plugin / linux
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout xollvm
+        uses: actions/checkout@v4
+
+      - name: Install LLVM 22 dev + clang
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build clang-22 llvm-22-dev
+
+      - name: Build Obfuscator.so
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DLLVM_DIR=/usr/lib/llvm-22/lib/cmake/llvm \
+            -DCMAKE_C_COMPILER=clang-22 -DCMAKE_CXX_COMPILER=clang++-22 \
+            -DCMAKE_BUILD_TYPE=Release
+          ninja -C build Obfuscator
+          cp build/Obfuscator.so Obfuscator-linux-x64.so
+
+      - name: Smoke test plugin
+        run: |
+          cat > ann.c <<'EOF'
+          #define OBF(spec) __attribute__((annotate("obf: " spec)))
+          OBF("mba, bcf, split")
+          int secret(int x){ int a=x*3+7; for(int i=0;i<x;i++) a+=(i^a); return a; }
+          EOF
+          clang-22 -O0 -emit-llvm -S ann.c -o ann.ll
+          opt-22 -load-pass-plugin=./Obfuscator-linux-x64.so -passes=obfuscation ann.ll -S -o ann_obf.ll
+          opt-22 -passes=verify ann_obf.ll -disable-output
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: xollvm-plugin-linux
+          path: Obfuscator-linux-x64.so
+          retention-days: 14
+          if-no-files-found: error
+
+  # ==========================================================================
+  # Draft release with all artifacts (manual review before publishing).
+  # ==========================================================================
+  release:
+    name: Draft release
+    needs: [toolchain, plugin]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -lh artifacts/
+
+      - name: Create DRAFT release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag }}
+          files: artifacts/*
+          draft: true
+          prerelease: ${{ contains(inputs.tag, '-rc') || contains(inputs.tag, '-beta') }}
+          body: |
+            ## xollvm — ${{ inputs.tag }}
+
+            Built against stock LLVM `${{ inputs.llvm_ref }}`.
+
+            ### Artifacts
+            | File | What | OS |
+            |---|---|---|
+            | `xollvm-linux-Release.tar.zst` | clang/opt with obfuscator built in | Linux x86_64 |
+            | `xollvm-windows-Release.7z` | clang/opt with obfuscator built in | Windows x64 |
+            | `Obfuscator-linux-x64.so` | loadable `-fpass-plugin` | Linux x86_64 |
+
+            ### Cross-compilation backends
+            `-DLLVM_TARGETS_TO_BUILD="X86;AArch64;ARM;RISCV"` — X86, AArch64, ARM, RISC-V.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
