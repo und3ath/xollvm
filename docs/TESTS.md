@@ -51,7 +51,7 @@ python llvm/utils/obfuscator/obf_runtime_tests.py \
   --inputs 24
 ```
 
-![Test bench summary results](docs/img/runtime_tests.png)
+![Test bench summary results](img/runtime_tests.png)
 
 ### Useful flags
 
@@ -125,7 +125,7 @@ Behaviour:
 
 Per-target results appear in the JSON report under `tests[].cross`.
 
-![Cross-arch test results](docs/img/cross_arch_tests.png)
+![Cross-arch test results](img/cross_arch_tests.png)
 
 ---
 
@@ -157,8 +157,8 @@ obf_reports/
   index.html
 ```
 
-![Test report — summary](docs/img/test_html_report1.png)
-![Test report — per-pass IR change](docs/img/test_html_report2.png)
+![Test report — summary](img/test_html_report1.png)
+![Test report — per-pass IR change](img/test_html_report2.png)
 
 ---
 

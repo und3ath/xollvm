@@ -169,10 +169,10 @@ Seeds cascade `base → module → function → pass`:
 
 | Document | Purpose |
 |---|---|
-| [USER.md](USER.md) | Annotation grammar, pass reference, global options, reports, troubleshooting. |
-| [DEV.md](DEV.md) | Architecture: registration, annotation cache, pipeline ordering, reporting, adding passes. |
-| [VM.md](VM.md) | Code-virtualisation reference — ISA, bytecode format, hardening layers. |
-| [TESTS.md](TESTS.md) | Runtime test harness, categories, debug workflows. |
+| [USER.md](docs/USER.md) | Annotation grammar, pass reference, global options, reports, troubleshooting. |
+| [DEV.md](docs/DEV.md) | Architecture: registration, annotation cache, pipeline ordering, reporting, adding passes. |
+| [VM.md](docs/VM.md) | Code-virtualisation reference — ISA, bytecode format, hardening layers. |
+| [TESTS.md](docs/TESTS.md) | Runtime test harness, categories, debug workflows. |
 
 ---
 

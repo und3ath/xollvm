@@ -348,10 +348,10 @@ __attribute__((annotate("obf: mba(prob=70,maxDepth=3,maxSites=80)")))
 ```
 
 Before:
-![No transform](docs/img/hexray_no_transform.png)
+![No transform](img/hexray_no_transform.png)
 
 After:
-![MBA under HexRays](docs/img/mba.png)
+![MBA under HexRays](img/mba.png)
 
 ---
 
@@ -454,7 +454,7 @@ Example:
 __attribute__((annotate("obf: bcf(prob=40,loop=1,maxBlocks=4000)")))
 ```
 
-![BCF CFG example](docs/img/bcf.png)
+![BCF CFG example](img/bcf.png)
 
 ---
 
@@ -487,7 +487,7 @@ Example:
 __attribute__((annotate("obf: flattening(minBlocks=3,maxBlocks=160,fakeTransitions=1,fakeCases=2)")))
 ```
 
-![Flattening CFG example](docs/img/flattening_cfg.png)
+![Flattening CFG example](img/flattening_cfg.png)
 
 ---
 
