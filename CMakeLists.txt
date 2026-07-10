@@ -155,4 +155,10 @@ add_llvm_pass_plugin(Obfuscator
   ${_OBF_DEPENDS}
 )
 
+# The AES stub .inc must be generated before any obfuscator source that
+# includes it is compiled. Under LINK_INTO_TOOLS add_llvm_pass_plugin compiles
+# into obj.Obfuscator (not Obfuscator), so depend on both targets.
 add_dependencies(Obfuscator aes_stub_inc)
+if(TARGET obj.Obfuscator)
+  add_dependencies(obj.Obfuscator aes_stub_inc)
+endif()
