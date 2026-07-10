@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 340" font-family="'Segoe UI',Roboto,Helvetica,Arial,sans-serif">
+  <defs>
+    <linearGradient id="or-teal" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2dd4bf"/><stop offset="1" stop-color="#0d9488"/></linearGradient>
+    <linearGradient id="or-amber" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fbbf24"/><stop offset="1" stop-color="#d97706"/></linearGradient>
+    <linearGradient id="or-orange" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fb923c"/><stop offset="1" stop-color="#ea580c"/></linearGradient>
+    <linearGradient id="or-rose" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fb7185"/><stop offset="1" stop-color="#e11d48"/></linearGradient>
+    <marker id="or-arw" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L7,3 L0,6 Z" fill="#94a3b8"/></marker>
+    <filter id="or-sh" x="-30%" y="-30%" width="160%" height="170%"><feDropShadow dx="0" dy="2" stdDeviation="2.5" flood-color="#0f172a" flood-opacity="0.22"/></filter>
+    <style>
+      .t{fill:#fff;font-weight:700;font-size:14px}
+      .st{fill:#fff;fill-opacity:.85;font-weight:600;font-size:11px}
+      .cap{fill:#64748b;font-size:12px;font-weight:600}
+      .cf{fill:#e11d48;font-size:11.5px;font-weight:700}
+      .edge{stroke:#94a3b8;stroke-width:2.2;fill:none}
+    </style>
+  </defs>
+
+  <text class="cap" x="20" y="34">runs first</text>
+  <text class="cap" x="840" y="34" text-anchor="end">runs last</text>
+  <line x1="20" y1="44" x2="840" y2="44" stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="2 4"/>
+
+  <!-- edges -->
+  <path class="edge" marker-end="url(#or-arw)" d="M180,163 L196,163"/>
+  <path class="edge" marker-end="url(#or-arw)" d="M286,163 L302,163"/>
+  <path class="edge" marker-end="url(#or-arw)" d="M392,155 L412,120"/>
+  <path class="edge" marker-end="url(#or-arw)" d="M392,171 L412,206"/>
+  <path class="edge" marker-end="url(#or-arw)" d="M552,120 L592,155"/>
+  <path class="edge" marker-end="url(#or-arw)" d="M552,206 L592,171"/>
+  <path class="edge" marker-end="url(#or-arw)" d="M688,163 L704,163"/>
+
+  <!-- expression group -->
+  <g filter="url(#or-sh)"><rect x="20" y="140" width="160" height="46" rx="10" fill="url(#or-teal)"/></g>
+  <text class="t" x="100" y="160" text-anchor="middle">expression</text>
+  <text class="st" x="100" y="177" text-anchor="middle">mba &#183; sub &#183; sdiff &#183; vcall</text>
+
+  <g filter="url(#or-sh)"><rect x="196" y="140" width="90" height="46" rx="10" fill="url(#or-amber)"/></g>
+  <text class="t" x="241" y="168" text-anchor="middle">split</text>
+
+  <g filter="url(#or-sh)"><rect x="302" y="140" width="90" height="46" rx="10" fill="url(#or-amber)"/></g>
+  <text class="t" x="347" y="168" text-anchor="middle">bcf</text>
+
+  <!-- mutually-exclusive column -->
+  <rect x="404" y="86" width="156" height="164" rx="14" fill="none" stroke="#e11d48" stroke-width="1.6" stroke-dasharray="5 4"/>
+  <text class="cf" x="482" y="80" text-anchor="middle">one OR the other</text>
+  <g filter="url(#or-sh)"><rect x="412" y="97" width="140" height="46" rx="10" fill="url(#or-amber)"/></g>
+  <text class="t" x="482" y="125" text-anchor="middle">flattening</text>
+  <g filter="url(#or-sh)"><rect x="412" y="183" width="140" height="46" rx="10" fill="url(#or-rose)"/></g>
+  <text class="t" x="482" y="211" text-anchor="middle">vm</text>
+  <text class="cf" x="482" y="169" text-anchor="middle">&#10007; conflict &#10007;</text>
+
+  <g filter="url(#or-sh)"><rect x="592" y="140" width="96" height="46" rx="10" fill="url(#or-orange)"/></g>
+  <text class="t" x="640" y="168" text-anchor="middle">shield</text>
+
+  <g filter="url(#or-sh)"><rect x="704" y="140" width="96" height="46" rx="10" fill="url(#or-orange)"/></g>
+  <text class="t" x="752" y="168" text-anchor="middle">adec</text>
+
+  <text class="cap" x="430" y="300" text-anchor="middle">Partial order enforced by the pipeline driver regardless of annotation order.</text>
+  <text class="cap" x="430" y="318" text-anchor="middle">vm virtualises pre-obfuscated IR &#8594; bytecode encodes already-hardened logic.</text>
+</svg>

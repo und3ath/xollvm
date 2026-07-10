@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 380" font-family="'Segoe UI',Roboto,Helvetica,Arial,sans-serif">
+  <defs>
+    <linearGradient id="sd-indigo" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#818cf8"/><stop offset="1" stop-color="#4f46e5"/></linearGradient>
+    <linearGradient id="sd-violet" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#a78bfa"/><stop offset="1" stop-color="#7c3aed"/></linearGradient>
+    <linearGradient id="sd-blue" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#60a5fa"/><stop offset="1" stop-color="#2563eb"/></linearGradient>
+    <linearGradient id="sd-teal" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2dd4bf"/><stop offset="1" stop-color="#0d9488"/></linearGradient>
+    <marker id="sd-arw" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L7,3 L0,6 Z" fill="#94a3b8"/></marker>
+    <filter id="sd-sh" x="-25%" y="-25%" width="150%" height="160%"><feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#0f172a" flood-opacity="0.22"/></filter>
+    <style>
+      .t{fill:#fff;font-weight:700;font-size:15.5px}
+      .m{font-family:'Cascadia Code',Consolas,monospace;fill:#fff;fill-opacity:.9;font-weight:600;font-size:11px}
+      .cap{fill:#64748b;font-size:12px;font-weight:600}
+      .rule{fill:#475569;font-size:12px;font-weight:600}
+      .rk{font-family:'Cascadia Code',Consolas,monospace;fill:#7c3aed;font-weight:700;font-size:11.5px}
+      .edge{stroke:#94a3b8;stroke-width:2.4;fill:none}
+    </style>
+  </defs>
+
+  <text class="cap" x="450" y="30" text-anchor="middle" font-size="14" fill="#475569">Hierarchical deterministic seeding &#8212; each level derives from the one before</text>
+
+  <!-- module-seed selection rules -->
+  <g>
+    <rect x="250" y="60" width="400" height="88" rx="12" fill="none" stroke="#a78bfa" stroke-width="1.6" stroke-dasharray="5 4"/>
+    <text class="rule" x="266" y="84"><tspan class="rk">-obf-seed &#8800; 0</tspan>  &#8594;  use base seed directly</text>
+    <text class="rule" x="266" y="108"><tspan class="rk">seed 0 + deterministic</tspan>  &#8594;  hash(module id)</text>
+    <text class="rule" x="266" y="132"><tspan class="rk">otherwise</tspan>  &#8594;  std::random_device (not reproducible)</text>
+  </g>
+  <path class="edge" marker-end="url(#sd-arw)" d="M450,148 L450,206"/>
+
+  <!-- chain -->
+  <g filter="url(#sd-sh)"><rect x="30" y="212" width="170" height="70" rx="12" fill="url(#sd-indigo)"/></g>
+  <text class="t" x="115" y="242" text-anchor="middle">Base seed</text>
+  <text class="m" x="115" y="264" text-anchor="middle">-obf-seed=N</text>
+
+  <g filter="url(#sd-sh)"><rect x="255" y="212" width="170" height="70" rx="12" fill="url(#sd-violet)"/></g>
+  <text class="t" x="340" y="242" text-anchor="middle">Module seed</text>
+  <text class="m" x="340" y="264" text-anchor="middle">per translation unit</text>
+
+  <g filter="url(#sd-sh)"><rect x="480" y="212" width="170" height="70" rx="12" fill="url(#sd-blue)"/></g>
+  <text class="t" x="565" y="240" text-anchor="middle">Function seed</text>
+  <text class="m" x="565" y="262" text-anchor="middle">mix(mod, hash(name))</text>
+
+  <g filter="url(#sd-sh)"><rect x="705" y="212" width="170" height="70" rx="12" fill="url(#sd-teal)"/></g>
+  <text class="t" x="790" y="240" text-anchor="middle">Pass seed</text>
+  <text class="m" x="790" y="262" text-anchor="middle">derive(fn, passId)</text>
+
+  <path class="edge" marker-end="url(#sd-arw)" d="M200,247 L251,247"/>
+  <path class="edge" marker-end="url(#sd-arw)" d="M425,247 L476,247"/>
+  <path class="edge" marker-end="url(#sd-arw)" d="M650,247 L701,247"/>
+
+  <text class="cap" x="450" y="330" text-anchor="middle">Per-pass streams never cross-contaminate &#8212; same seed reproduces the exact build.</text>
+  <text class="cap" x="450" y="352" text-anchor="middle" fill="#94a3b8">Dump with -obf-seed-manifest=&lt;path&gt; for later reproduction.</text>
+</svg>

@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 720" font-family="'Segoe UI',Roboto,Helvetica,Arial,sans-serif">
+  <defs>
+    <linearGradient id="po-indigo" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#818cf8"/><stop offset="1" stop-color="#4f46e5"/></linearGradient>
+    <linearGradient id="po-blue" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#60a5fa"/><stop offset="1" stop-color="#2563eb"/></linearGradient>
+    <linearGradient id="po-violet" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#a78bfa"/><stop offset="1" stop-color="#7c3aed"/></linearGradient>
+    <linearGradient id="po-cyan" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#22d3ee"/><stop offset="1" stop-color="#0891b2"/></linearGradient>
+    <linearGradient id="po-emerald" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#34d399"/><stop offset="1" stop-color="#059669"/></linearGradient>
+    <linearGradient id="po-slate" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#94a3b8"/><stop offset="1" stop-color="#475569"/></linearGradient>
+    <marker id="po-arw" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L7,3 L0,6 Z" fill="#94a3b8"/></marker>
+    <filter id="po-sh" x="-20%" y="-20%" width="140%" height="150%"><feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#0f172a" flood-opacity="0.22"/></filter>
+    <style>
+      .t{fill:#fff;font-weight:700;font-size:16px}
+      .s{fill:#fff;fill-opacity:.85;font-weight:500;font-size:12.5px}
+      .cap{fill:#64748b;font-size:12px;font-weight:600}
+      .edge{stroke:#94a3b8;stroke-width:2.2;fill:none}
+    </style>
+  </defs>
+
+  <!-- edges (behind nodes) -->
+  <path class="edge" marker-end="url(#po-arw)" d="M500,84 L500,108"/>
+  <path class="edge" marker-end="url(#po-arw)" d="M500,176 L500,200"/>
+  <path class="edge" marker-end="url(#po-arw)" d="M500,268 L500,292"/>
+  <path class="edge" marker-end="url(#po-arw)" d="M500,360 L500,384"/>
+  <path class="edge" marker-end="url(#po-arw)" d="M500,452 L500,476"/>
+  <path class="edge" marker-end="url(#po-arw)" d="M500,544 L500,568"/>
+  <!-- strenc offshoot -->
+  <path class="edge" marker-end="url(#po-arw)" d="M360,414 L268,414"/>
+  <!-- report offshoot -->
+  <path class="edge" marker-end="url(#po-arw)" d="M640,506 L732,506"/>
+
+  <!-- n1 source -->
+  <g filter="url(#po-sh)"><rect x="360" y="26" width="280" height="58" rx="11" fill="url(#po-indigo)"/></g>
+  <text class="t" x="500" y="50" text-anchor="middle">Source code</text>
+  <text class="s" x="500" y="70" text-anchor="middle">obf: annotation attributes</text>
+
+  <!-- n2 IR -->
+  <g filter="url(#po-sh)"><rect x="360" y="118" width="280" height="58" rx="11" fill="url(#po-indigo)"/></g>
+  <text class="t" x="500" y="142" text-anchor="middle">LLVM IR</text>
+  <text class="s" x="500" y="162" text-anchor="middle">+ llvm.global.annotations</text>
+
+  <!-- n3 opt module pass -->
+  <g filter="url(#po-sh)"><rect x="360" y="210" width="280" height="58" rx="11" fill="url(#po-blue)"/></g>
+  <text class="t" x="500" y="234" text-anchor="middle">opt -passes=obfuscation</text>
+  <text class="s" x="500" y="254" text-anchor="middle">ObfuscationModulePass</text>
+
+  <!-- n4 annotation analysis -->
+  <g filter="url(#po-sh)"><rect x="360" y="302" width="280" height="58" rx="11" fill="url(#po-violet)"/></g>
+  <text class="t" x="500" y="326" text-anchor="middle">ObfuscationAnnotationAnalysis</text>
+  <text class="s" x="500" y="346" text-anchor="middle">build Function &#8594; Config cache</text>
+
+  <!-- n5 driver + strenc offshoot -->
+  <g filter="url(#po-sh)"><rect x="360" y="394" width="280" height="58" rx="11" fill="url(#po-blue)"/></g>
+  <text class="t" x="500" y="418" text-anchor="middle">ObfuscationFunctionDriverPass</text>
+  <text class="s" x="500" y="438" text-anchor="middle">per-function orchestration</text>
+  <g filter="url(#po-sh)"><rect x="38" y="388" width="230" height="52" rx="11" fill="url(#po-cyan)"/></g>
+  <text class="t" x="153" y="410" text-anchor="middle" font-size="15">StringEncryptionPass</text>
+  <text class="s" x="153" y="428" text-anchor="middle">strenc &#183; module-only</text>
+
+  <!-- seed/budget pills -->
+  <rect x="672" y="392" width="150" height="24" rx="12" fill="none" stroke="#94a3b8" stroke-width="1.5"/>
+  <text class="cap" x="747" y="408" text-anchor="middle">deterministic seed</text>
+  <rect x="672" y="424" width="150" height="24" rx="12" fill="none" stroke="#94a3b8" stroke-width="1.5"/>
+  <text class="cap" x="747" y="440" text-anchor="middle">IR growth budget</text>
+  <path class="edge" d="M660,410 L672,404" stroke-dasharray="3 3"/>
+  <path class="edge" d="M660,432 L672,436" stroke-dasharray="3 3"/>
+
+  <!-- n6 ordered pipeline -->
+  <g filter="url(#po-sh)"><rect x="360" y="486" width="280" height="58" rx="11" fill="url(#po-blue)"/></g>
+  <text class="t" x="500" y="510" text-anchor="middle">Ordered function pipeline</text>
+  <text class="s" x="500" y="530" text-anchor="middle">topological sort of enabled passes</text>
+
+  <!-- n7 output + report offshoot -->
+  <g filter="url(#po-sh)"><rect x="360" y="578" width="280" height="58" rx="11" fill="url(#po-emerald)"/></g>
+  <text class="t" x="500" y="602" text-anchor="middle">Obfuscated IR / bitcode</text>
+  <text class="s" x="500" y="622" text-anchor="middle">verified, reproducible</text>
+  <g filter="url(#po-sh)"><rect x="732" y="480" width="150" height="52" rx="11" fill="url(#po-slate)"/></g>
+  <text class="t" x="807" y="502" text-anchor="middle" font-size="14">Obf report</text>
+  <text class="s" x="807" y="520" text-anchor="middle">JSON + CFG DOT</text>
+
+  <text class="cap" x="500" y="678" text-anchor="middle">annotation-driven &#183; deterministic &#183; safety-gated</text>
+</svg>

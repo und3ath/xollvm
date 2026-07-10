@@ -622,11 +622,9 @@ Start small and scale up: verify correctness at each step before adding more pas
 
 The driver enforces the following partial order (earlier = runs first):
 
-```
-mba, substitution, sdiff, vcall → split → bcf → flattening → shield → adec
-                                                        ↕ conflict ↕
-                                                            vm
-```
+<p align="center">
+  <img src="img/pipeline_order.svg" alt="Pipeline execution order with the flattening/vm conflict" width="820">
+</p>
 
 `vm` runs after all other function passes if combined with them. Because `vm` virtualises the
 entire function, pre-passes that transform the IR before it (mba, bcf, etc.) make the resulting
@@ -667,7 +665,7 @@ __attribute__((annotate("obf: mba(prob=70), bcf(prob=30), vm(hardened=1,useAES=1
 - **`vm` is the heaviest option**: it replaces the entire function. Runtime overhead is real —
   use it only for the most sensitive functions. See [VM.md](VM.md) for performance guidance.
 - **Budgets matter**: if the report shows many "skipped due to budget" entries, lower
-  probabilities or raise global budget knobs (`-obf-ir-budget-multiplier`, `-obf-ir-budget-hardcap`).
+  probabilities or raise global budget knobs (`-obf-ir-budget-multiplier`, `-obf-ir-budget-max`).
 - **Start deterministic**: fix `-obf-seed` during development so issues are reproducible.
 - **Don't combine `vm` and `flattening`** on the same function — they conflict.
 

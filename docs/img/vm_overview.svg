@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 600" font-family="'Segoe UI',Roboto,Helvetica,Arial,sans-serif">
+  <defs>
+    <linearGradient id="vo-indigo" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#818cf8"/><stop offset="1" stop-color="#4f46e5"/></linearGradient>
+    <linearGradient id="vo-rose" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fb7185"/><stop offset="1" stop-color="#e11d48"/></linearGradient>
+    <linearGradient id="vo-red" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f43f5e"/><stop offset="1" stop-color="#9f1239"/></linearGradient>
+    <linearGradient id="vo-amber" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fbbf24"/><stop offset="1" stop-color="#d97706"/></linearGradient>
+    <marker id="vo-arw" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L7,3 L0,6 Z" fill="#94a3b8"/></marker>
+    <filter id="vo-sh" x="-20%" y="-20%" width="140%" height="150%"><feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#0f172a" flood-opacity="0.22"/></filter>
+    <style>
+      .t{fill:#fff;font-weight:700;font-size:16px}
+      .s{fill:#fff;fill-opacity:.85;font-weight:500;font-size:12.5px}
+      .side{fill:#64748b;font-size:12.5px;font-weight:600}
+      .mono{font-family:'Cascadia Code',Consolas,monospace;fill:#fff;font-weight:700;font-size:13px}
+      .edge{stroke:#94a3b8;stroke-width:2.4;fill:none}
+    </style>
+  </defs>
+
+  <path class="edge" marker-end="url(#vo-arw)" d="M330,92 L330,116"/>
+  <path class="edge" marker-end="url(#vo-arw)" d="M330,214 L330,238"/>
+  <path class="edge" marker-end="url(#vo-arw)" d="M330,300 L330,324"/>
+  <path class="edge" marker-end="url(#vo-arw)" d="M330,422 L330,446"/>
+
+  <!-- 1 original IR -->
+  <g filter="url(#vo-sh)"><rect x="150" y="34" width="360" height="58" rx="12" fill="url(#vo-indigo)"/></g>
+  <text class="t" x="330" y="58" text-anchor="middle">Original IR</text>
+  <text class="s" x="330" y="78" text-anchor="middle">LLVM SSA form</text>
+
+  <!-- 2 bytecode emitter -->
+  <g filter="url(#vo-sh)"><rect x="150" y="118" width="360" height="96" rx="12" fill="url(#vo-rose)"/></g>
+  <text class="t" x="330" y="144" text-anchor="middle">BytecodeEmitter</text>
+  <text class="s" x="330" y="168" text-anchor="middle">Pass 1 &#183; assign register slots, block offsets</text>
+  <text class="s" x="330" y="188" text-anchor="middle">Pass 2 &#183; emit opcode bytes, patch branches</text>
+  <text class="side" x="540" y="168">two-pass compiler</text>
+  <text class="side" x="540" y="186">LLVM IR &#8594; bytecode</text>
+
+  <!-- 3 bytecode array -->
+  <g filter="url(#vo-sh)"><rect x="150" y="238" width="360" height="46" rx="10" fill="url(#vo-amber)"/></g>
+  <text class="mono" x="330" y="266" text-anchor="middle">BC[] : private constant [L &#215; i8]</text>
+
+  <!-- 4 VMImpl -->
+  <g filter="url(#vo-sh)"><rect x="150" y="326" width="360" height="96" rx="12" fill="url(#vo-rose)"/></g>
+  <text class="t" x="330" y="352" text-anchor="middle">VMImpl</text>
+  <text class="s" x="330" y="376" text-anchor="middle">strip body &#183; emit bytecode / handler / callee globals</text>
+  <text class="s" x="330" y="396" text-anchor="middle">build thin wrapper that calls __vm_engine</text>
+  <text class="side" x="540" y="376">IR constructor</text>
+  <text class="side" x="540" y="394">builds interpreter</text>
+
+  <!-- 5 engine -->
+  <g filter="url(#vo-sh)"><rect x="150" y="446" width="360" height="112" rx="12" fill="url(#vo-red)"/></g>
+  <text class="t" x="330" y="474" text-anchor="middle">__vm_engine()</text>
+  <text class="s" x="330" y="498" text-anchor="middle">51 handler blocks &#183; one per logical opcode</text>
+  <text class="s" x="330" y="518" text-anchor="middle">central dispatch loop &#183; indirect branch</text>
+  <text class="s" x="330" y="538" text-anchor="middle">register files passed by pointer from wrapper</text>
+  <text class="side" x="540" y="498">shared, module-level</text>
+  <text class="side" x="540" y="516">fetch &#8594; decode</text>
+  <text class="side" x="540" y="534">&#8594; execute &#8594; dispatch</text>
+
+  <text class="side" x="330" y="586" text-anchor="middle" fill="#94a3b8">The analyst sees only the interpreter loop and an opaque byte array.</text>
+</svg>

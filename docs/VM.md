@@ -54,31 +54,16 @@ configuration reference, interaction with other passes, debugging, and known lim
 
 ## Conceptual overview
 
-```
-Original IR (LLVM SSA form)
-        │
-        ▼
-┌───────────────────────────┐
-│   BytecodeEmitter         │   Two-pass compiler:
-│                           │   Pass 1: assign register slots, compute block offsets
-│   LLVM IR → bytecode      │   Pass 2: emit opcode bytes, patch forward branches
-└───────────┬───────────────┘
-            │  BC[] : private constant [L × i8]
-            ▼
-┌───────────────────────────┐
-│   VMImpl                  │   IR constructor:
-│                           │   • strip original function body
-│   Build interpreter IR    │   • emit globals (bytecode, handler table, callee table)
-└───────────┬───────────────┘   • build thin wrapper that calls __vm_engine
-            │
-            ▼
-┌───────────────────────────┐
-│   __vm_engine()           │   Shared module-level function:
-│                           │   • 51 handler BasicBlocks (one per logical opcode)
-│   fetch → decode          │   • central dispatch loop (indirect branch)
-│   → execute → dispatch    │   • register files passed by pointer from wrapper
-└───────────────────────────┘
-```
+<p align="center">
+  <img src="img/vm_overview.svg" alt="VM compilation pipeline: BytecodeEmitter to VMImpl to __vm_engine" width="720">
+</p>
+
+Inside `__vm_engine`, control never leaves a single **fetch → decode → execute → dispatch**
+loop until an `OP_RET_*` opcode returns the result to the caller:
+
+<p align="center">
+  <img src="img/vm_dispatch_loop.svg" alt="VM fetch-decode-execute dispatch loop" width="820">
+</p>
 
 The result: a reverse engineer sees only the interpreter loop and an opaque byte array.
 Recovering the original logic requires understanding the ISA, the opcode permutation map,
@@ -458,6 +443,13 @@ and branch to the correct handler in `__vm_engine`.
 
 ## Hardening layers
 
+Five independent layers stack on top of the base bytecode interpreter. Each is controlled by
+its own knob and adds runtime cost independently:
+
+<p align="center">
+  <img src="img/vm_hardening_layers.svg" alt="VM hardening layers stacked around the bytecode interpreter core" width="820">
+</p>
+
 ### Layer 1 — Register-index XOR (`obfRegIdx`)
 
 **Default: on.**
@@ -759,7 +751,7 @@ instructions include: `extractelement`, `insertelement`, `shufflevector`, `landi
 If the obfuscated function produces wrong results after a subsequent `-O2` pass:
 - Check whether the `hardened` wrapper relies on `volatile` correctly (it should).
 - Run `--o2-gate` in the test suite for the specific pass combination.
-- Check whether LLVM 21 introduced a new optimization that sees through one of the
+- Check whether a newer LLVM release introduced an optimization that sees through one of the
   opaque patterns — file a hardening enhancement request.
 
 **Anti-debug false positives (wrong results on real hardware, correct under debugger removed):**

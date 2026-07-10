@@ -66,6 +66,18 @@ Module-only:
 
 ---
 
+## How it works
+
+Annotations drive everything. A module analysis parses `llvm.global.annotations` once into a
+cached `Function → Config` map; the module entry pass then runs module-only `strenc` and a
+deterministic, budget-gated per-function pipeline.
+
+<p align="center">
+  <img src="docs/img/pipeline_overview.svg" alt="xollvm end-to-end pipeline: source annotations to obfuscated IR" width="820">
+</p>
+
+---
+
 ## Quick start
 
 ### Option 1 — Download a prebuilt release
@@ -158,6 +170,10 @@ Diagnostics: `-passes=obf-dump-config` (resolved config), `-passes=obf-metrics` 
 ## Reproducibility
 
 Seeds cascade `base → module → function → pass`:
+
+<p align="center">
+  <img src="docs/img/seed_hierarchy.svg" alt="Hierarchical deterministic seed derivation" width="820">
+</p>
 
 - `-obf-seed=<N>` pins the base seed.
 - `-obf-deterministic` derives the module seed from a stable hash of the module id (when seed is 0).

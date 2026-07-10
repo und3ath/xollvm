@@ -177,6 +177,7 @@ obf_reports/
 | `edge` | Edge-case IR shapes — int widths, switches, indirectbr, recursion, struct-by-value, vectors, nested loops, tail calls. |
 | `options` | Per-option sweeps (gated by `--extended`). |
 | `matrix` | Pairwise pass-interaction stress matrix (`--extended`). |
+| `exhaustive` | Every k-subset of passes (`--exhaustive-combos`). |
 
 ---
 
@@ -233,7 +234,6 @@ Common reason tokens currently emitted:
 Reference test: [meta_no_skips_full_pipeline](llvm/utils/obfuscator/cases/extended.py)
 runs the full pipeline on a benign arithmetic function and asserts that
 no pass silently degrades.
-| `exhaustive` | Every k-subset of passes (`--exhaustive-combos`). |
 
 ---
 

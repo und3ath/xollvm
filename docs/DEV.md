@@ -57,20 +57,9 @@ maintaining and extending the in-tree LLVM obfuscation framework.
 
 ## High-level architecture
 
-```mermaid
-flowchart TD
-  A[llvm.global.annotations] --> B[ObfuscationAnnotationAnalysis]
-  B --> C[ObfuscationConfig cache\nFunction → Config map]
-  C --> D[ObfuscationModulePass: -passes=obfuscation]
-  D --> E[StringEncryptionPass: strenc\nmodule-only]
-  D --> F[ObfuscationFunctionDriverPass]
-  F --> G[Topologically ordered function pipeline]
-  F --> R[ObfReportAnalysis sink\nJSON + CFG DOT artifacts]
-  G --> P1[mba / substitution / sdiff / vcall]
-  G --> P2[split / bcf / flattening]
-  G --> P3[shield / adec]
-  G --> P4[vm — replaces entire function body]
-```
+<p align="center">
+  <img src="img/architecture.svg" alt="xollvm high-level architecture" width="860">
+</p>
 
 ### Pass registration
 

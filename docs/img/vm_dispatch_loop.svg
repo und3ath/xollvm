@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 420" font-family="'Segoe UI',Roboto,Helvetica,Arial,sans-serif">
+  <defs>
+    <linearGradient id="dl-blue" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#60a5fa"/><stop offset="1" stop-color="#2563eb"/></linearGradient>
+    <linearGradient id="dl-violet" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#a78bfa"/><stop offset="1" stop-color="#7c3aed"/></linearGradient>
+    <linearGradient id="dl-indigo" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#818cf8"/><stop offset="1" stop-color="#4338ca"/></linearGradient>
+    <linearGradient id="dl-rose" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fb7185"/><stop offset="1" stop-color="#e11d48"/></linearGradient>
+    <linearGradient id="dl-teal" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2dd4bf"/><stop offset="1" stop-color="#0d9488"/></linearGradient>
+    <linearGradient id="dl-emerald" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#34d399"/><stop offset="1" stop-color="#059669"/></linearGradient>
+    <marker id="dl-arw" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L7,3 L0,6 Z" fill="#94a3b8"/></marker>
+    <marker id="dl-arwB" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L7,3 L0,6 Z" fill="#6366f1"/></marker>
+    <filter id="dl-sh" x="-25%" y="-25%" width="150%" height="160%"><feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#0f172a" flood-opacity="0.22"/></filter>
+    <style>
+      .t{fill:#fff;font-weight:700;font-size:14px}
+      .s{fill:#fff;fill-opacity:.85;font-weight:500;font-size:10.5px}
+      .cap{fill:#64748b;font-size:12px;font-weight:600}
+      .mono{font-family:'Cascadia Code',Consolas,monospace;fill:#334155;font-weight:600;font-size:11px}
+      .edge{stroke:#94a3b8;stroke-width:2.3;fill:none}
+      .loop{stroke:#6366f1;stroke-width:2.3;fill:none}
+    </style>
+  </defs>
+
+  <!-- feedback loop arc (top) -->
+  <path class="loop" marker-end="url(#dl-arwB)" d="M775,118 C 775,52 90,52 90,116"/>
+  <text x="432" y="46" text-anchor="middle" fill="#6366f1" font-size="12" font-weight="700">next instruction</text>
+
+  <!-- forward edges -->
+  <path class="edge" marker-end="url(#dl-arw)" d="M160,150 L182,150"/>
+  <path class="edge" marker-end="url(#dl-arw)" d="M330,150 L352,150"/>
+  <path class="edge" marker-end="url(#dl-arw)" d="M500,150 L522,150"/>
+  <path class="edge" marker-end="url(#dl-arw)" d="M670,150 L692,150"/>
+
+  <!-- loop nodes -->
+  <g filter="url(#dl-sh)"><rect x="20" y="120" width="140" height="60" rx="11" fill="url(#dl-blue)"/></g>
+  <text class="t" x="90" y="146" text-anchor="middle">FETCH</text>
+  <text class="s" x="90" y="164" text-anchor="middle">load BC[ip]</text>
+
+  <g filter="url(#dl-sh)"><rect x="190" y="120" width="140" height="60" rx="11" fill="url(#dl-violet)"/></g>
+  <text class="t" x="260" y="146" text-anchor="middle">DECODE</text>
+  <text class="s" x="260" y="164" text-anchor="middle">un-XOR &#183; OpMap physical&#8594;logical</text>
+
+  <g filter="url(#dl-sh)"><rect x="360" y="120" width="140" height="60" rx="11" fill="url(#dl-indigo)"/></g>
+  <text class="t" x="430" y="146" text-anchor="middle">DISPATCH</text>
+  <text class="s" x="430" y="164" text-anchor="middle">indirect branch &#8594; handler</text>
+
+  <g filter="url(#dl-sh)"><rect x="530" y="120" width="140" height="60" rx="11" fill="url(#dl-rose)"/></g>
+  <text class="t" x="600" y="146" text-anchor="middle">EXECUTE</text>
+  <text class="s" x="600" y="164" text-anchor="middle">1 of 51 opcode handlers</text>
+
+  <g filter="url(#dl-sh)"><rect x="700" y="120" width="140" height="60" rx="11" fill="url(#dl-teal)"/></g>
+  <text class="t" x="770" y="146" text-anchor="middle">ADVANCE IP</text>
+  <text class="s" x="770" y="164" text-anchor="middle">volatile ip += width</text>
+
+  <!-- register files -->
+  <path class="edge" marker-end="url(#dl-arw)" d="M600,180 L600,232" stroke-dasharray="4 3"/>
+  <text class="cap" x="600" y="252" text-anchor="middle">reads / writes register files</text>
+  <g font-size="11" font-weight="700" fill="#fff">
+    <rect x="360" y="262" width="110" height="34" rx="8" fill="#0d9488"/><text x="415" y="284" text-anchor="middle">vm.regs i32</text>
+    <rect x="480" y="262" width="110" height="34" rx="8" fill="#0891b2"/><text x="535" y="284" text-anchor="middle">vm.regs64 i64</text>
+    <rect x="600" y="262" width="110" height="34" rx="8" fill="#7c3aed"/><text x="655" y="284" text-anchor="middle">vm.fregs f64</text>
+    <rect x="720" y="262" width="110" height="34" rx="8" fill="#4338ca"/><text x="775" y="284" text-anchor="middle">vm.pregs ptr</text>
+  </g>
+
+  <!-- exit -->
+  <path class="edge" marker-end="url(#dl-arw)" d="M430,180 L430,326"/>
+  <g filter="url(#dl-sh)"><rect x="330" y="326" width="200" height="52" rx="11" fill="url(#dl-emerald)"/></g>
+  <text class="t" x="430" y="350" text-anchor="middle">OP_RET_* &#8594; return</text>
+  <text class="s" x="430" y="368" text-anchor="middle">store result, exit engine to caller</text>
+
+  <text class="cap" x="90" y="352">ip &amp; salt are <tspan class="mono" fill="#e11d48">volatile</tspan></text>
+  <text class="cap" x="90" y="370">&#8594; loop opaque to -O2</text>
+</svg>
