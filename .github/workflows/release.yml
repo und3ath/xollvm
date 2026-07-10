@@ -233,8 +233,12 @@ jobs:
 
       - name: Install LLVM 22 dev + clang
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ninja-build clang-22 llvm-22-dev
+          # Ubuntu 24.04 (noble) has no clang-22/llvm-22 in its default repos;
+          # add the official apt.llvm.org repo for version 22.
+          wget -qO llvm.sh https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 22
+          sudo apt-get install -y ninja-build clang-22 llvm-22 llvm-22-dev
 
       - name: Build Obfuscator.so
         run: |
