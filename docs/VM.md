@@ -228,7 +228,8 @@ and little-endian multi-byte immediates.
 Physical opcode bytes in the bytecode stream are **not** the logical VMOp values — they are
 passed through a per-function permutation (see [Opcode permutation](#opcode-permutation)).
 
-### Integer / pointer opcodes
+<details open>
+<summary><b>🔢 Integer / pointer opcodes</b></summary>
 
 | Logical opcode | Value | Encoding (bytes) | Description |
 |---|---|---|---|
@@ -251,7 +252,10 @@ passed through a per-function permutation (see [Opcode permutation](#opcode-perm
 | `OP_SELECT` | 0x12 | `opc kind:u8 dst:u8 cond:u8 t:u8 f:u8` (6 B) | Ternary select across register files. |
 | `OP_PTRTOINT64` | 0x13 | `opc dst64:u8 srcp:u8` (3 B) | `ptrtoint` preg → vreg64 (i64). |
 
-### 64-bit integer opcodes
+</details>
+
+<details>
+<summary><b>🔟 64-bit integer opcodes</b></summary>
 
 | Logical opcode | Value | Encoding | Description |
 |---|---|---|---|
@@ -262,7 +266,10 @@ passed through a per-function permutation (see [Opcode permutation](#opcode-perm
 | `OP_ICMP64` | 0x1A | `opc dst:u8 a64:u8 b64:u8 pred:u8` (5 B) | 64-bit integer compare; result → vreg (i32). |
 | `OP_GEP64` | 0x19 | `opc dstp:u8 basep:u8 idx64:u8 elemsz:u16le` (6 B) | GEP with 64-bit index. |
 
-### Floating-point opcodes
+</details>
+
+<details>
+<summary><b>🔣 Floating-point opcodes</b></summary>
 
 All floats are stored as `double` in the freg file. f32 source values are widened on slot
 assignment; f32 destinations are narrowed on store or return.
@@ -286,7 +293,10 @@ assignment; f32 destinations are narrowed on store or return.
 | `OP_FCAST_VF` | 0x31 | `opc dst:u8 src:u8 kind:u8` (4 B) | vreg (i32) → freg (f64): sitofp / uitofp. |
 | `OP_FCAST_V64F` | 0x32 | `opc dst:u8 src64:u8 kind:u8` (4 B) | vreg64 (i64) → freg (f64): sitofp / uitofp. |
 
-### Control flow opcodes
+</details>
+
+<details>
+<summary><b>🔀 Control flow opcodes</b></summary>
 
 | Logical opcode | Value | Encoding | Description |
 |---|---|---|---|
@@ -297,7 +307,10 @@ assignment; f32 destinations are narrowed on store or return.
 | `OP_RET_INT` | 0x0D | `opc src:u8` (2 B) | Return i32 from vreg. |
 | `OP_RET_PTR` | 0x0E | `opc srcp:u8` (2 B) | Return ptr from preg. |
 
-### Call opcodes
+</details>
+
+<details>
+<summary><b>📞 Call opcodes</b></summary>
 
 All call opcodes share the same extended encoding (Step 02 format):
 
@@ -320,7 +333,10 @@ opc  [dst_reg:u8]  fn:u8  nargs:u8  flags:u8  argtypes:u16le  [arg:u8 × nargs]
 | `OP_CALL_INT64` | 0x2A | i64 → vreg64 `dst64` |
 | `OP_CALL_F` | 0x2B | f64 → freg `dstf` |
 
-### Sub-opcode tables
+</details>
+
+<details>
+<summary><b>🧮 Sub-opcode tables</b> (BinSubop, FBinSubop, CastKind, …)</summary>
 
 **BinSubop** (for `OP_BINOP` and `OP_BINOP64`):
 
@@ -390,7 +406,10 @@ is rounded back to f32 precision via fptrunc→fpext before being stored).
 | 8 | `FK_SI64TOFP` | vreg64 (i64) → freg (f64) |
 | 9 | `FK_UI64TOFP` | vreg64 (i64) → freg (f64) |
 
-### Instruction encoding summary
+</details>
+
+<details>
+<summary><b>📐 Instruction encoding summary</b></summary>
 
 | Opcode | Bytes | Layout |
 |---|---|---|
@@ -415,6 +434,8 @@ is rounded back to f32 precision via fptrunc→fpext before being stored).
 | `OP_RET_PTR` | 2 | `opc srcp` |
 | `OP_CALL_VOID` | 3+N | `opc fn nargs flags at0 at1 [arg]×N` |
 | `OP_CALL_INT/PTR/INT64/F` | 4+N | `opc dst fn nargs flags at0 at1 [arg]×N` |
+
+</details>
 
 ---
 

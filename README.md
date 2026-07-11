@@ -1,8 +1,22 @@
-# xollvm — LLVM 22 Obfuscator
+<div align="center">
 
-<p align="center">
-  <img src="docs/img/ollvm.png" alt="xollvm logo" width="200">
-</p>
+<img src="docs/img/ollvm.png" alt="xollvm logo" width="150">
+
+# xollvm
+
+**🛡️ Annotation-driven LLVM 22 obfuscator · new pass manager · zero LLVM source edits**
+
+![LLVM](https://img.shields.io/badge/LLVM-22.x-262D3A?logo=llvm&logoColor=white)
+![License](https://img.shields.io/badge/license-Apache--2.0%20WITH%20LLVM--exception-4C7EF3)
+![Platforms](https://img.shields.io/badge/platforms-Linux%20·%20Windows%20·%20macOS-16A34A)
+![Passes](https://img.shields.io/badge/passes-11-8B5CF6)
+![Integration](https://img.shields.io/badge/build-static%20ext%20%2B%20.so%20plugin-F59E0B)
+
+📖 [User Guide](docs/USER.md) · 🧠 [Architecture](docs/DEV.md) · ⚙️ [VM Reference](docs/VM.md) · ✅ [Tests](docs/TESTS.md)
+
+</div>
+
+---
 
 An **annotation-driven** LLVM obfuscation framework for the **new pass manager** (NPM).
 Configuration comes from source-level annotations (`llvm.global.annotations`) and is resolved
