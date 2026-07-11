@@ -209,7 +209,10 @@ jobs:
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: 7z a -t7z -m0=lzma2 -mx=7 -mmt=on xollvm-windows-Release.7z .\install\*
+        # -mx=3 (fast) not -mx=7: the ~1GB+ install bundle at mx=7 lzma2 runs long
+        # enough to hit the job timeout. mx=3 keeps decent ratio at a fraction of
+        # the CPU cost.
+        run: 7z a -t7z -m0=lzma2 -mx=3 -mmt=on xollvm-windows-Release.7z .\install\*
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

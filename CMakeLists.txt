@@ -144,15 +144,32 @@ else()
   set(_OBF_DEPENDS "")
 endif()
 
-# One call, both modes. NO LINK_COMPONENTS on purpose: a loadable plugin must
-# resolve LLVM symbols from the host at load, and a static extension resolves
-# them from the tool it is linked into -- static-linking LLVM here would give a
-# second copy of LLVM global state (e.g. the CommandLine registry) and abort at
-# load ("Option '...' registered more than once").
+# LINK_COMPONENTS policy differs by mode:
+#
+#   * Loadable .so: NONE on purpose. The plugin resolves LLVM symbols from the
+#     host at load; static-linking LLVM here would give a second copy of LLVM
+#     global state (e.g. the CommandLine registry) and abort at load
+#     ("Option '...' registered more than once").
+#
+#   * Static extension (LINK_INTO_TOOLS): declare the LLVM components this
+#     module actually references so CMake records the dependency edges and
+#     orders the archives correctly. Without this, GNU ld's single pass can see
+#     libLLVMLinker.a *before* libObfuscator.a on a tool's link line (e.g.
+#     llvm-lto2), drop it as unreferenced, then fail with an undefined
+#     reference to llvm::Linker::linkModules (used by StringEncryption /
+#     VMPass). There is only ONE LLVM copy here (the tool's), so no double
+#     global state -- these edges just fix ordering, they don't add a 2nd LLVM.
+if(LLVM_OBFUSCATOR_LINK_INTO_TOOLS)
+  set(_OBF_LINK_COMPONENTS LINK_COMPONENTS Linker)
+else()
+  set(_OBF_LINK_COMPONENTS "")
+endif()
+
 add_llvm_pass_plugin(Obfuscator
   ${OBF_SOURCES}
   ${AES_GENERATED_INC}
   ${_OBF_DEPENDS}
+  ${_OBF_LINK_COMPONENTS}
 )
 
 # The AES stub .inc must be generated before any obfuscator source that
