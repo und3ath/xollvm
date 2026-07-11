@@ -35,6 +35,11 @@ jobs:
             runner: ubuntu-24.04
     env:
       SCCACHE_IDLE_TIMEOUT: 0
+      # sccache writes to the GitHub Actions cache backend directly. It flushes
+      # incrementally DURING the build, so the cache survives even when the job
+      # later fails -- unlike actions/cache, which only saves a dir on success
+      # (so a failing build never warmed the cache -> cold every run).
+      SCCACHE_GHA_ENABLED: "true"
     steps:
       - name: Checkout xollvm
         uses: actions/checkout@v4
@@ -73,7 +78,7 @@ jobs:
 
       - name: Setup sccache (Windows)
         if: runner.os == 'Windows'
-        uses: mozilla-actions/sccache-action@v0.0.3
+        uses: mozilla-actions/sccache-action@v0.0.6
 
       - name: Install Ninja + external clang (Windows)
         if: runner.os == 'Windows'
@@ -91,24 +96,14 @@ jobs:
           max-size: 2G
           variant: ccache
 
-      - name: sccache cache (Windows)
-        if: runner.os == 'Windows'
-        uses: actions/cache@v4
-        with:
-          path: ${{ github.workspace }}/sccache
-          key: sccache-${{ matrix.os }}-release-${{ github.sha }}
-          restore-keys: sccache-${{ matrix.os }}-release-
-
-      - name: Start sccache (Windows)
+      # No manual actions/cache of a dir and no SCCACHE_DIR: the GHA backend
+      # (SCCACHE_GHA_ENABLED, set in job env) handles restore+save via the
+      # Actions cache API. sccache-action already put sccache on PATH; the
+      # compiler launcher auto-starts the server on first use.
+      - name: sccache version (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: |
-          $env:SCCACHE_DIR = "$env:GITHUB_WORKSPACE\sccache"
-          $env:SCCACHE_CACHE_SIZE = "2G"
-          echo "SCCACHE_DIR=$env:SCCACHE_DIR" >> $env:GITHUB_ENV
-          echo "SCCACHE_CACHE_SIZE=$env:SCCACHE_CACHE_SIZE" >> $env:GITHUB_ENV
-          sccache --start-server
-          sccache --version
+        run: sccache --version
 
       # ---------- Configure (Windows) ----------
       - name: Configure (Windows)
