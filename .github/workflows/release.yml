@@ -184,6 +184,16 @@ jobs:
         shell: bash
         run: cmake --build build --parallel --target install-distribution
 
+      # Save even when the build failed (always()): a partial build still warmed
+      # the sccache dir, so the next run resumes warm instead of cold. Immutable
+      # per-sha key -> never clashes with the restored cache.
+      - name: Save sccache (Windows)
+        if: always() && runner.os == 'Windows'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/sccache
+          key: sccache-windows-release-${{ github.sha }}
+
       - name: sccache stats (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
