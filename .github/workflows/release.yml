@@ -114,8 +114,6 @@ jobs:
           cd build
           cmake -G Ninja ^
             -DCMAKE_BUILD_TYPE=Release ^
-            -DCMAKE_POLICY_DEFAULT_CMP0141=NEW ^
-            -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded ^
             -DLLVM_ENABLE_PROJECTS="llvm;clang" ^
             -DLLVM_ENABLE_RTTI=ON ^
             -DLLVM_ENABLE_EH=ON ^
@@ -125,6 +123,10 @@ jobs:
             -DLLVM_INCLUDE_BENCHMARKS=OFF ^
             -DLLVM_BUILD_BENCHMARKS=OFF ^
             -DLLVM_INCLUDE_EXAMPLES=OFF ^
+            -DCLANG_INCLUDE_TESTS=OFF ^
+            -DCLANG_ENABLE_STATIC_ANALYZER=OFF ^
+            -DCLANG_ENABLE_ARCMT=OFF ^
+            -DLLVM_DISTRIBUTION_COMPONENTS="clang;clang-resource-headers;opt" ^
             -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL ^
             -DLLVM_ENABLE_ASSERTIONS=OFF ^
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON ^
@@ -154,6 +156,10 @@ jobs:
             -DLLVM_INCLUDE_BENCHMARKS=OFF \
             -DLLVM_BUILD_BENCHMARKS=OFF \
             -DLLVM_INCLUDE_EXAMPLES=OFF \
+            -DCLANG_INCLUDE_TESTS=OFF \
+            -DCLANG_ENABLE_STATIC_ANALYZER=OFF \
+            -DCLANG_ENABLE_ARCMT=OFF \
+            -DLLVM_DISTRIBUTION_COMPONENTS="clang;clang-resource-headers;opt" \
             -DLLVM_ENABLE_ASSERTIONS=OFF \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
@@ -165,9 +171,12 @@ jobs:
             ../llvm-src/llvm
 
       # ---------- Build ----------
+      # install-distribution builds ONLY the shipped components (clang, opt +
+      # their libs), not the ~40 other standalone llvm-* tools. Big time cut and
+      # it means llvm-lto2 & friends are never built.
       - name: Build
         shell: bash
-        run: cmake --build build --parallel --target install
+        run: cmake --build build --parallel --target install-distribution
 
       - name: sccache stats (Windows)
         if: runner.os == 'Windows'
