@@ -35,11 +35,15 @@ jobs:
             runner: ubuntu-24.04
     env:
       SCCACHE_IDLE_TIMEOUT: 0
-      # sccache writes to the GitHub Actions cache backend directly. It flushes
-      # incrementally DURING the build, so the cache survives even when the job
-      # later fails -- unlike actions/cache, which only saves a dir on success
-      # (so a failing build never warmed the cache -> cold every run).
-      SCCACHE_GHA_ENABLED: "true"
+      # Local-disk sccache backend. We deliberately do NOT use SCCACHE_GHA_ENABLED:
+      # sccache 0.16's GHA backend still calls GitHub's retired v1 cache API
+      # (_apis/artifactcache) and, worse, a cache read failure is FATAL at server
+      # startup -> every cl.exe dies and the whole build fails on one API hiccup.
+      # Instead sccache writes to a local dir which actions/cache persists across
+      # runs. A cache-service outage then only degrades to a cold build, never
+      # breaks it.
+      SCCACHE_DIR: ${{ github.workspace }}/sccache
+      SCCACHE_CACHE_SIZE: 5G
     steps:
       - name: Checkout xollvm
         uses: actions/checkout@v4
@@ -96,14 +100,16 @@ jobs:
           max-size: 2G
           variant: ccache
 
-      # No manual actions/cache of a dir and no SCCACHE_DIR: the GHA backend
-      # (SCCACHE_GHA_ENABLED, set in job env) handles restore+save via the
-      # Actions cache API. sccache-action already put sccache on PATH; the
-      # compiler launcher auto-starts the server on first use.
-      - name: sccache version (Windows)
+      # Restore the sccache dir from a previous run. Immutable per-sha key with a
+      # prefix restore-key: an exact miss still restores the most recent cache.
+      # A restore failure (cache-service outage) is non-fatal -> cold build.
+      - name: Restore sccache (Windows)
         if: runner.os == 'Windows'
-        shell: pwsh
-        run: sccache --version
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/sccache
+          key: sccache-windows-release-${{ github.sha }}
+          restore-keys: sccache-windows-release-
 
       # ---------- Configure (Windows) ----------
       - name: Configure (Windows)
