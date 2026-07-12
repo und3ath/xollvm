@@ -319,6 +319,15 @@ python -m http.server 8000 --directory obf_report
 
 All parameters are optional; unspecified parameters use their defaults.
 
+The structural passes below are illustrated on a single 18-block sample function
+(`obf_target`), rendered straight from the obfuscator's own CFG report
+([`utils/cfg_svg.py`](../utils/cfg_svg.py)). Each *after* graph accents the blocks the
+pass **injected** (cyan) versus the original blocks (indigo). This is the shared baseline:
+
+<p align="center">
+  <img src="img/cfg_before.svg" alt="Baseline CFG of obf_target — 18 blocks" width="360">
+</p>
+
 ---
 
 ### mba
@@ -416,6 +425,10 @@ Example:
 __attribute__((annotate("obf: split(num=6)")))
 ```
 
+<p align="center">
+  <img src="img/cfg_split.svg" alt="obf_target CFG after basic-block split — 18 to 54 blocks" width="300">
+</p>
+
 ---
 
 ### sdiff
@@ -454,7 +467,9 @@ Example:
 __attribute__((annotate("obf: bcf(prob=40,loop=1,maxBlocks=4000)")))
 ```
 
-![BCF CFG example](img/bcf.png)
+<p align="center">
+  <img src="img/cfg_bcf.svg" alt="obf_target CFG after bogus control flow — 18 to 86 blocks, 135 opaque predicates" width="320">
+</p>
 
 ---
 
@@ -487,7 +502,9 @@ Example:
 __attribute__((annotate("obf: flattening(minBlocks=3,maxBlocks=160,fakeTransitions=1,fakeCases=2)")))
 ```
 
-![Flattening CFG example](img/flattening_cfg.png)
+<p align="center">
+  <img src="img/cfg_pair_flattening.svg" alt="obf_target CFG before and after flattening — structured control flow replaced by one dispatcher" width="560">
+</p>
 
 ---
 
@@ -537,6 +554,10 @@ Example:
 ```c
 __attribute__((annotate("obf: adec(prob=70,strength=2,maxSites=25,asm=0)")))
 ```
+
+<p align="center">
+  <img src="img/cfg_adec.svg" alt="obf_target CFG after anti-decompiler hardening — 18 to 48 blocks with indirectbr trampolines" width="300">
+</p>
 
 ---
 

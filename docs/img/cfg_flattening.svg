@@ -1,0 +1,158 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 3452 554" width="3452" height="554" font-family="ui-sans-serif,-apple-system,Segoe UI,Roboto,sans-serif">
+<defs>
+<linearGradient id="g_entry" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#34d399"/><stop offset="1" stop-color="#059669"/></linearGradient>
+<linearGradient id="g_exit" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fb7185"/><stop offset="1" stop-color="#e11d48"/></linearGradient>
+<linearGradient id="g_disp" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fbbf24"/><stop offset="1" stop-color="#f59e0b"/></linearGradient>
+<linearGradient id="g_inject" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#22d3ee"/><stop offset="1" stop-color="#0891b2"/></linearGradient>
+<linearGradient id="g_keep" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#818cf8"/><stop offset="1" stop-color="#6366f1"/></linearGradient>
+<marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--edge)"/></marker>
+<marker id="arwb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#f59e0b"/></marker>
+<marker id="arwbig" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="9" markerHeight="9" orient="auto"><path d="M0,0 L12,6 L0,12 z" fill="#8b5cf6"/></marker>
+<filter id="sh" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="2" stdDeviation="2.4" flood-opacity="0.28"/></filter>
+</defs>
+<style>:root{--bg:#0d1117;--edge:#8b98a5;--fg:#e6edf3;--sub:#93a1b0;--pl:#c9d4e0;}@media (prefers-color-scheme: light){:root{--bg:#ffffff;--edge:#94a3b8;--fg:#1e293b;--sub:#64748b;--pl:#334155;}}:root[data-theme='light']{--bg:#ffffff;--edge:#94a3b8;--fg:#1e293b;--sub:#64748b;--pl:#334155;}:root[data-theme='dark']{--bg:#0d1117;--edge:#8b98a5;--fg:#e6edf3;--sub:#93a1b0;--pl:#c9d4e0;}.bt{font-weight:700;fill:#fff;}.bs{fill:#eef2ff;opacity:.82;}.ttl{fill:var(--fg);font-weight:800;}.sub{fill:var(--sub);}.lg{fill:var(--sub);}.pl{fill:var(--pl);font-weight:700;}</style>
+<rect x="0" y="0" width="3452" height="554" rx="14" fill="var(--bg)"/>
+<text class="ttl" x="40" y="44" font-size="25">After — CFG flattening</text>
+<text class="sub" x="40" y="69" font-size="14.5">18 to 26 blocks · single dispatcher</text>
+<rect x="3344" y="86" width="12" height="12" rx="3" fill="#fb7185"/>
+<text class="lg" x="3361" y="96" font-size="12.5">return</text>
+<rect x="3250" y="86" width="12" height="12" rx="3" fill="#fbbf24"/>
+<text class="lg" x="3267" y="96" font-size="12.5">dispatcher</text>
+<rect x="3170" y="86" width="12" height="12" rx="3" fill="#22d3ee"/>
+<text class="lg" x="3187" y="96" font-size="12.5">injected</text>
+<rect x="3089" y="86" width="12" height="12" rx="3" fill="#818cf8"/>
+<text class="lg" x="3106" y="96" font-size="12.5">original</text>
+<rect x="3028" y="86" width="12" height="12" rx="3" fill="#34d399"/>
+<text class="lg" x="3045" y="96" font-size="12.5">entry</text>
+<line x1="1726.0" y1="154.0" x2="1726.0" y2="228.0" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M1564.0,394.0 C1564.0,431.0 2455.0,456.2 3346.0,468.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M1564.0,394.0 C1564.0,431.0 835.0,456.2 106.0,468.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M1564.0,394.0 C1564.0,431.0 1240.0,456.2 916.0,468.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M1564.0,394.0 C1564.0,431.0 1321.0,456.2 1078.0,468.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M1564.0,394.0 C1564.0,431.0 1402.0,456.2 1240.0,468.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M1564.0,394.0 C1564.0,431.0 916.0,456.2 268.0,468.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M1564.0,394.0 C1564.0,431.0 997.0,456.2 430.0,468.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M1564.0,394.0 C1564.0,431.0 1078.0,456.2 592.0,468.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M1564.0,394.0 C1564.0,431.0 1159.0,456.2 754.0,468.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M1564.0,394.0 C1564.0,431.0 2374.0,456.2 3184.0,468.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M1564.0,394.0 C1564.0,431.0 1159.0,456.2 754.0,468.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M1564.0,394.0 C1564.0,431.0 1159.0,456.2 754.0,468.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M1726.0,394.0 C1726.0,431.0 2536.0,456.2 3346.0,468.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<line x1="1726.0" y1="394.0" x2="1726.0" y2="468.0" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M1726.0,394.0 C1726.0,431.0 1807.0,456.2 1888.0,468.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M1726.0,394.0 C1726.0,431.0 1564.0,456.2 1402.0,468.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M1726.0,394.0 C1726.0,431.0 1645.0,456.2 1564.0,468.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<line x1="1726.0" y1="394.0" x2="1726.0" y2="468.0" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<line x1="1726.0" y1="394.0" x2="1726.0" y2="468.0" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M1888.0,394.0 C1888.0,431.0 2617.0,456.2 3346.0,468.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M1888.0,394.0 C1888.0,431.0 2293.0,456.2 2698.0,468.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M1888.0,394.0 C1888.0,431.0 2374.0,456.2 2860.0,468.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M1888.0,394.0 C1888.0,431.0 2455.0,456.2 3022.0,468.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M1888.0,394.0 C1888.0,431.0 1969.0,456.2 2050.0,468.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M1888.0,394.0 C1888.0,431.0 2050.0,456.2 2212.0,468.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M1888.0,394.0 C1888.0,431.0 2131.0,456.2 2374.0,468.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M1888.0,394.0 C1888.0,431.0 2212.0,456.2 2536.0,468.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M1888.0,394.0 C1888.0,431.0 2455.0,456.2 3022.0,468.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M1888.0,394.0 C1888.0,431.0 2455.0,456.2 3022.0,468.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M1726.0,274.0 C1726.0,371.0 2536.0,437.0 3346.0,468.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M1726.0,274.0 C1726.0,311.0 1645.0,336.2 1564.0,348.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<line x1="1726.0" y1="274.0" x2="1726.0" y2="348.0" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M1726.0,274.0 C1726.0,311.0 1807.0,336.2 1888.0,348.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M106.0,468.0 C1784.0,468.0 1784.0,274.0 1726.0,274.0" fill="none" stroke="#f59e0b" stroke-width="1.5" stroke-opacity="0.85" stroke-dasharray="5 3" marker-end="url(#arwb)"/>
+<path d="M2698.0,468.0 C2756.0,468.0 2756.0,274.0 1726.0,274.0" fill="none" stroke="#f59e0b" stroke-width="1.5" stroke-opacity="0.85" stroke-dasharray="5 3" marker-end="url(#arwb)"/>
+<path d="M2860.0,468.0 C2918.0,468.0 2918.0,274.0 1726.0,274.0" fill="none" stroke="#f59e0b" stroke-width="1.5" stroke-opacity="0.85" stroke-dasharray="5 3" marker-end="url(#arwb)"/>
+<path d="M1726.0,468.0 C1784.0,468.0 1784.0,274.0 1726.0,274.0" fill="none" stroke="#f59e0b" stroke-width="1.5" stroke-opacity="0.85" stroke-dasharray="5 3" marker-end="url(#arwb)"/>
+<path d="M1888.0,468.0 C1946.0,468.0 1946.0,274.0 1726.0,274.0" fill="none" stroke="#f59e0b" stroke-width="1.5" stroke-opacity="0.85" stroke-dasharray="5 3" marker-end="url(#arwb)"/>
+<path d="M916.0,468.0 C1784.0,468.0 1784.0,274.0 1726.0,274.0" fill="none" stroke="#f59e0b" stroke-width="1.5" stroke-opacity="0.85" stroke-dasharray="5 3" marker-end="url(#arwb)"/>
+<path d="M3022.0,468.0 C3080.0,468.0 3080.0,274.0 1726.0,274.0" fill="none" stroke="#f59e0b" stroke-width="1.5" stroke-opacity="0.85" stroke-dasharray="5 3" marker-end="url(#arwb)"/>
+<path d="M1078.0,468.0 C1784.0,468.0 1784.0,274.0 1726.0,274.0" fill="none" stroke="#f59e0b" stroke-width="1.5" stroke-opacity="0.85" stroke-dasharray="5 3" marker-end="url(#arwb)"/>
+<path d="M1240.0,468.0 C1784.0,468.0 1784.0,274.0 1726.0,274.0" fill="none" stroke="#f59e0b" stroke-width="1.5" stroke-opacity="0.85" stroke-dasharray="5 3" marker-end="url(#arwb)"/>
+<path d="M1402.0,468.0 C1784.0,468.0 1784.0,274.0 1726.0,274.0" fill="none" stroke="#f59e0b" stroke-width="1.5" stroke-opacity="0.85" stroke-dasharray="5 3" marker-end="url(#arwb)"/>
+<path d="M268.0,468.0 C1784.0,468.0 1784.0,274.0 1726.0,274.0" fill="none" stroke="#f59e0b" stroke-width="1.5" stroke-opacity="0.85" stroke-dasharray="5 3" marker-end="url(#arwb)"/>
+<path d="M2050.0,468.0 C2108.0,468.0 2108.0,274.0 1726.0,274.0" fill="none" stroke="#f59e0b" stroke-width="1.5" stroke-opacity="0.85" stroke-dasharray="5 3" marker-end="url(#arwb)"/>
+<path d="M2212.0,468.0 C2270.0,468.0 2270.0,274.0 1726.0,274.0" fill="none" stroke="#f59e0b" stroke-width="1.5" stroke-opacity="0.85" stroke-dasharray="5 3" marker-end="url(#arwb)"/>
+<path d="M1564.0,468.0 C1784.0,468.0 1784.0,274.0 1726.0,274.0" fill="none" stroke="#f59e0b" stroke-width="1.5" stroke-opacity="0.85" stroke-dasharray="5 3" marker-end="url(#arwb)"/>
+<path d="M430.0,468.0 C1784.0,468.0 1784.0,274.0 1726.0,274.0" fill="none" stroke="#f59e0b" stroke-width="1.5" stroke-opacity="0.85" stroke-dasharray="5 3" marker-end="url(#arwb)"/>
+<path d="M592.0,468.0 C1784.0,468.0 1784.0,274.0 1726.0,274.0" fill="none" stroke="#f59e0b" stroke-width="1.5" stroke-opacity="0.85" stroke-dasharray="5 3" marker-end="url(#arwb)"/>
+<path d="M2374.0,468.0 C2432.0,468.0 2432.0,274.0 1726.0,274.0" fill="none" stroke="#f59e0b" stroke-width="1.5" stroke-opacity="0.85" stroke-dasharray="5 3" marker-end="url(#arwb)"/>
+<path d="M754.0,468.0 C1784.0,468.0 1784.0,274.0 1726.0,274.0" fill="none" stroke="#f59e0b" stroke-width="1.5" stroke-opacity="0.85" stroke-dasharray="5 3" marker-end="url(#arwb)"/>
+<path d="M2536.0,468.0 C2594.0,468.0 2594.0,274.0 1726.0,274.0" fill="none" stroke="#f59e0b" stroke-width="1.5" stroke-opacity="0.85" stroke-dasharray="5 3" marker-end="url(#arwb)"/>
+<g filter="url(#sh)"><rect x="1660.0" y="108.0" width="132" height="46" rx="11" fill="url(#g_entry)" stroke="#065f46" stroke-width="1.4"/><text class="bt" x="1726.0" y="125.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">entry</text>
+<text class="bs" x="1726.0" y="145.0" text-anchor="middle" font-size="10">insts 149</text>
+</g>
+<g filter="url(#sh)"><rect x="40.0" y="468.0" width="132" height="46" rx="11" fill="url(#g_keep)" stroke="#3730a3" stroke-width="1.4"/><text class="bt" x="106.0" y="485.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">if.then</text>
+<text class="bs" x="106.0" y="505.0" text-anchor="middle" font-size="10">insts 83</text>
+</g>
+<g filter="url(#sh)"><rect x="2632.0" y="468.0" width="132" height="46" rx="11" fill="url(#g_keep)" stroke="#3730a3" stroke-width="1.4"/><text class="bt" x="2698.0" y="485.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">if.end</text>
+<text class="bs" x="2698.0" y="505.0" text-anchor="middle" font-size="10">insts 100</text>
+</g>
+<g filter="url(#sh)"><rect x="2794.0" y="468.0" width="132" height="46" rx="11" fill="url(#g_keep)" stroke="#3730a3" stroke-width="1.4"/><text class="bt" x="2860.0" y="485.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">if.then11</text>
+<text class="bs" x="2860.0" y="505.0" text-anchor="middle" font-size="10">insts 84</text>
+</g>
+<g filter="url(#sh)"><rect x="1660.0" y="468.0" width="132" height="46" rx="11" fill="url(#g_keep)" stroke="#3730a3" stroke-width="1.4"/><text class="bt" x="1726.0" y="485.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">if.end12</text>
+<text class="bs" x="1726.0" y="505.0" text-anchor="middle" font-size="10">insts 95</text>
+</g>
+<g filter="url(#sh)"><rect x="1822.0" y="468.0" width="132" height="46" rx="11" fill="url(#g_keep)" stroke="#3730a3" stroke-width="1.4"/><text class="bt" x="1888.0" y="485.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">for.cond</text>
+<text class="bs" x="1888.0" y="505.0" text-anchor="middle" font-size="10">insts 94</text>
+</g>
+<g filter="url(#sh)"><rect x="850.0" y="468.0" width="132" height="46" rx="11" fill="url(#g_keep)" stroke="#3730a3" stroke-width="1.4"/><text class="bt" x="916.0" y="485.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">for.body</text>
+<text class="bs" x="916.0" y="505.0" text-anchor="middle" font-size="10">insts 103</text>
+</g>
+<g filter="url(#sh)"><rect x="2956.0" y="468.0" width="132" height="46" rx="11" fill="url(#g_keep)" stroke="#3730a3" stroke-width="1.4"/><text class="bt" x="3022.0" y="485.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">if.then24</text>
+<text class="bs" x="3022.0" y="505.0" text-anchor="middle" font-size="10">insts 84</text>
+</g>
+<g filter="url(#sh)"><rect x="1012.0" y="468.0" width="132" height="46" rx="11" fill="url(#g_keep)" stroke="#3730a3" stroke-width="1.4"/><text class="bt" x="1078.0" y="485.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">if.end26</text>
+<text class="bs" x="1078.0" y="505.0" text-anchor="middle" font-size="10">insts 96</text>
+</g>
+<g filter="url(#sh)"><rect x="1174.0" y="468.0" width="132" height="46" rx="11" fill="url(#g_keep)" stroke="#3730a3" stroke-width="1.4"/><text class="bt" x="1240.0" y="485.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">if.then30</text>
+<text class="bs" x="1240.0" y="505.0" text-anchor="middle" font-size="10">insts 84</text>
+</g>
+<g filter="url(#sh)"><rect x="1336.0" y="468.0" width="132" height="46" rx="11" fill="url(#g_keep)" stroke="#3730a3" stroke-width="1.4"/><text class="bt" x="1402.0" y="485.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">if.end32</text>
+<text class="bs" x="1402.0" y="505.0" text-anchor="middle" font-size="10">insts 82</text>
+</g>
+<g filter="url(#sh)"><rect x="202.0" y="468.0" width="132" height="46" rx="11" fill="url(#g_keep)" stroke="#3730a3" stroke-width="1.4"/><text class="bt" x="268.0" y="485.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">for.inc</text>
+<text class="bs" x="268.0" y="505.0" text-anchor="middle" font-size="10">insts 83</text>
+</g>
+<g filter="url(#sh)"><rect x="1984.0" y="468.0" width="132" height="46" rx="11" fill="url(#g_keep)" stroke="#3730a3" stroke-width="1.4"/><text class="bt" x="2050.0" y="485.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">for.end</text>
+<text class="bs" x="2050.0" y="505.0" text-anchor="middle" font-size="10">insts 102</text>
+</g>
+<g filter="url(#sh)"><rect x="2146.0" y="468.0" width="132" height="46" rx="11" fill="url(#g_inject)" stroke="#0e7490" stroke-width="1.4"/><text class="bt" x="2212.0" y="485.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">NodeBlock1</text>
+<text class="bs" x="2212.0" y="505.0" text-anchor="middle" font-size="10">insts 94</text>
+</g>
+<g filter="url(#sh)"><rect x="1498.0" y="468.0" width="132" height="46" rx="11" fill="url(#g_inject)" stroke="#0e7490" stroke-width="1.4"/><text class="bt" x="1564.0" y="485.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">NodeBlock</text>
+<text class="bs" x="1564.0" y="505.0" text-anchor="middle" font-size="10">insts 92</text>
+</g>
+<g filter="url(#sh)"><rect x="364.0" y="468.0" width="132" height="46" rx="11" fill="url(#g_inject)" stroke="#0e7490" stroke-width="1.4"/><text class="bt" x="430.0" y="485.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">LeafBlock</text>
+<text class="bs" x="430.0" y="505.0" text-anchor="middle" font-size="10">insts 92</text>
+</g>
+<g filter="url(#sh)"><rect x="526.0" y="468.0" width="132" height="46" rx="11" fill="url(#g_keep)" stroke="#3730a3" stroke-width="1.4"/><text class="bt" x="592.0" y="485.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">sw.bb</text>
+<text class="bs" x="592.0" y="505.0" text-anchor="middle" font-size="10">insts 85</text>
+</g>
+<g filter="url(#sh)"><rect x="2308.0" y="468.0" width="132" height="46" rx="11" fill="url(#g_keep)" stroke="#3730a3" stroke-width="1.4"/><text class="bt" x="2374.0" y="485.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">sw.bb45</text>
+<text class="bs" x="2374.0" y="505.0" text-anchor="middle" font-size="10">insts 83</text>
+</g>
+<g filter="url(#sh)"><rect x="688.0" y="468.0" width="132" height="46" rx="11" fill="url(#g_keep)" stroke="#3730a3" stroke-width="1.4"/><text class="bt" x="754.0" y="485.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">sw.bb47</text>
+<text class="bs" x="754.0" y="505.0" text-anchor="middle" font-size="10">insts 85</text>
+</g>
+<g filter="url(#sh)"><rect x="2470.0" y="468.0" width="132" height="46" rx="11" fill="url(#g_keep)" stroke="#3730a3" stroke-width="1.4"/><text class="bt" x="2536.0" y="485.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">sw.default</text>
+<text class="bs" x="2536.0" y="505.0" text-anchor="middle" font-size="10">insts 83</text>
+</g>
+<g filter="url(#sh)"><rect x="3118.0" y="468.0" width="132" height="46" rx="11" fill="url(#g_exit)" stroke="#881337" stroke-width="1.4"/><text class="bt" x="3184.0" y="485.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">sw.epilog</text>
+<text class="bs" x="3184.0" y="505.0" text-anchor="middle" font-size="10">insts 2</text>
+</g>
+<g filter="url(#sh)"><rect x="1491.0" y="346.0" width="146" height="50" rx="11" fill="url(#g_disp)" stroke="#92400e" stroke-width="1.4"/><text class="bt" x="1564.0" y="365.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">fla.dispatch.0</text>
+<text class="bs" x="1564.0" y="387.0" text-anchor="middle" font-size="10">insts 44</text>
+</g>
+<g filter="url(#sh)"><rect x="1660.0" y="348.0" width="132" height="46" rx="11" fill="url(#g_inject)" stroke="#0e7490" stroke-width="1.4"/><text class="bt" x="1726.0" y="365.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">fla.dispatch.1</text>
+<text class="bs" x="1726.0" y="385.0" text-anchor="middle" font-size="10">insts 46</text>
+</g>
+<g filter="url(#sh)"><rect x="1822.0" y="348.0" width="132" height="46" rx="11" fill="url(#g_inject)" stroke="#0e7490" stroke-width="1.4"/><text class="bt" x="1888.0" y="365.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">fla.dispatch.2</text>
+<text class="bs" x="1888.0" y="385.0" text-anchor="middle" font-size="10">insts 44</text>
+</g>
+<g filter="url(#sh)"><rect x="1660.0" y="228.0" width="132" height="46" rx="11" fill="url(#g_inject)" stroke="#0e7490" stroke-width="1.4"/><text class="bt" x="1726.0" y="245.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">fla.dispatch.ro…</text>
+<text class="bs" x="1726.0" y="265.0" text-anchor="middle" font-size="10">insts 40</text>
+</g>
+<g filter="url(#sh)"><rect x="3280.0" y="468.0" width="132" height="46" rx="11" fill="url(#g_exit)" stroke="#881337" stroke-width="1.4"/><text class="bt" x="3346.0" y="485.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">fla.exit.trampo…</text>
+<text class="bs" x="3346.0" y="505.0" text-anchor="middle" font-size="10">insts 1</text>
+</g>
+</svg>

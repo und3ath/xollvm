@@ -1,0 +1,232 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1290 1742" width="1290" height="1742" font-family="ui-sans-serif,-apple-system,Segoe UI,Roboto,sans-serif">
+<defs>
+<linearGradient id="g_entry" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#34d399"/><stop offset="1" stop-color="#059669"/></linearGradient>
+<linearGradient id="g_exit" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fb7185"/><stop offset="1" stop-color="#e11d48"/></linearGradient>
+<linearGradient id="g_disp" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fbbf24"/><stop offset="1" stop-color="#f59e0b"/></linearGradient>
+<linearGradient id="g_inject" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#22d3ee"/><stop offset="1" stop-color="#0891b2"/></linearGradient>
+<linearGradient id="g_keep" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#818cf8"/><stop offset="1" stop-color="#6366f1"/></linearGradient>
+<marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--edge)"/></marker>
+<marker id="arwb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#f59e0b"/></marker>
+<marker id="arwbig" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="9" markerHeight="9" orient="auto"><path d="M0,0 L12,6 L0,12 z" fill="#8b5cf6"/></marker>
+<filter id="sh" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="2" stdDeviation="2.4" flood-opacity="0.28"/></filter>
+</defs>
+<style>:root{--bg:#0d1117;--edge:#8b98a5;--fg:#e6edf3;--sub:#93a1b0;--pl:#c9d4e0;}@media (prefers-color-scheme: light){:root{--bg:#ffffff;--edge:#94a3b8;--fg:#1e293b;--sub:#64748b;--pl:#334155;}}:root[data-theme='light']{--bg:#ffffff;--edge:#94a3b8;--fg:#1e293b;--sub:#64748b;--pl:#334155;}:root[data-theme='dark']{--bg:#0d1117;--edge:#8b98a5;--fg:#e6edf3;--sub:#93a1b0;--pl:#c9d4e0;}.bt{font-weight:700;fill:#fff;}.bs{fill:#eef2ff;opacity:.82;}.ttl{fill:var(--fg);font-weight:800;}.sub{fill:var(--sub);}.lg{fill:var(--sub);}.pl{fill:var(--pl);font-weight:700;}</style>
+<rect x="0" y="0" width="1290" height="1742" rx="14" fill="var(--bg)"/>
+<text class="ttl" x="40" y="44" font-size="25">After — anti-decompiler</text>
+<text class="sub" x="40" y="69" font-size="14.5">18 to 48 blocks · indirectbr trampolines</text>
+<rect x="1182" y="86" width="12" height="12" rx="3" fill="#fb7185"/>
+<text class="lg" x="1199" y="96" font-size="12.5">return</text>
+<rect x="1088" y="86" width="12" height="12" rx="3" fill="#fbbf24"/>
+<text class="lg" x="1105" y="96" font-size="12.5">dispatcher</text>
+<rect x="1008" y="86" width="12" height="12" rx="3" fill="#22d3ee"/>
+<text class="lg" x="1025" y="96" font-size="12.5">injected</text>
+<rect x="927" y="86" width="12" height="12" rx="3" fill="#818cf8"/>
+<text class="lg" x="944" y="96" font-size="12.5">original</text>
+<rect x="866" y="86" width="12" height="12" rx="3" fill="#34d399"/>
+<text class="lg" x="883" y="96" font-size="12.5">entry</text>
+<line x1="645.0" y1="154.0" x2="645.0" y2="194.0" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<line x1="645.0" y1="154.0" x2="645.0" y2="280.0" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<line x1="645.0" y1="240.0" x2="645.0" y2="280.0" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<line x1="645.0" y1="326.0" x2="645.0" y2="366.0" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M645.0,326.0 C645.0,389.0 606.5,431.8 568.0,452.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M645.0,412.0 C645.0,432.0 606.5,445.6 568.0,452.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M645.0,412.0 C645.0,432.0 529.5,445.6 414.0,452.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M645.0,412.0 C645.0,432.0 683.5,445.6 722.0,452.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M645.0,412.0 C645.0,432.0 760.5,445.6 876.0,452.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M568.0,498.0 C568.0,518.0 606.5,531.6 645.0,538.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<line x1="645.0" y1="584.0" x2="645.0" y2="710.0" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<line x1="645.0" y1="584.0" x2="645.0" y2="624.0" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<line x1="645.0" y1="670.0" x2="645.0" y2="710.0" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M645.0,756.0 C645.0,776.0 683.5,789.6 722.0,796.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M645.0,756.0 C645.0,776.0 606.5,789.6 568.0,796.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M722.0,842.0 C722.0,905.0 645.0,947.8 568.0,968.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M722.0,842.0 C722.0,862.0 683.5,875.6 645.0,882.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M645.0,928.0 C645.0,948.0 606.5,961.6 568.0,968.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M568.0,1014.0 C568.0,1034.0 683.5,1047.6 799.0,1054.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M568.0,1014.0 C568.0,1077.0 414.0,1119.8 260.0,1140.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M799.0,1100.0 C799.0,1120.0 529.5,1133.6 260.0,1140.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M799.0,1100.0 C799.0,1120.0 837.5,1133.6 876.0,1140.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M799.0,1100.0 C799.0,1120.0 914.5,1133.6 1030.0,1140.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M799.0,1100.0 C799.0,1120.0 991.5,1133.6 1184.0,1140.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M260.0,1186.0 C260.0,1206.0 414.0,1219.6 568.0,1226.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M260.0,1186.0 C260.0,1249.0 375.5,1291.8 491.0,1312.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M568.0,1272.0 C568.0,1292.0 529.5,1305.6 491.0,1312.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M568.0,1272.0 C568.0,1292.0 452.5,1305.6 337.0,1312.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M568.0,1272.0 C568.0,1292.0 606.5,1305.6 645.0,1312.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M568.0,1272.0 C568.0,1292.0 683.5,1305.6 799.0,1312.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M491.0,1358.0 C491.0,1378.0 568.0,1391.6 645.0,1398.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<line x1="645.0" y1="1444.0" x2="645.0" y2="1570.0" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<line x1="645.0" y1="1444.0" x2="645.0" y2="1484.0" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<line x1="645.0" y1="1530.0" x2="645.0" y2="1570.0" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M645.0,1616.0 C645.0,1636.0 568.0,1649.6 491.0,1656.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<line x1="645.0" y1="1616.0" x2="645.0" y2="1656.0" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M645.0,1616.0 C645.0,1636.0 722.0,1649.6 799.0,1656.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M568.0,842.0 C568.0,862.0 760.5,875.6 953.0,882.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M568.0,842.0 C568.0,862.0 683.5,875.6 799.0,882.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M568.0,842.0 C568.0,862.0 452.5,875.6 337.0,882.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M568.0,842.0 C568.0,862.0 529.5,875.6 491.0,882.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M799.0,928.0 C799.0,1034.0 760.5,1106.1 722.0,1140.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M337.0,928.0 C337.0,991.0 414.0,1033.8 491.0,1054.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M337.0,928.0 C337.0,948.0 298.5,961.6 260.0,968.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M260.0,1014.0 C260.0,1034.0 375.5,1047.6 491.0,1054.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M491.0,1100.0 C491.0,1120.0 606.5,1133.6 722.0,1140.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M491.0,1100.0 C491.0,1120.0 298.5,1133.6 106.0,1140.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M491.0,1100.0 C491.0,1120.0 452.5,1133.6 414.0,1140.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M491.0,1100.0 C491.0,1120.0 529.5,1133.6 568.0,1140.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M491.0,928.0 C491.0,991.0 568.0,1033.8 645.0,1054.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M491.0,928.0 C491.0,948.0 452.5,961.6 414.0,968.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M414.0,1014.0 C414.0,1034.0 529.5,1047.6 645.0,1054.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M645.0,1100.0 C645.0,1120.0 683.5,1133.6 722.0,1140.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M953.0,928.0 C953.0,1034.0 837.5,1106.1 722.0,1140.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M953.0,928.0 C953.0,948.0 837.5,961.6 722.0,968.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M953.0,928.0 C953.0,948.0 914.5,961.6 876.0,968.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M953.0,928.0 C953.0,948.0 991.5,961.6 1030.0,968.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M722.0,1186.0 C722.0,1249.0 837.5,1291.8 953.0,1312.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<line x1="722.0" y1="1186.0" x2="722.0" y2="1226.0" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M722.0,1272.0 C722.0,1292.0 837.5,1305.6 953.0,1312.0" fill="none" stroke="var(--edge)" stroke-width="1.5" stroke-opacity="0.72" marker-end="url(#arw)"/>
+<path d="M645.0,1570.0 C703.0,1570.0 703.0,584.0 645.0,584.0" fill="none" stroke="#f59e0b" stroke-width="1.5" stroke-opacity="0.85" stroke-dasharray="5 3" marker-end="url(#arwb)"/>
+<g filter="url(#sh)"><rect x="579.0" y="108.0" width="132" height="46" rx="11" fill="url(#g_entry)" stroke="#065f46" stroke-width="1.4"/><text class="bt" x="645.0" y="125.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">entry</text>
+<text class="bs" x="645.0" y="145.0" text-anchor="middle" font-size="10">insts 78</text>
+</g>
+<g filter="url(#sh)"><rect x="579.0" y="194.0" width="132" height="46" rx="11" fill="url(#g_keep)" stroke="#3730a3" stroke-width="1.4"/><text class="bt" x="645.0" y="211.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">if.then</text>
+<text class="bs" x="645.0" y="231.0" text-anchor="middle" font-size="10">insts 4</text>
+</g>
+<g filter="url(#sh)"><rect x="579.0" y="280.0" width="132" height="46" rx="11" fill="url(#g_keep)" stroke="#3730a3" stroke-width="1.4"/><text class="bt" x="645.0" y="297.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">if.end</text>
+<text class="bs" x="645.0" y="317.0" text-anchor="middle" font-size="10">insts 7</text>
+</g>
+<g filter="url(#sh)"><rect x="572.0" y="364.0" width="146" height="50" rx="11" fill="url(#g_disp)" stroke="#92400e" stroke-width="1.4"/><text class="bt" x="645.0" y="383.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">if.then11</text>
+<text class="bs" x="645.0" y="405.0" text-anchor="middle" font-size="10">insts 7</text>
+</g>
+<g filter="url(#sh)"><rect x="502.0" y="452.0" width="132" height="46" rx="11" fill="url(#g_keep)" stroke="#3730a3" stroke-width="1.4"/><text class="bt" x="568.0" y="469.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">if.end12</text>
+<text class="bs" x="568.0" y="489.0" text-anchor="middle" font-size="10">insts 19</text>
+</g>
+<g filter="url(#sh)"><rect x="579.0" y="538.0" width="132" height="46" rx="11" fill="url(#g_keep)" stroke="#3730a3" stroke-width="1.4"/><text class="bt" x="645.0" y="555.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">for.cond</text>
+<text class="bs" x="645.0" y="575.0" text-anchor="middle" font-size="10">insts 103</text>
+</g>
+<g filter="url(#sh)"><rect x="579.0" y="624.0" width="132" height="46" rx="11" fill="url(#g_inject)" stroke="#0e7490" stroke-width="1.4"/><text class="bt" x="645.0" y="641.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">adec.dead262</text>
+<text class="bs" x="645.0" y="661.0" text-anchor="middle" font-size="10">insts 32</text>
+</g>
+<g filter="url(#sh)"><rect x="579.0" y="710.0" width="132" height="46" rx="11" fill="url(#g_inject)" stroke="#0e7490" stroke-width="1.4"/><text class="bt" x="645.0" y="727.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">adec.real261</text>
+<text class="bs" x="645.0" y="747.0" text-anchor="middle" font-size="10">insts 3</text>
+</g>
+<g filter="url(#sh)"><rect x="656.0" y="796.0" width="132" height="46" rx="11" fill="url(#g_keep)" stroke="#3730a3" stroke-width="1.4"/><text class="bt" x="722.0" y="813.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">for.body</text>
+<text class="bs" x="722.0" y="833.0" text-anchor="middle" font-size="10">insts 70</text>
+</g>
+<g filter="url(#sh)"><rect x="579.0" y="882.0" width="132" height="46" rx="11" fill="url(#g_inject)" stroke="#0e7490" stroke-width="1.4"/><text class="bt" x="645.0" y="899.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">adec.dead185</text>
+<text class="bs" x="645.0" y="919.0" text-anchor="middle" font-size="10">insts 32</text>
+</g>
+<g filter="url(#sh)"><rect x="502.0" y="968.0" width="132" height="46" rx="11" fill="url(#g_inject)" stroke="#0e7490" stroke-width="1.4"/><text class="bt" x="568.0" y="985.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">adec.real184</text>
+<text class="bs" x="568.0" y="1005.0" text-anchor="middle" font-size="10">insts 13</text>
+</g>
+<g filter="url(#sh)"><rect x="733.0" y="1054.0" width="132" height="46" rx="11" fill="url(#g_keep)" stroke="#3730a3" stroke-width="1.4"/><text class="bt" x="799.0" y="1071.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">if.then24</text>
+<text class="bs" x="799.0" y="1091.0" text-anchor="middle" font-size="10">insts 8</text>
+</g>
+<g filter="url(#sh)"><rect x="194.0" y="1140.0" width="132" height="46" rx="11" fill="url(#g_keep)" stroke="#3730a3" stroke-width="1.4"/><text class="bt" x="260.0" y="1157.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">if.end26</text>
+<text class="bs" x="260.0" y="1177.0" text-anchor="middle" font-size="10">insts 8</text>
+</g>
+<g filter="url(#sh)"><rect x="502.0" y="1226.0" width="132" height="46" rx="11" fill="url(#g_keep)" stroke="#3730a3" stroke-width="1.4"/><text class="bt" x="568.0" y="1243.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">if.then30</text>
+<text class="bs" x="568.0" y="1263.0" text-anchor="middle" font-size="10">insts 17</text>
+</g>
+<g filter="url(#sh)"><rect x="425.0" y="1312.0" width="132" height="46" rx="11" fill="url(#g_keep)" stroke="#3730a3" stroke-width="1.4"/><text class="bt" x="491.0" y="1329.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">if.end32</text>
+<text class="bs" x="491.0" y="1349.0" text-anchor="middle" font-size="10">insts 1</text>
+</g>
+<g filter="url(#sh)"><rect x="579.0" y="1398.0" width="132" height="46" rx="11" fill="url(#g_keep)" stroke="#3730a3" stroke-width="1.4"/><text class="bt" x="645.0" y="1415.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">for.inc</text>
+<text class="bs" x="645.0" y="1435.0" text-anchor="middle" font-size="10">insts 60</text>
+</g>
+<g filter="url(#sh)"><rect x="579.0" y="1484.0" width="132" height="46" rx="11" fill="url(#g_inject)" stroke="#0e7490" stroke-width="1.4"/><text class="bt" x="645.0" y="1501.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">adec.dead101</text>
+<text class="bs" x="645.0" y="1521.0" text-anchor="middle" font-size="10">insts 32</text>
+</g>
+<g filter="url(#sh)"><rect x="579.0" y="1570.0" width="132" height="46" rx="11" fill="url(#g_inject)" stroke="#0e7490" stroke-width="1.4"/><text class="bt" x="645.0" y="1587.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">adec.real100</text>
+<text class="bs" x="645.0" y="1607.0" text-anchor="middle" font-size="10">insts 6</text>
+</g>
+<g filter="url(#sh)"><rect x="502.0" y="796.0" width="132" height="46" rx="11" fill="url(#g_keep)" stroke="#3730a3" stroke-width="1.4"/><text class="bt" x="568.0" y="813.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">for.end</text>
+<text class="bs" x="568.0" y="833.0" text-anchor="middle" font-size="10">insts 34</text>
+</g>
+<g filter="url(#sh)"><rect x="733.0" y="882.0" width="132" height="46" rx="11" fill="url(#g_keep)" stroke="#3730a3" stroke-width="1.4"/><text class="bt" x="799.0" y="899.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">sw.bb</text>
+<text class="bs" x="799.0" y="919.0" text-anchor="middle" font-size="10">insts 6</text>
+</g>
+<g filter="url(#sh)"><rect x="271.0" y="882.0" width="132" height="46" rx="11" fill="url(#g_keep)" stroke="#3730a3" stroke-width="1.4"/><text class="bt" x="337.0" y="899.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">sw.bb45</text>
+<text class="bs" x="337.0" y="919.0" text-anchor="middle" font-size="10">insts 76</text>
+</g>
+<g filter="url(#sh)"><rect x="194.0" y="968.0" width="132" height="46" rx="11" fill="url(#g_inject)" stroke="#0e7490" stroke-width="1.4"/><text class="bt" x="260.0" y="985.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">adec.dead436</text>
+<text class="bs" x="260.0" y="1005.0" text-anchor="middle" font-size="10">insts 32</text>
+</g>
+<g filter="url(#sh)"><rect x="425.0" y="1054.0" width="132" height="46" rx="11" fill="url(#g_inject)" stroke="#0e7490" stroke-width="1.4"/><text class="bt" x="491.0" y="1071.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">adec.real435</text>
+<text class="bs" x="491.0" y="1091.0" text-anchor="middle" font-size="10">insts 6</text>
+</g>
+<g filter="url(#sh)"><rect x="425.0" y="882.0" width="132" height="46" rx="11" fill="url(#g_keep)" stroke="#3730a3" stroke-width="1.4"/><text class="bt" x="491.0" y="899.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">sw.bb47</text>
+<text class="bs" x="491.0" y="919.0" text-anchor="middle" font-size="10">insts 65</text>
+</g>
+<g filter="url(#sh)"><rect x="348.0" y="968.0" width="132" height="46" rx="11" fill="url(#g_inject)" stroke="#0e7490" stroke-width="1.4"/><text class="bt" x="414.0" y="985.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">adec.dead</text>
+<text class="bs" x="414.0" y="1005.0" text-anchor="middle" font-size="10">insts 32</text>
+</g>
+<g filter="url(#sh)"><rect x="579.0" y="1054.0" width="132" height="46" rx="11" fill="url(#g_inject)" stroke="#0e7490" stroke-width="1.4"/><text class="bt" x="645.0" y="1071.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">adec.real</text>
+<text class="bs" x="645.0" y="1091.0" text-anchor="middle" font-size="10">insts 13</text>
+</g>
+<g filter="url(#sh)"><rect x="887.0" y="882.0" width="132" height="46" rx="11" fill="url(#g_keep)" stroke="#3730a3" stroke-width="1.4"/><text class="bt" x="953.0" y="899.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">sw.default</text>
+<text class="bs" x="953.0" y="919.0" text-anchor="middle" font-size="10">insts 16</text>
+</g>
+<g filter="url(#sh)"><rect x="656.0" y="1140.0" width="132" height="46" rx="11" fill="url(#g_keep)" stroke="#3730a3" stroke-width="1.4"/><text class="bt" x="722.0" y="1157.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">sw.epilog</text>
+<text class="bs" x="722.0" y="1177.0" text-anchor="middle" font-size="10">insts 75</text>
+</g>
+<g filter="url(#sh)"><rect x="656.0" y="1226.0" width="132" height="46" rx="11" fill="url(#g_inject)" stroke="#0e7490" stroke-width="1.4"/><text class="bt" x="722.0" y="1243.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">adec.dead365</text>
+<text class="bs" x="722.0" y="1263.0" text-anchor="middle" font-size="10">insts 32</text>
+</g>
+<g filter="url(#sh)"><rect x="887.0" y="1312.0" width="132" height="46" rx="11" fill="url(#g_exit)" stroke="#881337" stroke-width="1.4"/><text class="bt" x="953.0" y="1329.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">adec.real364</text>
+<text class="bs" x="953.0" y="1349.0" text-anchor="middle" font-size="10">insts 2</text>
+</g>
+<g filter="url(#sh)"><rect x="810.0" y="1140.0" width="132" height="46" rx="11" fill="url(#g_exit)" stroke="#881337" stroke-width="1.4"/><text class="bt" x="876.0" y="1157.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">adec.ibr.decoy</text>
+<text class="bs" x="876.0" y="1177.0" text-anchor="middle" font-size="10">insts 1</text>
+</g>
+<g filter="url(#sh)"><rect x="964.0" y="1140.0" width="132" height="46" rx="11" fill="url(#g_exit)" stroke="#881337" stroke-width="1.4"/><text class="bt" x="1030.0" y="1157.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">adec.ibr.decoy4</text>
+<text class="bs" x="1030.0" y="1177.0" text-anchor="middle" font-size="10">insts 1</text>
+</g>
+<g filter="url(#sh)"><rect x="1118.0" y="1140.0" width="132" height="46" rx="11" fill="url(#g_exit)" stroke="#881337" stroke-width="1.4"/><text class="bt" x="1184.0" y="1157.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">adec.ibr.decoy5</text>
+<text class="bs" x="1184.0" y="1177.0" text-anchor="middle" font-size="10">insts 1</text>
+</g>
+<g filter="url(#sh)"><rect x="656.0" y="968.0" width="132" height="46" rx="11" fill="url(#g_exit)" stroke="#881337" stroke-width="1.4"/><text class="bt" x="722.0" y="985.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">adec.ibr.decoy8</text>
+<text class="bs" x="722.0" y="1005.0" text-anchor="middle" font-size="10">insts 1</text>
+</g>
+<g filter="url(#sh)"><rect x="810.0" y="968.0" width="132" height="46" rx="11" fill="url(#g_exit)" stroke="#881337" stroke-width="1.4"/><text class="bt" x="876.0" y="985.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">adec.ibr.decoy9</text>
+<text class="bs" x="876.0" y="1005.0" text-anchor="middle" font-size="10">insts 1</text>
+</g>
+<g filter="url(#sh)"><rect x="964.0" y="968.0" width="132" height="46" rx="11" fill="url(#g_exit)" stroke="#881337" stroke-width="1.4"/><text class="bt" x="1030.0" y="985.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">adec.ibr.decoy10</text>
+<text class="bs" x="1030.0" y="1005.0" text-anchor="middle" font-size="10">insts 1</text>
+</g>
+<g filter="url(#sh)"><rect x="348.0" y="452.0" width="132" height="46" rx="11" fill="url(#g_exit)" stroke="#881337" stroke-width="1.4"/><text class="bt" x="414.0" y="469.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">adec.ibr.decoy13</text>
+<text class="bs" x="414.0" y="489.0" text-anchor="middle" font-size="10">insts 1</text>
+</g>
+<g filter="url(#sh)"><rect x="656.0" y="452.0" width="132" height="46" rx="11" fill="url(#g_exit)" stroke="#881337" stroke-width="1.4"/><text class="bt" x="722.0" y="469.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">adec.ibr.decoy14</text>
+<text class="bs" x="722.0" y="489.0" text-anchor="middle" font-size="10">insts 1</text>
+</g>
+<g filter="url(#sh)"><rect x="810.0" y="452.0" width="132" height="46" rx="11" fill="url(#g_exit)" stroke="#881337" stroke-width="1.4"/><text class="bt" x="876.0" y="469.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">adec.ibr.decoy15</text>
+<text class="bs" x="876.0" y="489.0" text-anchor="middle" font-size="10">insts 1</text>
+</g>
+<g filter="url(#sh)"><rect x="425.0" y="1656.0" width="132" height="46" rx="11" fill="url(#g_exit)" stroke="#881337" stroke-width="1.4"/><text class="bt" x="491.0" y="1673.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">adec.ibr.decoy18</text>
+<text class="bs" x="491.0" y="1693.0" text-anchor="middle" font-size="10">insts 1</text>
+</g>
+<g filter="url(#sh)"><rect x="579.0" y="1656.0" width="132" height="46" rx="11" fill="url(#g_exit)" stroke="#881337" stroke-width="1.4"/><text class="bt" x="645.0" y="1673.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">adec.ibr.decoy19</text>
+<text class="bs" x="645.0" y="1693.0" text-anchor="middle" font-size="10">insts 1</text>
+</g>
+<g filter="url(#sh)"><rect x="733.0" y="1656.0" width="132" height="46" rx="11" fill="url(#g_exit)" stroke="#881337" stroke-width="1.4"/><text class="bt" x="799.0" y="1673.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">adec.ibr.decoy20</text>
+<text class="bs" x="799.0" y="1693.0" text-anchor="middle" font-size="10">insts 1</text>
+</g>
+<g filter="url(#sh)"><rect x="40.0" y="1140.0" width="132" height="46" rx="11" fill="url(#g_exit)" stroke="#881337" stroke-width="1.4"/><text class="bt" x="106.0" y="1157.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">adec.ibr.decoy23</text>
+<text class="bs" x="106.0" y="1177.0" text-anchor="middle" font-size="10">insts 1</text>
+</g>
+<g filter="url(#sh)"><rect x="348.0" y="1140.0" width="132" height="46" rx="11" fill="url(#g_exit)" stroke="#881337" stroke-width="1.4"/><text class="bt" x="414.0" y="1157.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">adec.ibr.decoy24</text>
+<text class="bs" x="414.0" y="1177.0" text-anchor="middle" font-size="10">insts 1</text>
+</g>
+<g filter="url(#sh)"><rect x="502.0" y="1140.0" width="132" height="46" rx="11" fill="url(#g_exit)" stroke="#881337" stroke-width="1.4"/><text class="bt" x="568.0" y="1157.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">adec.ibr.decoy25</text>
+<text class="bs" x="568.0" y="1177.0" text-anchor="middle" font-size="10">insts 1</text>
+</g>
+<g filter="url(#sh)"><rect x="271.0" y="1312.0" width="132" height="46" rx="11" fill="url(#g_exit)" stroke="#881337" stroke-width="1.4"/><text class="bt" x="337.0" y="1329.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">adec.ibr.decoy28</text>
+<text class="bs" x="337.0" y="1349.0" text-anchor="middle" font-size="10">insts 1</text>
+</g>
+<g filter="url(#sh)"><rect x="579.0" y="1312.0" width="132" height="46" rx="11" fill="url(#g_exit)" stroke="#881337" stroke-width="1.4"/><text class="bt" x="645.0" y="1329.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">adec.ibr.decoy29</text>
+<text class="bs" x="645.0" y="1349.0" text-anchor="middle" font-size="10">insts 1</text>
+</g>
+<g filter="url(#sh)"><rect x="733.0" y="1312.0" width="132" height="46" rx="11" fill="url(#g_exit)" stroke="#881337" stroke-width="1.4"/><text class="bt" x="799.0" y="1329.0" text-anchor="middle" font-size="12.5" dominant-baseline="middle">adec.ibr.decoy30</text>
+<text class="bs" x="799.0" y="1349.0" text-anchor="middle" font-size="10">insts 1</text>
+</g>
+</svg>

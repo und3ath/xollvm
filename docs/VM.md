@@ -69,6 +69,14 @@ The result: a reverse engineer sees only the interpreter loop and an opaque byte
 Recovering the original logic requires understanding the ISA, the opcode permutation map,
 the layer-2 decryption key, and (when hardened) the anti-debug and register-encryption layers.
 
+At the CFG level the effect is total: the original control-flow graph disappears entirely,
+replaced by a single thin wrapper block that hands off to the shared `__vm_engine` bytecode
+interpreter (rendered from the obfuscator's own CFG report):
+
+<p align="center">
+  <img src="img/cfg_pair_vm.svg" alt="obf_target CFG before and after virtualisation — 18 blocks collapse into one wrapper" width="560">
+</p>
+
 ---
 
 ## Architecture
