@@ -173,7 +173,7 @@ obf_reports/
 | `meta` | Seed determinism / divergence. |
 | `cpp` | C++ + EH programs (invoke/landingpad eligibility). |
 | `vm` | Virtualisation pass v7 — structural, hardening, regenc, shared engine. |
-| `strenc` | AES-128-CTR string encryption + `aes_stub` sub-pass variants. |
+| `strenc` | String encryption — AES-128-CTR (default), ChaCha20, and XOR-fallback ciphers + `aes_stub` sub-pass / keysplit variants. |
 | `edge` | Edge-case IR shapes — int widths, switches, indirectbr, recursion, struct-by-value, vectors, nested loops, tail calls. |
 | `options` | Per-option sweeps (gated by `--extended`). |
 | `matrix` | Pairwise pass-interaction stress matrix (`--extended`). |

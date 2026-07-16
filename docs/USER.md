@@ -617,20 +617,37 @@ int protected_fn(int key, int data) { return key ^ data; }
 
 String encryption — **module-only** pass. Finds string literal globals whose length meets the
 minimum threshold and encrypts them at compile time. A `.init_array` constructor decrypts
-them at process load time using AES-128-CTR (shared runtime with the `vm` pass).
+them at process load time.
+
+Three ciphers are available via the `cipher` key:
+
+- **`aes`** *(default)* — AES-128-CTR. Uses the shared `__obf_aes_ctr_decrypt` runtime
+  (the same stub the `vm` pass links when `useAES=1`).
+- **`chacha`** — ChaCha20 (tableless: 256-bit key + 96-bit nonce, no AES S-box tables in the
+  binary). Takes precedence over `aes` when both are requested.
+- **`xor`** — legacy XOR keystream. Weakest; kept as a lightweight fallback.
 
 Enabled when at least one annotated function includes `strenc(...)` anywhere in the module.
+Cipher selection is resolved **module-wide**: if any annotated function opts into a stronger
+cipher (or `keysplit`), it is applied to every encrypted string in the module.
 
 | Key | Default | Range | Meaning |
 |---|---:|---:|---|
 | `minlen` / `minLength` / `min` | 4 | 1–100 | Minimum string length to encrypt. |
+| `cipher` | `aes` | `aes`/`chacha`/`xor` | Cipher selection (see above). `chacha` wins over `aes`. |
+| `aes` | 1 | 0/1 | Shorthand toggle for the AES path. `aes=0` falls back to the XOR keystream (unless `cipher=chacha`). |
+| `keysplit` | 1 | 0/1 | AES path only — split the 176-byte AES round-key schedule across module segments so the full key never appears contiguously. |
 
 Example:
 
 ```c
-// Any function — just needs to trigger the pass
+// Default AES-128-CTR
 __attribute__((annotate("obf: strenc(minlen=6)")))
 void init(void) { puts("confidential string"); }
+
+// ChaCha20, tableless (no AES tables in the binary)
+__attribute__((annotate("obf: strenc(minlen=4,cipher=chacha)")))
+void init2(void) { puts("another secret"); }
 ```
 
 ---

@@ -199,6 +199,7 @@ Seeds cascade `base → module → function → pass`:
 
 | Document | Purpose |
 |---|---|
+| [BUILD.md](docs/BUILD.md) | Full compilation guide — static-extension toolchain (Linux/Windows), `.so` plugin, prerequisites, troubleshooting. |
 | [USER.md](docs/USER.md) | Annotation grammar, pass reference, global options, reports, troubleshooting. |
 | [DEV.md](docs/DEV.md) | Architecture: registration, annotation cache, pipeline ordering, reporting, adding passes. |
 | [VM.md](docs/VM.md) | Code-virtualisation reference — ISA, bytecode format, hardening layers. |
