@@ -64,33 +64,9 @@ namespace llvm::obf {
 		/// Returns the natural integer type for pointers (i32 or i64).
 		unsigned getPointerIntWidth() const { return PointerSizeBits; }
 
-		/// Returns true if this target supports the inline ASM anti-disassembly
-		/// gadgets used by the adec pass.
-		bool supportsAsmGadgets() const {
-			return SupportsInlineAsm && (IsX86_64 || IsX86_32 || IsAArch64);
-		}
-
 		/// Returns true if the target uses a Windows COFF object format,
 		/// which affects section naming and string encryption layout.
 		bool usesCOFFSections() const { return IsCOFF; }
-
-		/// Returns the appropriate data section name for encrypted strings.
-		StringRef getEncryptedStringSectionName() const {
-			if (IsCOFF)
-				return ".rdata$obf";
-			if (IsMachO)
-				return "__DATA,__obf_str";
-			return ".obf.str"; // ELF default
-		}
-
-		/// Returns the appropriate constructor section for runtime initializers.
-		StringRef getCtorSectionName() const {
-			if (IsCOFF)
-				return ".CRT$XCU";
-			if (IsMachO)
-				return "__DATA,__mod_init_func";
-			return ".init_array"; // ELF
-		}
 	};
 
 	// ============================================================================

@@ -56,16 +56,6 @@ cl::opt<unsigned> llvm::ObfIRBudgetMax(
 	cl::desc("Absolute IR instruction ceiling per function (0=no hard cap)"),
 	cl::init(0));
 
-cl::opt<bool> llvm::ObfStripDebug(
-	"obf-strip-debug",
-	cl::desc("Strip debug info from obfuscated functions only."),
-	cl::init(false));
-
-cl::opt<bool> llvm::ObfPreserveDebugSynthetic(
-	"obf-debug-synthetic",
-	cl::desc("Assign synthetic line-0 debug locs to obfuscated instructions."),
-	cl::init(true));
-
 cl::opt<bool> llvm::ObfShieldAuto(
 	"obf-shield-auto",
 	cl::desc("Auto-enable AntiOptimizationShield for any function with "

@@ -97,9 +97,6 @@ namespace llvm::obf {
 		/// Uses a hard-true condition (so runtime result is AlwaysTrueSide), but not obvious.
 		Value* selectHardTrue(IRBuilder<>& B, Value* AlwaysTrueSide, Value* AlwaysFalseSide);
 
-		StringRef getSlotName() const { return SlotName; }
-		Options getOptions() const { return Opts; }
-
 	private:
 		Module& M;
 		Rng& R;

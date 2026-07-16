@@ -9,9 +9,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <regex>
-#include <algorithm>
 #include <stdexcept>
-#include <ranges>
 #include <cctype>
 
 using namespace llvm;

@@ -823,7 +823,6 @@ namespace {
         bool Changed = false;
 
         LLVMContext& C = M.getContext();
-        Type* I8Ty = Type::getInt8Ty(C);
         Type* I32Ty = Type::getInt32Ty(C);
         Type* I64Ty = Type::getInt64Ty(C);
 

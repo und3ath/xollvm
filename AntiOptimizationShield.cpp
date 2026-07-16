@@ -259,7 +259,6 @@ namespace {
 					continue;
 
 				// Check for identity patterns
-				Value* LHS = BO->getOperand(0);
 				Value* RHS = BO->getOperand(1);
 				auto* CRHS = dyn_cast<ConstantInt>(RHS);
 				if (!CRHS)
@@ -291,7 +290,6 @@ namespace {
 				continue;
 
 			IRBuilder<> B(BO);
-			unsigned Op = BO->getOpcode();
 			auto* CRHS = cast<ConstantInt>(BO->getOperand(1));
 
 			Value* OpaqueRHS = nullptr;

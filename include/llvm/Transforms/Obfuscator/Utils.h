@@ -44,10 +44,6 @@ namespace llvm::obf {
 	// Best insertion point for new allocas in entry (after PHI/Dbg/Alloca group).
 	llvm::Instruction* getAllocaIP(llvm::Function& F);
 
-	// When adding a new predecessor edge to a block, clone PHI incoming values from an existing pred.
-	// This avoids: "PHINode should have one entry for each predecessor..."
-	//void clonePHIIncomingForNewPred(llvm::BasicBlock * Dest, llvm::BasicBlock * ExistingPred, llvm::BasicBlock * NewPred);
-
 	// Strategy A helper: localize reg2mem only for CFG safety (PHIs + escaping regs), then mem2reg after.
 	// - Demotes PHIs + escaping regs into fresh entry allocas.
 	// - Adds an entry initialization store (null) for each new alloca to prevent undef/UB on "imaginary" CFG paths.

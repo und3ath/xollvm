@@ -361,10 +361,6 @@ namespace {
 
 			// Layered MBA: rewrite some internal ops close to the anchor site
 			// Expression chaining: re-inflate after nonlinear injection to break linear patterns.
-			//if (InflateDepthHint >= 3 && PCtx.NoiseRng.range(100) < 60) {
-			//	NewV = inflateLinear(B, PCtx, NewV, InflateDepthHint + 1);
-			//}
-
 			if (PCtx.Cfg.enableLayered) {
 				if (auto* NI = dyn_cast<Instruction>(NewV))
 					PCtx.MBA.applyLayeredWindow(NI, /*Skip=*/BO, /*DepthHint=*/LocalDepth, PCtx.RecRng);

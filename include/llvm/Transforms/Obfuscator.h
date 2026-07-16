@@ -10,7 +10,6 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include "llvm/Transforms/Obfuscator/AntiOptimizationShield.h"
-#include "llvm/Transforms/Obfuscator/DebugInfoPreserver.h"
 #include "llvm/Transforms/Obfuscator/EHUtils.h"
 #include "llvm/Transforms/Obfuscator/FunctionObfContextAnalysis.h"
 #include "llvm/Transforms/Obfuscator/IRBudget.h"

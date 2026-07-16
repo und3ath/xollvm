@@ -86,7 +86,6 @@ namespace llvm::obf {
 		}
 
 		// Create per-function volatile anchor.
-		//IRBuilder<> EB(&*Entry.getFirstInsertionPt());
 		Instruction* AllocaIP = llvm::obf::getAllocaIP(*F);
 		if (!AllocaIP) AllocaIP = Entry.getTerminator();
 		IRBuilder<> EB(AllocaIP);
@@ -270,7 +269,6 @@ namespace llvm::obf {
 
 	// Legacy “salt^entropy” shapes (kept as families so randomHardTrue/False can mix)
 	Value* OpaqueUtils::legacySaltEntropyTrue(IRBuilder<>& B) {
-		Type* I32 = Type::getInt32Ty(B.getContext());
 		Value* S0 = loadVolatileI32(B);
 		Value* S1 = loadVolatileI32(B);
 		Value* E = loadEntropyI32(B);
@@ -354,9 +352,6 @@ namespace llvm::obf {
 	}
 
 	Value* OpaqueUtils::predMBAFalse(IRBuilder<>& B) {
-		LLVMContext& C = B.getContext();
-		Type* I32 = Type::getInt32Ty(C);
-
 		Value* T = predMBATrue(B); // builds graph; but we need a false variant from same sources
 		// Rebuild a related false by forcing mismatch through hardFalse masking:
 		//   false = (mba_true) && hardFalse  (runtime false, but not obviously constant)
@@ -454,8 +449,6 @@ namespace llvm::obf {
 	}
 
 	Value* OpaqueUtils::predHashFalse(IRBuilder<>& B) {
-		LLVMContext& C = B.getContext();
-		Type* I32 = Type::getInt32Ty(C);
 		Value* T = predHashTrue(B);
 		// Make it false via conjunction with a hardFalse (runtime false, still non-trivial)
 		return B.CreateAnd(T, hardFalse(B), "obf.hash.false");
@@ -962,7 +955,6 @@ namespace llvm::obf {
 	}
 
 	Value* OpaqueUtils::opaqueZero32(IRBuilder<>& B) {
-		Type* I32 = Type::getInt32Ty(B.getContext());
 		Value* A = loadVolatileI32(B);
 		Value* D = loadVolatileI32(B);
 		Value* Z = B.CreateXor(A, D, "obf.z32");
@@ -1000,7 +992,6 @@ namespace llvm::obf {
 	// -------------------- hardened eq/ne -----------------------------------------
 
 	Value* OpaqueUtils::hardEqI32(IRBuilder<>& B, Value* L, Value* Rhs) {
-		Type* I32 = Type::getInt32Ty(B.getContext());
 		Value* L0 = B.CreateFreeze(L, "obf.eq.l.fr");
 		Value* R0 = B.CreateFreeze(Rhs, "obf.eq.r.fr");
 

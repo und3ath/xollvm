@@ -161,8 +161,6 @@ namespace llvm
 
 static void provideStubKeyProviderBodies(Module& M) {
 	LLVMContext& C = M.getContext();
-	Type* VoidTy = Type::getVoidTy(C);
-	Type* PtrTy = PointerType::getUnqual(C);
 	Type* I8Ty = Type::getInt8Ty(C);
 	Type* I64Ty = Type::getInt64Ty(C);
 
@@ -2275,7 +2273,6 @@ void VMImpl::hardenVMEngine(Function* EF, VMEngine::SharedState* SS) {
 			{
 				// Only transform i32 and i64 integer arithmetic.
 				if (!BO->getType()->isIntegerTy()) continue;
-				unsigned Opc = BO->getOpcode();
 				if (!llvm::obf::MbaUtils::isTargetOpcode(BO->getOpcode())) continue;
 				Candidates.push_back(BO);
 			}
@@ -2290,7 +2287,7 @@ void VMImpl::hardenVMEngine(Function* EF, VMEngine::SharedState* SS) {
 		Value* V = BO->getOperand(1);
 		Value* Replacement = nullptr;
 
-		unsigned Variant = HardenRng.u32();
+		HardenRng.u32(); // preserve RNG stream (variant selector, result unused)
 		switch (BO->getOpcode()) {
 		case Instruction::Add: {
 			switch (HardenRng.range(3))
@@ -4173,7 +4170,7 @@ bool VMImpl::run() {
 	ensureCallFTyCases();
 
 	// Build per-function handler table (uses shared OpcBB with per-function permutation)
-	auto* SS = VMEngine::getSharedState(M);
+	VMEngine::getSharedState(M); // ensure shared state exists before table build
 	SharedEngineMode = true;
 	buildHandlerTable();
 	SharedEngineMode = false;

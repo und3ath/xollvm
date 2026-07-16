@@ -183,14 +183,7 @@ namespace {
 	// ============================================================================
 
 	Instruction* FlaImpl::getAllocaIP(Function& F) {
-		//BasicBlock & Entry = F.getEntryBlock();
-		//auto It = Entry.getFirstNonPHIOrDbgOrAlloca();
-		//if (It == Entry.end())
-		//	return Entry.getTerminator();
-		//return &*It;
-
 		return llvm::obf::getAllocaIP(F);
-
 	}
 
 
@@ -327,7 +320,6 @@ namespace {
 
 		Value* Base = RealBase;
 		if (PCtx.Cfg.OpaqueAliasStatePtr) {
-			//Value* HF = buildHardFalse(B, PCtx); // always false at runtime
 			Value* HF = PCtx.Opaque.hardFalse(B);
 			Base = B.CreateSelect(HF, FakeBase, RealBase, "fla.base.sel");
 		}
@@ -1337,16 +1329,13 @@ namespace {
 
 		auto* Br = dyn_cast<BranchInst>(TI);
 		if (!Br) return;  // exotic terminator — skip gracefully
-		
-		LLVMContext& LC = F.getContext();
-		Type* I32Ty = Type::getInt32Ty(LC);
+
 		IRBuilder<> B(TI);
 		if (Br->isUnconditional()) {
 			BasicBlock* Succ = Br->getSuccessor(0);
 			uint32_t Raw = Ctx.BlockIDs.lookup(Succ);
 			uint32_t Enc = encodeStateConst(Raw, Ctx);
 
-			//Value* Next = buildOpaqueI32Const(B, PCtx, Enc);
 			Value* Next = PCtx.Opaque.opaqueI32Const(B, Enc);
 			Next = applyFakeTransition(B, PCtx, Ctx, Next, { Enc });
 
@@ -1375,7 +1364,6 @@ namespace {
 
 	void FlaImpl::rewriteFlattenedBlocksRouter(Function& F, FunctionObfContext& Ctx, FlaCtx& PCtx) {
 		LLVMContext& LC = F.getContext();
-		Type* I32Ty = Type::getInt32Ty(LC);
 		for (BasicBlock* BB : Ctx.FlattenedBlocks) {
 			Instruction* TI = BB->getTerminator();
 			if (!TI)

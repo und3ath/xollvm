@@ -108,7 +108,6 @@ set(OBF_SOURCES
   VMPass_Verifier.cpp
   VMPass_Impl.cpp
   EHUtils.cpp
-  DebugInfoPreserver.cpp
   TargetCompat.cpp
   FunctionObfContextAnalysis.cpp
   ObfuscationAnnotationAnalysis.cpp
