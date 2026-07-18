@@ -23,6 +23,12 @@ cmake_install.cmake
 aes_stub.bc
 aes_stub_bc.inc
 
+# Python
+__pycache__/
+
+# Local project ruleset (not for public repo)
+CLAUDE.md
+
 # Editor / IDE
 .vs/
 .idea/
