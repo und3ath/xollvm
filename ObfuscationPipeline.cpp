@@ -9,6 +9,7 @@
 #include "llvm/Transforms/Obfuscator/SplitBasicBlock.h"
 #include "llvm/Transforms/Obfuscator/Substitution.h"
 #include "llvm/Transforms/Obfuscator/MBAObfuscation.h"
+#include "llvm/Transforms/Obfuscator/ConstantEncryption.h"
 #include "llvm/Transforms/Obfuscator/SemanticDiffusion.h"
 #include "llvm/Transforms/Obfuscator/StringEncryption.h"
 #include "llvm/Transforms/Obfuscator/VirtualCall.h"
@@ -29,6 +30,14 @@ using namespace llvm;
 std::unordered_map<std::string, ObfuscationPipeline::PassOrderingRules>
 ObfuscationPipeline::getOrderingRules() {
 	std::unordered_map<std::string, PassOrderingRules> rules;
+
+	// ConstEnc should run first (encrypts numeric constants before any
+	// other pass rewrites the arithmetic around them).
+	rules["constenc"] = PassOrderingRules{
+		{},
+		{"mba", "substitution", "vcall", "split", "sdiff", "bcf", "flattening", "shield"},
+		{}
+	};
 
 	// MBA should run early (modifies arithmetic)
 	rules["mba"] = PassOrderingRules{
@@ -353,7 +362,10 @@ void ObfuscationPipeline::buildPipeline(FunctionPassManager& FPM,
 			continue; // module pass only
 		}
 
-		if (passName == "mba") {
+		if (passName == "constenc") {
+			add(ConstEncPass(), passName, false);
+		}
+		else if (passName == "mba") {
 			add(MBAPass(), passName, false);
 		}
 		else if (passName == "substitution") {
@@ -412,7 +424,12 @@ std::vector<ObfPassEntry> ObfuscationPipeline::getPassEntries(
 		E.Name = passName;
 		E.NeedsSSARepair = false;
 
-		if (passName == "mba") {
+		if (passName == "constenc") {
+			E.Run = [](Function& F, FunctionAnalysisManager& AM) {
+				return ConstEncPass().run(F, AM);
+				};
+		}
+		else if (passName == "mba") {
 			E.Run = [](Function& F, FunctionAnalysisManager& AM) {
 				return MBAPass().run(F, AM);
 				};

@@ -114,6 +114,19 @@ namespace llvm {
 		bool validate() const;
 	};
 
+	struct ConstEncConfig {
+		bool     enable   = false;
+		int      prob     = 60;   // per-site %
+		unsigned maxSites = 200;  // per-function
+		unsigned minAbs   = 2;    // skip |C| < minAbs
+		bool     encInt   = true;
+		bool     encFP    = true;
+		bool     wrapMBA  = false;
+
+		static ConstEncConfig fromPassConfig(const PassConfig& pc);
+		bool validate() const;
+	};
+
 	struct MBAConfig {
 		bool enable = false;
 		int prob = 40;

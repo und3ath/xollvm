@@ -17,12 +17,12 @@ from ._common import Registry, TestCase
 from ._runner import TestResult, run_test  # re-export for runner.cli
 
 from . import (
-    adec, budget, edge, eh, exhaustive, extended, features, passes, seed,
-    strenc, vm,
+    adec, budget, constenc, edge, eh, exhaustive, extended, features, passes,
+    seed, strenc, vm,
 )
 
-_MODULES = (passes, features, adec, budget, seed, eh, vm, strenc, edge,
-            extended, exhaustive)
+_MODULES = (passes, features, adec, budget, seed, eh, vm, strenc, constenc,
+            edge, extended, exhaustive)
 
 
 def make_tests(*, extended: bool, exhaustive_combos: bool,

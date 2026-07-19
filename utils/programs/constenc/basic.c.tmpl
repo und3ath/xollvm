@@ -1,0 +1,37 @@
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+/* Numeric-constant-encryption leak fixture.
+
+   The four magic constants below are distinctive plaintext immediates in the
+   *base* IR. `constenc` must materialize them at runtime, so they must NOT
+   survive as literal immediates in the obfuscated IR (see gates/constenc.py
+   -> constenc_magic_encoded). `vx` is volatile so -O2 cannot fold the magics
+   away before constenc runs. All values are < 2^31 (i32) / positive (i64) so
+   LLVM prints them verbatim in decimal, keeping the grep-based gate exact. */
+__attribute__((noinline, annotate("{annotation}")))
+uint32_t obf_target(uint32_t x, uint32_t y) {{
+  volatile uint32_t vx = x;
+  uint32_t r = vx;
+  r ^= 1985229328u;   /* 0x76543210 */
+  r += 305419896u;    /* 0x12345678 */
+  r ^= 1732584193u;   /* 0x67452301 */
+  uint64_t w = (uint64_t)r * 81985529216486895ull;  /* 0x0123456789ABCDEF */
+  r += (uint32_t)(w >> 32);
+  r ^= (uint32_t)w;
+  return r + y;
+}}
+
+int main(int argc, char** argv) {{
+  uint32_t x = (argc > 1) ? (uint32_t)strtoul(argv[1], 0, 0) : 123u;
+  uint32_t y = (argc > 2) ? (uint32_t)strtoul(argv[2], 0, 0) : 456u;
+
+  uint32_t acc = 0u;
+  for (uint32_t i = 0u; i < 5u; ++i) {{
+    acc ^= obf_target(x + i, y ^ i);
+  }}
+
+  printf("R=%u\n", acc);
+  return (int)(acc & 0xFFu);
+}}

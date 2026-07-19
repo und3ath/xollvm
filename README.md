@@ -58,6 +58,7 @@ Function pipeline (order enforced by the driver via topological sort):
 
 | Pass | ID | Category | Description |
 |---|---|---|---|
+| Constant encryption | `constenc` | Expression | Encrypts scalar int/FP constant operands into runtime-opaque materializations. |
 | Mixed Boolean/Arithmetic | `mba` | Expression | Rewrites integer expressions as MBA equivalents. |
 | Instruction substitution | `substitution` | Expression | Replaces instructions with equivalent idioms. |
 | Virtual call | `vcall` | Call hardening | Virtualises direct calls via synthetic vtables. |

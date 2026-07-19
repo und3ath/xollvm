@@ -21,6 +21,7 @@ This guide explains how to **enable and tune** the obfuscation pipeline, how to 
   - [Generate the HTML viewer](#generate-the-html-viewer)
   - [Troubleshooting report rendering](#troubleshooting-report-rendering)
 - [Pass reference](#pass-reference)
+  - [constenc](#constenc)
   - [mba](#mba)
   - [substitution](#substitution)
   - [vcall](#vcall)
@@ -85,6 +86,7 @@ In C++ you can also use the attribute syntax:
 
 | Category | Canonical ID | Accepted aliases |
 |---|---|---|
+| Expression / data-flow | `constenc` | `cenc`, `numenc` |
 | Expression / data-flow | `mba` | — |
 | Expression / data-flow | `substitution` | `sub` |
 | Expression / data-flow | `sdiff` | — |
@@ -327,6 +329,41 @@ pass **injected** (cyan) versus the original blocks (indigo). This is the shared
 <p align="center">
   <img src="img/cfg_before.svg" alt="Baseline CFG of obf_target — 18 blocks" width="360">
 </p>
+
+---
+
+### constenc
+
+Numeric constant encryption for scalar integer and floating-point immediates.
+
+Replaces selected constant *operands* of instructions with runtime computations that produce
+the same value but are opaque to the optimizer — each is routed through a per-function volatile
+anchor, so `-O2` / constant-propagation cannot fold the original constant back. The complement of
+[`strenc`](#strenc) (which hides string literals): `constenc` hides the magic numbers, keys, and
+thresholds that would otherwise sit in the IR and binary as plain immediates.
+
+Runs **first** in the pipeline, so later passes (`mba`, `substitution`, `bcf`, …) further bury the
+materialization arithmetic.
+
+Constants that **must** stay literal are skipped automatically: `switch` case values, `getelementptr`
+indices, intrinsic and inline-asm immediate operands (`immarg` / `"i"`/`"n"` constraints), `phi`
+incoming values, and EH-funclet operands. Supported widths: integer `1..32` and `64`, plus `float`
+and `double`. Trivial small-magnitude constants (below `minAbs`) are left alone.
+
+| Key | Default | Range | Meaning |
+|---|---:|---:|---|
+| `prob` | 60 | 0–100 | Probability (%) to encode a candidate constant site. |
+| `maxSites` | 200 | 1–100000 | Cap on encoded constants per function (also budget-throttled). |
+| `minAbs` | 2 | ≥ 0 | Skip constants whose magnitude is below this (e.g. `0`/`1`/`-1`). |
+| `encInt` | 1 | 0/1 | Encode integer constants. |
+| `encFP` | 1 | 0/1 | Encode `float`/`double` constants. |
+| `wrapMBA` | 0 | 0/1 | Reserved: additionally MBA-wrap the materialization (not yet implemented). |
+
+Example:
+
+```c
+__attribute__((annotate("obf: constenc(prob=100,minAbs=4,encFP=0)")))
+```
 
 ---
 

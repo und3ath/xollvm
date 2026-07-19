@@ -11,7 +11,7 @@ namespace llvm::obf {
 	inline llvm::ArrayRef<llvm::StringRef> allCanonicalPassIds() {
 		static constexpr llvm::StringRef Ids[] = {
 			"flattening", "bcf", "split", "substitution", "mba", "vcall",
-			"strenc", "aes_stub", "sdiff", "adec", "shield", "vm"
+			"strenc", "aes_stub", "sdiff", "adec", "shield", "vm", "constenc"
 		};
 		return Ids;
 	}
@@ -42,6 +42,8 @@ namespace llvm::obf {
 			return "shield";
 		if (S == "vm" || S == "virtualize" || S == "virt")
 			return "vm";
+		if (S == "constenc" || S == "cenc" || S == "numenc")
+			return "constenc";
 		// Unknown stays unknown (validator will reject)
 		return S;
 	}

@@ -84,6 +84,7 @@ set(OBF_SOURCES
   Flattening.cpp
   MBAUtils.cpp
   MBAObfuscation.cpp
+  ConstantEncryption.cpp
   SemanticDiffusion.cpp
   StringEncryption.cpp
   VirtualCall.cpp

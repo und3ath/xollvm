@@ -1,0 +1,81 @@
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+/* Numeric-constant-encryption correctness fixture.
+
+   Exercises every constenc skip-list trap in one function. The differential
+   harness asserts base-vs-obf output equality across seeds/inputs; several of
+   these constructs (switch case values, inline-asm "i" operands) would fail to
+   *compile* if constenc wrongly rewrote a constant that must stay literal, and
+   others (GEP struct indices, memcpy intrinsic) would miscompile. Output must
+   be identical to the unobfuscated build for the test to pass. */
+
+struct S {{ uint32_t a; uint32_t b; uint32_t arr[4]; }};
+
+__attribute__((noinline, annotate("{annotation}")))
+uint32_t obf_target(uint32_t x, uint32_t y) {{
+  volatile uint32_t vx = x;
+  uint32_t r = vx ^ 3735928559u;   /* 0xDEADBEEF */
+
+  /* switch: case values MUST remain constant (SwitchInst skipped); the
+     per-case body constants are normal operands and get encoded. */
+  switch (y & 7u) {{
+    case 0: r += 100003u; break;
+    case 1: r ^= 200003u; break;
+    case 2: r -= 300007u; break;
+    case 3: r *= 5u;      break;
+    default: r += 42u;    break;
+  }}
+
+  /* struct + GEP: field/array indices must stay constant i32 (GEP skipped). */
+  struct S s;
+  s.a = 7u; s.b = 13u;
+  for (int i = 0; i < 4; ++i) s.arr[i] = (uint32_t)(i * 111u) + vx;
+  r += s.a + s.b + s.arr[(y & 3u)];
+
+  /* memcpy: llvm.memcpy intrinsic (all intrinsics skipped). */
+  uint32_t buf[4];
+  uint32_t src[4] = {{ 11u, 22u, 33u, 44u }};
+  memcpy(buf, src, sizeof(buf));
+  r ^= buf[(vx & 3u)];
+
+  /* phi/select of constants. */
+  uint32_t p = (vx & 1u) ? 111111u : 222222u;
+  r += p;
+
+  /* inline asm with an "i" (immediate) constraint operand: MUST stay a
+     compile-time constant or the build fails. Proves inline-asm skip. */
+#if defined(__x86_64__) || defined(__i386__)
+  {{
+    uint32_t a;
+    __asm__ ("movl %1, %0" : "=r"(a) : "i"(4242u));
+    r += a;
+  }}
+#endif
+
+  /* 64-bit constant -> materialized via lo/hi 32-bit lanes. */
+  uint64_t q = (uint64_t)vx * 1311768467463790320ull;  /* 0x123456789ABCDEF0 */
+  r ^= (uint32_t)(q >> 27);
+
+  /* float/double constants -> bitcast-based materialization (encFP). */
+  double d = 3.141592653589793 * (double)vx + 2.718281828459045;
+  float  f = 1.5f * (float)y - 0.25f;
+  r += (uint32_t)d + (uint32_t)f;
+
+  return r;
+}}
+
+int main(int argc, char** argv) {{
+  uint32_t x = (argc > 1) ? (uint32_t)strtoul(argv[1], 0, 0) : 123u;
+  uint32_t y = (argc > 2) ? (uint32_t)strtoul(argv[2], 0, 0) : 456u;
+
+  uint32_t acc = 0u;
+  for (uint32_t i = 0u; i < 5u; ++i) {{
+    acc ^= obf_target(x + i, y ^ i);
+  }}
+
+  printf("R=%u\n", acc);
+  return (int)(acc & 0xFFu);
+}}

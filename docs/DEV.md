@@ -122,6 +122,7 @@ regardless of annotation order:
 
 | Pass | Must run after | Must run before | Conflicts with |
 |---|---|---|---|
+| `constenc` | — | `mba`, `substitution`, `vcall`, `split`, `sdiff`, `bcf`, `flattening`, `shield` | — |
 | `mba` | — | `substitution` | — |
 | `substitution` | `mba` | `vcall`, `split` | — |
 | `sdiff` | `mba`, `substitution`, `vcall`, `split` | `bcf`, `flattening` | — |

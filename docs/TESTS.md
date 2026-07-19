@@ -59,7 +59,7 @@ python llvm/utils/obfuscator/obf_runtime_tests.py \
 |---|---|
 | `--list` | List all available test cases and categories, then exit. No build dir required. |
 | `--filter <pattern>` | Run only tests whose name contains the pattern. |
-| `--category <name>` | Restrict to one category: `pass`, `feature`, `adec`, `budget`, `meta`, `cpp`, `vm`, `strenc`, `edge`, `options`, `matrix`, `exhaustive`. |
+| `--category <name>` | Restrict to one category: `pass`, `feature`, `adec`, `budget`, `meta`, `cpp`, `vm`, `strenc`, `constenc`, `edge`, `options`, `matrix`, `exhaustive`. |
 | `--seeds 1,2,3` | Run each test with multiple seeds (comma-separated). |
 | `--inputs N` | Number of randomized input pairs per test (default 24). |
 | `--quick` | Reduce to 8 inputs for fast iteration. |
@@ -174,6 +174,7 @@ obf_reports/
 | `cpp` | C++ + EH programs (invoke/landingpad eligibility). |
 | `vm` | Virtualisation pass v7 — structural, hardening, regenc, shared engine. |
 | `strenc` | String encryption — AES-128-CTR (default), ChaCha20, and XOR-fallback ciphers + `aes_stub` sub-pass / keysplit variants. |
+| `constenc` | Numeric constant encryption — skip-list correctness (switch/GEP/memcpy/phi/inline-asm/i64/FP), magic-constant leak gate, combo ordering, seed determinism/divergence. |
 | `edge` | Edge-case IR shapes — int widths, switches, indirectbr, recursion, struct-by-value, vectors, nested loops, tail calls. |
 | `options` | Per-option sweeps (gated by `--extended`). |
 | `matrix` | Pairwise pass-interaction stress matrix (`--extended`). |

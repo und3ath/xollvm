@@ -526,6 +526,56 @@ bool SubstitutionConfig::validate() const {
 
 
 // ============================================================================
+// ConstEnc
+// ============================================================================
+
+ConstEncConfig ConstEncConfig::fromPassConfig(const PassConfig& pc) {
+	ConstEncConfig cfg;
+	cfg.enable = pc.enabled;
+
+	try {
+		if (pc.params.count("prob")) {
+			cfg.prob = std::stoi(pc.params.at("prob"));
+		}
+		if (pc.params.count("maxSites")) {
+			cfg.maxSites = (unsigned)std::stoul(pc.params.at("maxSites"));
+		}
+		if (pc.params.count("minAbs")) {
+			cfg.minAbs = (unsigned)std::stoul(pc.params.at("minAbs"));
+		}
+		if (pc.params.count("encInt"))
+			cfg.encInt = (pc.params.at("encInt") != "0");
+		if (pc.params.count("encFP"))
+			cfg.encFP = (pc.params.at("encFP") != "0");
+		if (pc.params.count("wrapMBA"))
+			cfg.wrapMBA = (pc.params.at("wrapMBA") != "0");
+	}
+	catch (const std::exception& e) {
+		errs() << "Error parsing ConstEnc parameters: " << e.what() << "\n";
+		cfg.enable = false;
+	}
+
+	return cfg;
+}
+
+bool ConstEncConfig::validate() const {
+	if (!enable) return true;
+
+	if (prob < 0 || prob > 100) {
+		errs() << "ConstEnc: Invalid probability " << prob << " (must be 0-100)\n";
+		return false;
+	}
+	if (maxSites > 100000) {
+		errs() << "ConstEnc: Invalid maxSites " << maxSites
+			<< " (must be 0..100000)\n";
+		return false;
+	}
+
+	return true;
+}
+
+
+// ============================================================================
 // MBA
 // ============================================================================
 
