@@ -11,6 +11,7 @@
 
 #include "llvm/Transforms/Obfuscator/AntiOptimizationShield.h"
 #include "llvm/Transforms/Obfuscator/EHUtils.h"
+#include "llvm/Transforms/Obfuscator/FunctionMerging.h"
 #include "llvm/Transforms/Obfuscator/FunctionObfContextAnalysis.h"
 #include "llvm/Transforms/Obfuscator/IRBudget.h"
 #include "llvm/Transforms/Obfuscator/ObfMetrics.h"
@@ -496,6 +497,16 @@ namespace llvm {
 
 			if (ObfVerify)
 				MPM.addPass(llvm::obf::ObfVerifyModulePass("pre"));
+
+			// fmerge runs first among module passes: it collapses annotated
+			// functions into super-functions before strenc/the function
+			// pipeline ever see them, so downstream passes (flattening, bcf,
+			// mba, vm, ...) amplify the merged bodies. It will no-op if not
+			// enabled.
+			MPM.addPass(FunctionMergingPass());
+
+			if (ObfVerify)
+				MPM.addPass(llvm::obf::ObfVerifyModulePass("fmerge"));
 
 			// Run module-only pass first (it will no-op if not enabled).
 			MPM.addPass(StringEncryptionPass());

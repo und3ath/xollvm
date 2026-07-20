@@ -759,6 +759,104 @@ bool StringEncryptionConfig::validate() const {
 }
 
 // ============================================================================
+// Function merging
+// ============================================================================
+
+FunctionMergingConfig FunctionMergingConfig::fromPassConfig(const PassConfig& pc) {
+	FunctionMergingConfig cfg;
+	cfg.enable = pc.enabled;
+
+	// Case-insensitive key handling.
+	std::unordered_map<std::string, std::string> P;
+	P.reserve(pc.params.size());
+	for (const auto& kv : pc.params) {
+		P[toLowerCopy(kv.first)] = kv.second;
+	}
+
+	auto getU = [&](const char* Key, unsigned& Dst) {
+		auto it = P.find(Key);
+		if (it == P.end()) return;
+		Dst = (unsigned)std::stoul(it->second);
+		};
+
+	auto getB = [&](const char* Key, bool& Dst) {
+		auto it = P.find(Key);
+		if (it == P.end()) return;
+		bool V;
+		if (!parseBoolLoose(it->second, V))
+			throw std::runtime_error(std::string("invalid bool for ") + Key);
+		Dst = V;
+		};
+
+	try {
+		// group=NAME  — bucket label. Stored raw (case preserved), so look it
+		// up from the original (non-lowercased) params map.
+		if (pc.params.count("group"))
+			cfg.group = pc.params.at("group");
+
+		if (P.count("chunk")) getU("chunk", cfg.chunk);
+		if (P.count("c"))     getU("c", cfg.chunk);
+
+		if (P.count("opaquesel")) getB("opaquesel", cfg.opaqueSel);
+		if (P.count("opaque"))    getB("opaque", cfg.opaqueSel);
+
+		if (P.count("dispatch")) {
+			std::string V = toLowerCopy(P.at("dispatch"));
+			if (V == "switch" || V == "indirectbr")
+				cfg.dispatch = V;
+			else
+				throw std::runtime_error("invalid dispatch '" + V + "'");
+		}
+
+		if (P.count("mininsts")) getU("mininsts", cfg.minInsts);
+		if (P.count("min"))      getU("min", cfg.minInsts);
+
+		if (P.count("maxinsts")) getU("maxinsts", cfg.maxInsts);
+		if (P.count("max"))      getU("max", cfg.maxInsts);
+
+		if (P.count("stripdbg")) getB("stripdbg", cfg.stripDbg);
+
+		if (P.count("thunkaddrtaken")) getB("thunkaddrtaken", cfg.thunkAddrTaken);
+		if (P.count("thunk"))          getB("thunk", cfg.thunkAddrTaken);
+
+		if (P.count("dissimilar")) getB("dissimilar", cfg.dissimilar);
+		if (P.count("dissim"))     getB("dissim", cfg.dissimilar);
+	}
+	catch (const std::exception& e) {
+		errs() << "Error parsing FunctionMerging parameters: " << e.what() << "\n";
+		cfg.enable = false;
+	}
+
+	return cfg;
+}
+
+bool FunctionMergingConfig::validate() const {
+	if (!enable) return true;
+
+	if (chunk < 2 || chunk > 16) {
+		errs() << "FunctionMerging: Invalid chunk " << chunk
+			<< " (must be 2..16)\n";
+		return false;
+	}
+	if (minInsts < 1) {
+		errs() << "FunctionMerging: Invalid minInsts " << minInsts
+			<< " (must be >= 1)\n";
+		return false;
+	}
+	if (maxInsts < minInsts || maxInsts > 100000) {
+		errs() << "FunctionMerging: Invalid maxInsts " << maxInsts
+			<< " (must be >= minInsts and <= 100000)\n";
+		return false;
+	}
+	if (dispatch != "switch" && dispatch != "indirectbr") {
+		errs() << "FunctionMerging: Invalid dispatch '" << dispatch << "'\n";
+		return false;
+	}
+
+	return true;
+}
+
+// ============================================================================
 // Anti-decompilation
 // ============================================================================
 

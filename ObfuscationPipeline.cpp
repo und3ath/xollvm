@@ -31,6 +31,17 @@ std::unordered_map<std::string, ObfuscationPipeline::PassOrderingRules>
 ObfuscationPipeline::getOrderingRules() {
 	std::unordered_map<std::string, PassOrderingRules> rules;
 
+	// fmerge is module-only (like strenc) and actually runs first of all,
+	// before the function pipeline (see ObfuscationModulePass in
+	// Obfuscator.h) — this entry is display/meta-order only (obf-dump-config,
+	// meta-order tests), placing it ahead of every function-level pass so the
+	// merged super-functions get amplified by everything that follows.
+	rules["fmerge"] = PassOrderingRules{
+		{},  // before: nothing (runs first)
+		{"mba","substitution","split","sdiff","bcf","vcall","flattening","shield","adec","strenc"},
+		{}
+	};
+
 	// ConstEnc should run first (encrypts numeric constants before any
 	// other pass rewrites the arithmetic around them).
 	rules["constenc"] = PassOrderingRules{
@@ -362,6 +373,10 @@ void ObfuscationPipeline::buildPipeline(FunctionPassManager& FPM,
 			continue; // module pass only
 		}
 
+		if (passName == "fmerge") {
+			continue; // module pass only
+		}
+
 		if (passName == "constenc") {
 			add(ConstEncPass(), passName, false);
 		}
@@ -418,6 +433,9 @@ std::vector<ObfPassEntry> ObfuscationPipeline::getPassEntries(
 
 	for (const auto& passName : orderedPasses) {
 		if (passName == "strenc")
+			continue; // module pass only
+
+		if (passName == "fmerge")
 			continue; // module pass only
 
 		ObfPassEntry E;

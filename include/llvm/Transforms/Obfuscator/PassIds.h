@@ -11,7 +11,8 @@ namespace llvm::obf {
 	inline llvm::ArrayRef<llvm::StringRef> allCanonicalPassIds() {
 		static constexpr llvm::StringRef Ids[] = {
 			"flattening", "bcf", "split", "substitution", "mba", "vcall",
-			"strenc", "aes_stub", "sdiff", "adec", "shield", "vm", "constenc"
+			"strenc", "aes_stub", "sdiff", "adec", "shield", "vm", "constenc",
+			"fmerge"
 		};
 		return Ids;
 	}
@@ -44,6 +45,8 @@ namespace llvm::obf {
 			return "vm";
 		if (S == "constenc" || S == "cenc" || S == "numenc")
 			return "constenc";
+		if (S == "fmerge" || S == "funcmerge" || S == "merge")
+			return "fmerge";
 		// Unknown stays unknown (validator will reject)
 		return S;
 	}
@@ -56,6 +59,6 @@ namespace llvm::obf {
 	}
 
 	inline bool isModuleOnlyPassId(llvm::StringRef Canon) {
-		return Canon == "strenc" || Canon == "aes_stub";
+		return Canon == "strenc" || Canon == "aes_stub" || Canon == "fmerge";
 	}
 } // namespace llvm::obf

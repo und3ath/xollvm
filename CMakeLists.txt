@@ -86,6 +86,7 @@ set(OBF_SOURCES
   MBAObfuscation.cpp
   ConstantEncryption.cpp
   SemanticDiffusion.cpp
+  FunctionMerging.cpp
   StringEncryption.cpp
   VirtualCall.cpp
   AntiDecompiler.cpp

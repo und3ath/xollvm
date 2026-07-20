@@ -178,6 +178,22 @@ namespace llvm {
 		bool validate() const;
 	};
 
+	struct FunctionMergingConfig {
+		bool enable = false;
+		std::string group;            // bucket label ("" -> "_auto")
+		unsigned chunk = 4;           // _auto pool chunk size (2..16)
+		bool opaqueSel = true;        // obfuscate the selector
+		std::string dispatch = "switch";
+		unsigned minInsts = 4;
+		unsigned maxInsts = 2000;
+		bool stripDbg = true;
+		bool thunkAddrTaken = false;  // merge address-taken/external funcs via a thunk
+		bool dissimilar = true;       // _auto pool groups maximally-different shapes
+
+		static FunctionMergingConfig fromPassConfig(const PassConfig& pc);
+		bool validate() const;
+	};
+
 	struct AntiDecompilerConfig {
 		bool enable = false;
 		int  prob = 50;              // probability per eligible site (0-100)

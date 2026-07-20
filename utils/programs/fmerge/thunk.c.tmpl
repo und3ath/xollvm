@@ -1,0 +1,43 @@
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+// Address-taken (stored in a function pointer) — kept as a thunk forwarding
+// into the super-function.
+__attribute__((noinline, annotate("{ann}")))
+static uint32_t fm_taken(uint32_t a, uint32_t b) {{
+  uint32_t r = a * 3u + b;
+  r ^= (r >> 5);
+  return r + 1u;
+}}
+
+// External linkage (non-static) — symbol must survive for cross-TU callers:
+// thunked too.
+__attribute__((noinline, annotate("{ann}")))
+uint32_t fm_ext(uint32_t a, uint32_t b) {{
+  uint32_t v = (a ^ b) * 5u - 7u;
+  return v ^ 0xA5A5A5A5u;
+}}
+
+// Internal, direct-call only — folded away (erased), no thunk needed.
+__attribute__((noinline, annotate("{ann}")))
+static uint32_t fm_plain(uint32_t a) {{
+  return a * a + 11u;
+}}
+
+static uint32_t (*fm_gp)(uint32_t, uint32_t) = 0;
+
+int main(int argc, char** argv) {{
+  uint32_t x = (argc > 1) ? (uint32_t)strtoul(argv[1], 0, 0) : 7u;
+  uint32_t y = (argc > 2) ? (uint32_t)strtoul(argv[2], 0, 0) : 9u;
+
+  fm_gp = fm_taken;                 // address-taken
+  uint32_t acc = 0u;
+  for (uint32_t i = 0u; i < 5u; ++i) {{
+    acc ^= fm_gp(x + i, y);         // indirect call -> thunk
+    acc += fm_ext(x, y ^ i);        // direct call to external
+    acc ^= fm_plain(x + y + i);     // direct internal -> erased
+  }}
+  printf("R=%u\n", acc);
+  return (int)(acc & 0xFFu);
+}}

@@ -1,0 +1,55 @@
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+// Group members with deliberately dissimilar shapes/signatures.
+
+__attribute__((noinline, annotate("{ann_a}")))
+static uint32_t fm_alpha1(uint32_t a, uint32_t b) {{
+  uint32_t r = a * 3u + b;
+  r ^= (r >> 5);
+  return r + 0x9E3779B9u;
+}}
+
+__attribute__((noinline, annotate("{ann_a}")))
+static uint32_t fm_alpha2(uint32_t a, uint32_t b) {{
+  uint32_t v = a ^ (b << 1);
+  v = (v * 5u) - 7u;
+  return v ^ 0xA5A5A5A5u;
+}}
+
+// void return + pointer arg
+__attribute__((noinline, annotate("{ann_a}")))
+static void fm_alpha3(uint32_t *p, uint32_t a) {{
+  *p = (*p + a) * 2654435761u;
+}}
+
+// self-recursive member
+__attribute__((noinline, annotate("{ann_b}")))
+static uint32_t fm_beta_fact(uint32_t n) {{
+  if (n <= 1u) return 1u;
+  return n * fm_beta_fact(n - 1u);
+}}
+
+__attribute__((noinline, annotate("{ann_b}")))
+static uint32_t fm_beta_sq(uint32_t x) {{
+  return x * x + 11u;
+}}
+
+int main(int argc, char** argv) {{
+  uint32_t x = (argc > 1) ? (uint32_t)strtoul(argv[1], 0, 0) : 123u;
+  uint32_t y = (argc > 2) ? (uint32_t)strtoul(argv[2], 0, 0) : 456u;
+
+  uint32_t acc = 0u;
+  uint32_t ctx = x ^ 0xDEADBEEFu;
+  for (uint32_t i = 0u; i < 5u; ++i) {{
+    acc ^= fm_alpha1(x + i, y);
+    acc += fm_alpha2(x, y ^ i);
+    fm_alpha3(&ctx, acc);
+    acc ^= fm_beta_fact((x + i) % 8u);
+    acc += fm_beta_sq(y + i);
+  }}
+  acc ^= ctx;
+  printf("R=%u\n", acc);
+  return (int)(acc & 0xFFu);
+}}

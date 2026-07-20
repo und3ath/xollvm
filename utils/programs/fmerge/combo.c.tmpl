@@ -1,0 +1,50 @@
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+// Merge-group members (all one group).
+__attribute__((noinline, annotate("{ann_g}")))
+static uint32_t fm_g1(uint32_t a, uint32_t b) {{
+  uint32_t r = a * 3u + b;
+  return r ^ (r >> 5);
+}}
+
+__attribute__((noinline, annotate("{ann_g}")))
+static uint32_t fm_g2(uint32_t a, uint32_t b) {{
+  uint32_t v = (a ^ b) * 5u - 7u;
+  return v ^ 0xA5A5A5A5u;
+}}
+
+__attribute__((noinline, annotate("{ann_g}")))
+static void fm_g3(uint32_t *p, uint32_t a) {{
+  *p = (*p + a) * 2654435761u;
+}}
+
+// Survivor: not merged, carries function-level obfuscation. fmerge runs first
+// (module pass) and leaves this alone; the function pipeline then obfuscates it.
+__attribute__((noinline, annotate("{ann_w}")))
+static uint32_t fm_worker(uint32_t x, uint32_t y) {{
+  uint32_t r = x;
+  for (uint32_t i = 0u; i < 4u; ++i) {{
+    r = (r + (i * 3u)) ^ (y << 1);
+    if ((r & 1u) == 0u) r += x; else r -= y;
+  }}
+  return r * 7u + 13u;
+}}
+
+int main(int argc, char** argv) {{
+  uint32_t x = (argc > 1) ? (uint32_t)strtoul(argv[1], 0, 0) : 123u;
+  uint32_t y = (argc > 2) ? (uint32_t)strtoul(argv[2], 0, 0) : 456u;
+
+  uint32_t acc = 0u;
+  uint32_t ctx = y ^ 0xCAFEBABEu;
+  for (uint32_t i = 0u; i < 5u; ++i) {{
+    acc ^= fm_g1(x + i, y);
+    acc += fm_g2(x, y ^ i);
+    fm_g3(&ctx, acc);
+    acc ^= fm_worker(x ^ i, y + i);
+  }}
+  acc ^= ctx;
+  printf("R=%u\n", acc);
+  return (int)(acc & 0xFFu);
+}}
