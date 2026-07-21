@@ -41,8 +41,8 @@ xollvm plugs into **stock LLVM with no LLVM source edits** — it is compiled in
 
 ## What you get
 
-- **Module entry pass**: `-passes=obfuscation` — module-only work (`strenc`) then an ordered
-  per-function pipeline.
+- **Module entry pass**: `-passes=obfuscation` — module-only work (`fmerge`, `strenc`) then an
+  ordered per-function pipeline.
 - **Annotation-driven config** with canonical pass IDs + aliases.
 - **Deterministic seeding** (module → function → pass) with an optional seed manifest.
 - **Safety rails**: instruction/block/loop-depth gating + IR-growth budgeting.
@@ -74,18 +74,23 @@ Module-only:
 
 | Pass | ID | Description |
 |---|---|---|
+| Function merging | `fmerge` | Collapses annotated functions sharing a `group=` label into one selector-dispatched super-function; runs first, so the merged bodies feed the function pipeline. |
 | String encryption | `strenc` | Encrypts string literals; enabled when any annotated function includes `strenc(...)`. |
 
 > [!NOTE]
 > `vm` conflicts with `flattening` (both restructure the CFG). Use one or the other per function.
+
+> [!NOTE]
+> `fmerge` is opt-in per function and runs before everything else — the resulting super-functions
+> are then obfuscated by the function pipeline. See [FMERGE.md](docs/FMERGE.md).
 
 ---
 
 ## How it works
 
 Annotations drive everything. A module analysis parses `llvm.global.annotations` once into a
-cached `Function → Config` map; the module entry pass then runs module-only `strenc` and a
-deterministic, budget-gated per-function pipeline.
+cached `Function → Config` map; the module entry pass then runs module-only `fmerge` and `strenc`
+and a deterministic, budget-gated per-function pipeline.
 
 <p align="center">
   <img src="docs/img/pipeline_overview.svg" alt="xollvm end-to-end pipeline: source annotations to obfuscated IR" width="820">
@@ -155,6 +160,12 @@ int heavy(int x, int y) { return x ^ y; }
 // Maximum: VM virtualisation (replaces the entire function body)
 __attribute__((annotate("obf: vm(hardened=1,useAES=1,regEncrypt=1)")))
 int secret(int key, int data) { return key ^ (data + 0xDEAD); }
+
+// Function merging: fold same-group functions into one super-function
+__attribute__((annotate("obf: fmerge(group=core,thunk=1,launder=1)")))
+int parse_hdr(const char *p, int n) { /* ... */ return n; }
+__attribute__((annotate("obf: fmerge(group=core,thunk=1,launder=1)")))
+long crc_step(long acc, int b)      { /* ... */ return acc; }
 ```
 
 C++: `[[clang::annotate("obf: mba(prob=60), bcf(prob=25)")]]`. See [`obf_annotations.h`](docs/obf_annotations.h) for the full cheat-sheet.
@@ -204,6 +215,7 @@ Seeds cascade `base → module → function → pass`:
 | [USER.md](docs/USER.md) | Annotation grammar, pass reference, global options, reports, troubleshooting. |
 | [DEV.md](docs/DEV.md) | Architecture: registration, annotation cache, pipeline ordering, reporting, adding passes. |
 | [VM.md](docs/VM.md) | Code-virtualisation reference — ISA, bytecode format, hardening layers. |
+| [FMERGE.md](docs/FMERGE.md) | Function-merging reference — grouping, memory ABI, dispatch (switch/indirectbr), thunks, selector laundering. |
 | [TESTS.md](docs/TESTS.md) | Runtime test harness, categories, debug workflows. |
 
 ---
