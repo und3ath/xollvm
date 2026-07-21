@@ -157,7 +157,7 @@ __attribute__((annotate("obf: vm(hardened=1,useAES=1,regEncrypt=1)")))
 int secret(int key, int data) { return key ^ (data + 0xDEAD); }
 ```
 
-C++: `[[clang::annotate("obf: mba(prob=60), bcf(prob=25)")]]`. See [`obf_annotations.h`](utils/) for the full cheat-sheet.
+C++: `[[clang::annotate("obf: mba(prob=60), bcf(prob=25)")]]`. See [`obf_annotations.h`](docs/obf_annotations.h) for the full cheat-sheet.
 
 ---
 

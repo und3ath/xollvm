@@ -223,19 +223,43 @@ This erases the switch structure decompilers rely on for CFG recovery. The selec
 in range by construction, so no bounds check is emitted (a corrupted selector faults — an
 acceptable anti-tamper property).
 
+### Selector laundering (`launderSel=1`)
+
+By default a call site passes its selector as an inline constant, which a constant-propagation
+or symbolic engine can trace straight to the dispatched behavior (automated devirtualization).
+With laundering, each group gets a **mutable** global holding its selectors, and every call site
+(and thunk) reads its own via a **volatile load**:
+
+```llvm
+@__obf_fmsel_G = internal global [N x i64] [ i64 <sel_0>, i64 <sel_1>, ... ]
+...
+%sel = load volatile i64, ptr getelementptr([N x i64], ptr @__obf_fmsel_G, i64 0, i64 <slot>)
+call i64 @__obf_merged_G(i64 %sel, ptr %pack, ptr %ret)
+```
+
+The volatile load on a mutable global is not foldable, so the selector value never appears in
+the instruction stream and survives `-O2` — an automated pass cannot rewrite the call back into
+a direct call to one behavior. The table is built only after the super-function verifies, so it
+needs no rollback handling.
+
 ## Roadmap
 
 - **v1** (done): internal, direct-call-only, memory ABI, `switch` dispatch, opaque selector,
   self-recursion, erase originals, transactional verify.
-- **v2** (in progress): thunks for address-taken / externally-visible functions; `indirectbr`
+- **v2** (done): thunks for address-taken / externally-visible functions; `indirectbr`
   jump-table dispatch.
 - **v2.1** (done): dissimilarity-driven `_auto` grouping — members are hashed by shape
   (return type / arity / param types / size), sorted, and round-robined across chunks so each
   super-function mixes maximally unrelated behaviors. Default on (`dissimilar=1`); only affects
   the bare-`fmerge` `_auto` pool (explicit `group=` buckets are honored verbatim).
-- **v3** (in progress): selector laundering (`launderSel=1`) — call-site selectors are read
-  from a mutable per-group global `@__obf_fmsel_<label>` via a **volatile load** instead of an
-  inline constant, so constant-propagation / symbolic devirtualization can't recover which
-  behavior a call runs. Cross-group merged→merged calls already work (a call from one group's
-  member into another's is rewritten to the other super-function). Remaining: tighter `constenc`
-  integration on the selector key.
+- **v3** (done): selector laundering (`launderSel=1`, above). Cross-group merged→merged calls
+  already work (a call from one group's member into another's is rewritten to the other
+  super-function).
+
+### Future
+
+- Encrypt the selector key / laundering-table initializer via `constenc` so the selector values
+  are not plaintext even in the data section.
+- Fake/decoy switch (or jump-table) cases to obscure the real member count.
+- Nested / recursive merging (merge super-functions into higher-level super-functions).
+- Per-call-site selector MBA in place of (or on top of) the laundering table.
