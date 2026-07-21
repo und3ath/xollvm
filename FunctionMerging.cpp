@@ -226,7 +226,8 @@ namespace {
 			if (Other.opaqueSel != Base.opaqueSel || Other.dispatch != Base.dispatch ||
 				Other.minInsts != Base.minInsts || Other.maxInsts != Base.maxInsts ||
 				Other.stripDbg != Base.stripDbg || Other.chunk != Base.chunk ||
-				Other.thunkAddrTaken != Base.thunkAddrTaken) {
+				Other.thunkAddrTaken != Base.thunkAddrTaken ||
+				Other.launderSel != Base.launderSel) {
 				errs() << "fmerge: group '" << Label << "': member '"
 					<< Members[i]->F->getName()
 					<< "' knobs disagree with lexicographically-first member '"
@@ -273,13 +274,30 @@ namespace {
 		GV->eraseFromParent();
 	}
 
+	// Produce the selector value at a call site. With a laundering table the
+	// selector is a volatile load from a mutable global (so constant-propagation
+	// devirtualization can't recover which behavior runs); otherwise it is the
+	// plain constant.
+	Value* emitSelector(IRBuilder<>& B, GlobalVariable* SelTable, ArrayType* SelTableTy,
+		size_t Slot, uint64_t ConstSel, Type* I64Ty) {
+		if (!SelTable)
+			return ConstantInt::get(I64Ty, ConstSel);
+		Value* Zero = ConstantInt::get(I64Ty, 0);
+		Value* Gep = B.CreateInBoundsGEP(SelTableTy, SelTable,
+			{ Zero, ConstantInt::get(I64Ty, (uint64_t)Slot) }, "fmerge.selslot");
+		LoadInst* L = B.CreateLoad(I64Ty, Gep, "fmerge.sel");
+		L->setVolatile(true);
+		return L;
+	}
+
 	// Replace Fi's body with a thin forwarder that packs its own arguments and
 	// tail-calls the already-verified super-function. Preserves Fi's
 	// symbol/address/signature/linkage so function pointers and external callers
 	// keep working; only the body changes (deleteBody() turns Fi into a
 	// declaration, then a fresh entry block makes it a definition again).
 	void buildThunk(Function* Fi, Function* Merged, StructType* PackTy, uint64_t Sel,
-		PointerType* PtrTy, Type* I64Ty) {
+		PointerType* PtrTy, Type* I64Ty, GlobalVariable* SelTable,
+		ArrayType* SelTableTy, size_t Slot) {
 		Type* RetTy = Fi->getReturnType();
 		// Function::deleteBody() forces ExternalLinkage as a side effect — not
 		// what we want for a still-internal-but-address-taken Fi. Save/restore
@@ -307,7 +325,7 @@ namespace {
 
 		AllocaInst* Ret = RetTy->isVoidTy() ? nullptr
 			: B.CreateAlloca(RetTy, nullptr, "fmerge.ret");
-		Value* SelV = ConstantInt::get(I64Ty, Sel);
+		Value* SelV = emitSelector(B, SelTable, SelTableTy, Slot, Sel, I64Ty);
 		Value* RetSlot = Ret ? (Value*)Ret : (Value*)ConstantPointerNull::get(PtrTy);
 
 		B.CreateCall(Merged->getFunctionType(), Merged, { SelV, Pack, RetSlot });
@@ -494,6 +512,23 @@ namespace {
 			return false;
 		}
 
+		// Optional selector-laundering table: a mutable global holding each
+		// member's selector. Built only after verify succeeds, so it needs no
+		// rollback handling. Call sites load their selector from it (volatile)
+		// instead of embedding a constant.
+		ArrayType* SelTableTy = nullptr;
+		GlobalVariable* SelTable = nullptr;
+		if (GroupCfg.launderSel) {
+			SmallVector<Constant*, 16> Sels;
+			Sels.reserve(Members.size());
+			for (size_t i = 0; i < Members.size(); ++i)
+				Sels.push_back(ConstantInt::get(I64Ty, SelForMember[i]));
+			SelTableTy = ArrayType::get(I64Ty, Members.size());
+			SelTable = new GlobalVariable(M, SelTableTy, /*isConstant=*/false,
+				GlobalValue::InternalLinkage, ConstantArray::get(SelTableTy, Sels),
+				(Twine("__obf_fmsel_") + Label).str());
+		}
+
 		// ── Call-site rewrite (per member; self-recursive / cross-member
 		// calls inside the cloned bodies are ordinary users of the original
 		// Function and get picked up here too). ──
@@ -532,7 +567,7 @@ namespace {
 					CBI.CreateStore(CI->getArgOperand(j), Gep);
 				}
 
-				Value* SelVal = ConstantInt::get(I64Ty, Sel);
+				Value* SelVal = emitSelector(CBI, SelTable, SelTableTy, i, Sel, I64Ty);
 				Value* RetSlotVal = RetAlloca
 					? (Value*)RetAlloca
 					: (Value*)ConstantPointerNull::get(PtrTy);
@@ -567,7 +602,7 @@ namespace {
 				// Keep the symbol alive as a forwarder instead of erasing it.
 				// The annotation is still pruned (MergedOut) but Fi is NOT queued
 				// in DeadOut — it must not be erased.
-				buildThunk(Fi, Merged, PackTy, Sel, PtrTy, I64Ty);
+				buildThunk(Fi, Merged, PackTy, Sel, PtrTy, I64Ty, SelTable, SelTableTy, i);
 				MergedOut.push_back(Fi);
 				++FMergeThunksBuilt;
 			}

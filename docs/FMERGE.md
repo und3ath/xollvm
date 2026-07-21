@@ -163,6 +163,7 @@ shuffle uses the seeded `Rng`.
 | `maxInsts`  | group     | 2000     | skip functions larger than this (blow-up bound)     |
 | `stripDbg`  | group     | 1        | drop debug info on merged bodies                    |
 | `thunkAddrTaken` | group | 0        | merge address-taken / external funcs via a thunk (v2) |
+| `launderSel` | group    | 0        | load call-site selectors from a mutable global (v3, defeats devirt) |
 
 Only `group=` is inherently per-function. Group-wide knobs are resolved from the
 lexicographically-first member's params; a warning is emitted if members disagree. Global CLI
@@ -232,5 +233,9 @@ acceptable anti-tamper property).
   (return type / arity / param types / size), sorted, and round-robined across chunks so each
   super-function mixes maximally unrelated behaviors. Default on (`dissimilar=1`); only affects
   the bare-`fmerge` `_auto` pool (explicit `group=` buckets are honored verbatim).
-- **v3**: cross-group merged→merged calls; selector laundering through globals; tighter
-  `constenc` integration on the selector key.
+- **v3** (in progress): selector laundering (`launderSel=1`) — call-site selectors are read
+  from a mutable per-group global `@__obf_fmsel_<label>` via a **volatile load** instead of an
+  inline constant, so constant-propagation / symbolic devirtualization can't recover which
+  behavior a call runs. Cross-group merged→merged calls already work (a call from one group's
+  member into another's is rewritten to the other super-function). Remaining: tighter `constenc`
+  integration on the selector key.

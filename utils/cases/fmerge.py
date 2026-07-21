@@ -22,6 +22,8 @@ _IBR_A = "obf: fmerge(group=alpha,dispatch=indirectbr)"
 _IBR_B = "obf: fmerge(group=beta,dispatch=indirectbr)"
 _THUNK = "obf: fmerge(group=tk,thunk=1)"
 _THUNK_IBR = "obf: fmerge(group=tk,thunk=1,dispatch=indirectbr)"
+_LAUNDER_A = "obf: fmerge(group=alpha,launder=1)"
+_LAUNDER_B = "obf: fmerge(group=beta,launder=1)"
 
 
 def register(reg: Registry, **_opts) -> None:
@@ -92,4 +94,13 @@ def register(reg: Registry, **_opts) -> None:
             ann_override=_THUNK_IBR,
             src_override=programs.render("fmerge.thunk", ann=_THUNK_IBR),
             gates=["fmerge_merged", "fmerge_thunk", "fmerge_indirectbr"],
+            no_config_check=True, category="fmerge")
+
+    # ── selector laundering: call-site selectors come from a mutable global
+    #    via a volatile load. Correctness holds under -O2 (the load resists
+    #    devirtualization). ────────────────────────────────────────────────
+    reg.add(name="fmerge_launder", passes=["fmerge"],
+            ann_override=_LAUNDER_A,
+            src_override=programs.render("fmerge.basic", ann_a=_LAUNDER_A, ann_b=_LAUNDER_B),
+            gates=["fmerge_merged", "fmerge_folded", "fmerge_launder"],
             no_config_check=True, category="fmerge")

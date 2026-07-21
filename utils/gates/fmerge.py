@@ -61,6 +61,17 @@ def fmerge_thunk(obf_ir: str) -> Optional[str]:
             "not a thunk")
 
 
+@register("fmerge_launder", needs="ir")
+def fmerge_launder(obf_ir: str) -> Optional[str]:
+    """Selector laundering: a __obf_fmsel_ selector-table global must exist and
+    call sites must read it with a volatile load (no inline constant selector)."""
+    if "@__obf_fmsel_" not in obf_ir:
+        return "no @__obf_fmsel_ selector table — laundering not emitted"
+    if "load volatile" not in obf_ir:
+        return "selector table present but no volatile load at call sites"
+    return None
+
+
 @register("fmerge_indirectbr", needs="ir")
 def fmerge_indirectbr(obf_ir: str) -> Optional[str]:
     """Indirectbr dispatch: a __obf_fmjt_ jump table + an indirectbr must be

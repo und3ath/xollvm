@@ -821,6 +821,9 @@ FunctionMergingConfig FunctionMergingConfig::fromPassConfig(const PassConfig& pc
 
 		if (P.count("dissimilar")) getB("dissimilar", cfg.dissimilar);
 		if (P.count("dissim"))     getB("dissim", cfg.dissimilar);
+
+		if (P.count("laundersel")) getB("laundersel", cfg.launderSel);
+		if (P.count("launder"))    getB("launder", cfg.launderSel);
 	}
 	catch (const std::exception& e) {
 		errs() << "Error parsing FunctionMerging parameters: " << e.what() << "\n";

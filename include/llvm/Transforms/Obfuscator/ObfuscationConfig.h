@@ -189,6 +189,7 @@ namespace llvm {
 		bool stripDbg = true;
 		bool thunkAddrTaken = false;  // merge address-taken/external funcs via a thunk
 		bool dissimilar = true;       // _auto pool groups maximally-different shapes
+		bool launderSel = false;      // load call-site selectors from a global (defeats devirt)
 
 		static FunctionMergingConfig fromPassConfig(const PassConfig& pc);
 		bool validate() const;
