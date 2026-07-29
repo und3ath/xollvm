@@ -191,3 +191,17 @@ def vm_lazydecrypt_ctor_no_bulk_decrypt(ir: str) -> Optional[str]:
             return ("vm ctor calls __obf_aes_ctr_decrypt — whole-buffer "
                      "decrypt was not removed under lazyDecrypt")
     return None
+
+
+@register("vm_constinstream_no_plaintext_magic")
+def vm_constinstream_no_plaintext_magic(ir: str) -> Optional[str]:
+    # programs/vm/switch_dispatch.c.tmpl's obf_classify() case 1 does
+    # `r = x ^ 0xABCDu;` (43981 decimal). Without constInStream this i32
+    # constant is seeded by a plaintext `store i32 43981, ...` in vm.entry /
+    # the shared-engine wrapper's preload section. Under constInStream it is
+    # folded into the encrypted bytecode stream as an OP_LOADI prologue
+    # instruction instead, so the plaintext store must be gone.
+    if re.search(r"store i32 43981\b", ir):
+        return ("plaintext `store i32 43981` (0xABCDu) found — constant "
+                 "was not moved into the bytecode stream")
+    return None

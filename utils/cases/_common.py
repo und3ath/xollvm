@@ -129,6 +129,12 @@ EXTRA_ANN: Dict[str, str] = {
     "vm_v7_lazydecrypt":          "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,useAES=1,lazyDecrypt=1)",
     "vm_v7_lazydecrypt_hardened": "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,useAES=1,lazyDecrypt=1,hardened=1,encDispatch=1,handlerVariants=3)",
     "vm_v7_lazydecrypt_multi_fn": "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,useAES=1,lazyDecrypt=1)",
+    # constInStream: int/i64/fp constants move from plaintext wrapper preload
+    # stores into the encrypted bytecode stream as an OP_LOADI*/OP_LOADI_F
+    # prologue. Requires encBytecode (default on here).
+    "vm_v7_constinstream":          "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,constInStream=1)",
+    "vm_v7_constinstream_lazy":     "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,useAES=1,constInStream=1,lazyDecrypt=1)",
+    "vm_v7_constinstream_hardened": "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,constInStream=1,hardened=1)",
 }
 
 

@@ -48,6 +48,7 @@ VMPassConfig VMPassConfig::fromPassConfig(const PassConfig& PC) {
 	getBool("obfRegIdx", Cfg.obfRegIdx);
 	getBool("encDispatch", Cfg.encDispatch);
 	getBool("encBytecode", Cfg.encBytecode);
+	getBool("constInStream", Cfg.constInStream);
 	getBool("strongBytecode", Cfg.strongBytecode);
 	getBool("blindTargets", Cfg.blindTargets);
 	getBool("useAES", Cfg.useAES);
@@ -69,6 +70,9 @@ VMPassConfig VMPassConfig::fromPassConfig(const PassConfig& PC) {
 	if (!Cfg.useAES) Cfg.lazyDecrypt = false;
 	// hardened requires encBytecode (meaningful only with encrypted bytecode)
 	if (!Cfg.encBytecode) Cfg.hardened = false;
+	// constInStream requires encBytecode — the whole point is to hide constants
+	// in the encrypted stream instead of plaintext wrapper stores.
+	if (!Cfg.encBytecode) Cfg.constInStream = false;
 	// hardened implies regEncrypt — encrypted registers complement MBA-obscured handlers
 	if (Cfg.hardened) Cfg.regEncrypt = true;
 	if (Cfg.handlerVariants < 1) Cfg.handlerVariants = 1;

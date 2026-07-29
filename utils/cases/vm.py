@@ -63,6 +63,13 @@ VM_LAZYDECRYPT_GATES = [
     "vm_lazydecrypt_keystream_call", "vm_lazydecrypt_ctor_no_bulk_decrypt",
 ]
 
+# constInStream: int/i64/fp constants are seeded from an encrypted-bytecode
+# prologue instead of plaintext wrapper stores. Feature-active gate: a known
+# magic constant used by the switch-dispatch program must not appear as a
+# plaintext `store i32 <magic>` immediate once constInStream moves it into
+# the bytecode stream.
+VM_CONSTINSTREAM_GATES = ["vm_constinstream_no_plaintext_magic"]
+
 _DBG = ["--obf-debug", "--obf-verbose"]
 
 
@@ -441,3 +448,49 @@ def register(reg: Registry, **_opts) -> None:
             ann_override=vm_v7_lazy,
             extra_opts=_DBG, gates=["seed_determinism"], category="vm",
             src_override=render_vm_v7_multi_function_program(vm_v7_lazy))
+
+    # ── constInStream (int/i64/fp constants seeded from the encrypted
+    # bytecode stream instead of plaintext wrapper preload stores) ──
+    # Correctness gate: differential output proves the OP_LOADI/OP_LOADI64/
+    # OP_LOADI_F prologue seeds the same values the plaintext stores used to.
+    # Feature-active gate (VM_CONSTINSTREAM_GATES, switch case only) proves
+    # the constant actually left the plaintext wrapper.
+    vm_v7_cis = ann_extra("vm_v7_constinstream")
+    vm_v7_cis_lazy = ann_extra("vm_v7_constinstream_lazy")
+
+    reg.add(name="rt_vm_v7_constinstream_multi_fn", passes=["vm"],
+            ann_override=vm_v7_cis,
+            gates=VM_SHARED_GATES + [
+                "vm_enc_ctor", "vm_callees_global", "vm_multi_fn_shared",
+            ],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_multi_fn_aes_program(vm_v7_cis))
+    reg.add(name="rt_vm_v7_constinstream_i64", passes=["vm"],
+            ann_override=vm_v7_cis,
+            gates=VM_CORE_GATES + ["vm_enc_ctor"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_i64_ops_program(vm_v7_cis))
+    reg.add(name="rt_vm_v7_constinstream_float", passes=["vm"],
+            ann_override=vm_v7_cis,
+            gates=VM_FLOAT_GATES,
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_float_basic_program(vm_v7_cis))
+    reg.add(name="rt_vm_v7_constinstream_switch", passes=["vm"],
+            ann_override=vm_v7_cis,
+            gates=VM_SHARED_GATES + VM_CONSTINSTREAM_GATES + [
+                "vm_enc_ctor", "vm_multi_fn_shared",
+            ],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_switch_dispatch_program(vm_v7_cis))
+    reg.add(name="rt_vm_v7_constinstream_determinism", passes=["vm"],
+            ann_override=vm_v7_cis,
+            extra_opts=_DBG, gates=["seed_determinism"], category="vm",
+            src_override=render_vm_v7_multi_function_program(vm_v7_cis))
+    # constInStream + lazyDecrypt combined: proves the encrypted-stream
+    # prologue round-trips correctly under the per-instruction fetch-time AES
+    # keystream path too, not just the whole-buffer-decrypt-in-ctor path.
+    reg.add(name="rt_vm_v7_constinstream_lazy", passes=["vm"],
+            ann_override=vm_v7_cis_lazy,
+            gates=VM_CORE_GATES + VM_AES_GATES + VM_LAZYDECRYPT_GATES,
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_i64_ops_program(vm_v7_cis_lazy))

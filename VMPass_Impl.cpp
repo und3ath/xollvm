@@ -438,7 +438,19 @@ void VMImpl::buildHandlersIntArith() {
 		B.CreateBr(Dispatch);
 	}
 
-	//  OP_MOVR  [dst:u8 src:u8] -- vreg[dst] = vreg[src] 
+	//  OP_LOADI64  [dst64:u8 imm:i64le] -- vreg64[dst] = imm
+	{
+		auto B = mkOpc(OP_LOADI64, "loadi64");
+		Value* IP = advIP(B, 9);
+		Value* Dst = rdVR64(B, IP, 0, "vm.li64.d");
+		Value* Lo = B.CreateZExt(rdU32(B, IP, 1, "vm.li64.lo"), I64Ty, "vm.li64.loz");
+		Value* Hi = B.CreateZExt(rdU32(B, IP, 5, "vm.li64.hi"), I64Ty, "vm.li64.hiz");
+		Value* Imm = B.CreateOr(Lo, B.CreateShl(Hi, B.getInt64(32), "vm.li64.hs"), "vm.li64.v");
+		stVR64(B, Dst, Imm);
+		B.CreateBr(Dispatch);
+	}
+
+	//  OP_MOVR  [dst:u8 src:u8] -- vreg[dst] = vreg[src]
 	{
 		auto B = mkOpc(OP_MOVR, "movr");
 		Value* IP = advIP(B, 2);
@@ -4189,6 +4201,7 @@ bool VMImpl::run() {
 	// Compile function body to bytecode
 	E.setOpcodeMap(&OpMap);
 	E.setTargetBlind(SaltConst, BlindTargets);
+	E.setConstInStream(ConstInStream);
 	if (!E.run(F, CTSalt, M.getDataLayout())) {
 		FailReason = E.getFailReason().str();
 		if (FailReason.empty()) FailReason = "bytecode emission failed";

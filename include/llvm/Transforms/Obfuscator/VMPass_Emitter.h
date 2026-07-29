@@ -108,6 +108,11 @@ namespace llvm {
 		/// per-function salt (SaltConst); on is the blindTargets knob.
 		void setTargetBlind(uint32_t saltFull, bool on) { SaltFull = saltFull; BlindTargets = on; }
 
+		/// Move int/i64/fp constant slot seeding into the encrypted bytecode
+		/// stream (as an OP_LOADI*/OP_LOADI64/OP_LOADI_F prologue) instead of
+		/// leaving it for the wrapper's plaintext preload stores.
+		void setConstInStream(bool on) { ConstInStream = on; }
+
 		/// Compile F into bytecode.  Salt is the CTSalt byte used to XOR register
 		/// index bytes (0 when obfRegIdx is disabled).
 		/// Returns false on failure; FailReason is populated.
@@ -119,6 +124,7 @@ namespace llvm {
 		const VMOpcodeMap* OpMap = nullptr;
 		uint32_t           SaltFull = 0;
 		bool               BlindTargets = false;
+		bool               ConstInStream = false;
 
 		// P3-B: compile-time branch-target blinding key mix. Mirrors VMImpl::tgtKeyIR
 		// op-for-op; distinct constants from ksByteCT (Layer-1 keystream) so the two
@@ -316,6 +322,7 @@ namespace llvm {
 		void     b8(uint8_t v) { BC.push_back(v); }
 		void     u16(uint16_t v) { b8(v & 0xFF); b8(v >> 8); }
 		void     u32(uint32_t v) { b8(v); b8(v >> 8); b8(v >> 16); b8(v >> 24); }
+		void     u64(uint64_t v) { u32((uint32_t)v); u32((uint32_t)(v >> 32)); }
 		uint32_t ip() const { return (uint32_t)BC.size(); }
 
 		/// [Step 01.1] Emit an f64 value as 8 bytes, little-endian IEEE-754.

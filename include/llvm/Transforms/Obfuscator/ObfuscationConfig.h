@@ -284,6 +284,7 @@ namespace llvm {
 		bool     encDispatch = true;   // P2: encrypted per-opcode->handler index indirection (on)
 		unsigned handlerVariants = 3;  // K handler-body variants per opcode (P1 polymorphism on; 1 = off)
 		bool     encBytecode = true;  // LCG-encrypt bytecode stream at load time
+		bool     constInStream = false;  // move int/i64/fp constants into the encrypted bytecode stream instead of plaintext wrapper stores (requires encBytecode)
 		bool     strongBytecode = true;   // P3: per-position PRF Layer-1 keystream (on; 0 = weak salt^index)
 		bool     blindTargets = true;   // P3: XOR-blind bytecode branch targets (on)
 		bool     hardened = false;    // MBA + opaque predicates on handler blocks

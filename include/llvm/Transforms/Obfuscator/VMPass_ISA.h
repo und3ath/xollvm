@@ -104,7 +104,9 @@ namespace llvm {
 		OP_FCAST_FV64 = 0x30,  // freg  → vreg64 i64 : FK_FPTOSI64 / FK_FPTOUI64
 		OP_FCAST_VF = 0x31,  // vreg  i32  → freg  : FK_SITOFP   / FK_UITOFP
 		OP_FCAST_V64F = 0x32,  // vreg64 i64 → freg  : FK_SI64TOFP / FK_UI64TOFP
-		OP_COUNT = 0x33
+
+		OP_LOADI64 = 0x33,  // dst64:u8 imm:i64le  (1+1+8 = 10 bytes)
+		OP_COUNT = 0x34
 	};
 
 	// Max handler-body variants per opcode in the shared __vm_engine.

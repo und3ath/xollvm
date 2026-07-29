@@ -251,6 +251,7 @@ namespace llvm {
 		const bool     LazyDecrypt;  // AES layer removed per-instruction at fetch instead of whole-buffer in ctor
 		const bool     RegEncrypt;   // XOR-encrypt register values at rest
 		const bool     RollingRegKey; // P4-C: evolve per-slot reg XOR key on each store
+		const bool     ConstInStream; // move int/i64/fp constants into the encrypted bytecode stream instead of plaintext wrapper stores
 		const uint32_t SaltConst;    // full 32-bit salt stored in vm.salt
 		const uint8_t  CTSalt;       // low byte of SaltConst must match deobf() key
 		const uint64_t EncSeed;      // seed for bytecode LCG encryption
@@ -383,6 +384,7 @@ namespace llvm {
 			LazyDecrypt(VCtx.Cfg.lazyDecrypt),
 			RegEncrypt(VCtx.Cfg.regEncrypt),
 			RollingRegKey(VCtx.Cfg.rollingRegKey),
+			ConstInStream(VCtx.Cfg.constInStream),
 			SaltConst(VCtx.R.u32()),
 			// IMPORTANT: indices are only XOR-salted when obfRegIdx=1.
 			// When obfRegIdx=0, emitter must write raw indices (CTSalt=0).
