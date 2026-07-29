@@ -166,6 +166,21 @@ namespace llvm {
 		/// The well-known symbol name for the shared engine function.
 		static constexpr const char* kVMEngineName = "__vm_engine";
 
+		/// Nested-VM: a second, distinct engine function for builds whose
+		/// OP_BINOP calls into the inner-virtualized helper. Keeping it a
+		/// SEPARATE function (not a runtime flag on the same engine) is what
+		/// breaks the recursion: the helper is itself virtualized against
+		/// EngineId 0 (the plain engine, computes OP_BINOP inline), so its
+		/// bytecode's own binops never call back into the helper.
+		static constexpr const char* kVMEngineNestName = "__vm_engine.nest";
+
+		/// EngineId 0 -> plain engine ("__vm_engine"), 1 -> nesting engine
+		/// ("__vm_engine.nest"). Selects both the SharedState instance and the
+		/// emitted Function's symbol name.
+		inline const char* vmEngineName(unsigned EngineId) {
+			return EngineId ? kVMEngineNestName : kVMEngineName;
+		}
+
 		/// Return the canonical FunctionType for vm_engine. `lazy` appends the
 		/// trailing lazyctx ptr param; false (default) reproduces the exact
 		/// pre-existing signature.
@@ -186,8 +201,9 @@ namespace llvm {
 			return FunctionType::get(VoidTy, ArrayRef<Type*>(Params, N), /*isVarArg=*/false);
 		}
 
-		/// Get or create the module-level @__vm_engine function.
-		Function* getOrBuildVMEngine(Module& M);
+		/// Get or create the module-level @__vm_engine (EngineId 0) or
+		/// @__vm_engine.nest (EngineId 1) function.
+		Function* getOrBuildVMEngine(Module& M, unsigned EngineId = 0);
 
 		/// Check whether the vm_engine body has been populated with handlers.
 		bool isEnginePopulated(Function* VMEngineFunc);
@@ -227,10 +243,19 @@ namespace llvm {
 
 			bool Populated = false;
 			unsigned FTyCountAtLastBuild = 0;
+
+			// nested-VM: set once the module-level pure opcode helper(s) have been
+			// inner-virtualized, so later functions' VMImpl::run() don't repeat it.
+			bool NestedHelpersBuilt = false;
 		};
 
-		SharedState* getSharedState(Module& M);
-		void releaseSharedState(Module& M);
+		// EngineId selects which of the (at most two) shared engines' state to
+		// return: 0 = plain engine, 1 = nesting engine. Each is built/populated
+		// independently (independent "first function" guard), so a nesting-
+		// engine build never observes or perturbs the plain engine's state
+		// and vice versa. Default (0) reproduces pre-nestedVM behavior exactly.
+		SharedState* getSharedState(Module& M, unsigned EngineId = 0);
+		void releaseSharedState(Module& M);  // clears state for every EngineId of M
 
 	} // namespace VMEngine
 
@@ -240,8 +265,15 @@ namespace llvm {
 		Module& M;
 		LLVMContext& Ctx;
 		Type* I8Ty, * I16Ty, * I32Ty, * I64Ty, * PtrTy;
-		Type* DoubleTy;  // f64 type — used by float handler builders 
-		VMCtx& VCtx;
+		Type* DoubleTy;  // f64 type — used by float handler builders
+
+		// Config + RNG are owned/referenced directly (not via VMCtx) so VMImpl
+		// can be constructed either from the annotation-driven VMCtx (normal
+		// per-function path) or from an explicit config+RNG (synthetic helper
+		// functions authored by the pass itself, e.g. nested-VM helpers, which
+		// have no FunctionObfContext / annotation of their own).
+		VMPassConfig Cfg;
+		obf::Rng&    R;
 
 		const bool     ObfRegIdx;
 		const bool     EncBytecode;
@@ -252,6 +284,15 @@ namespace llvm {
 		const bool     RegEncrypt;   // XOR-encrypt register values at rest
 		const bool     RollingRegKey; // P4-C: evolve per-slot reg XOR key on each store
 		const bool     ConstInStream; // move int/i64/fp constants into the encrypted bytecode stream instead of plaintext wrapper stores
+		const bool     NestedVM;         // eligible opcode handlers call a second VM-interpreted layer instead of computing inline
+		const unsigned NestedVMOpcodes;  // 0 = all eligible opcodes nest; N>0 = first N in the fixed order (see opcodeNests)
+		const bool     NestedVMHardened; // reserved: harden the inner VM layer
+		// Which shared engine this build targets: 0 = plain ("__vm_engine"),
+		// 1 = nesting ("__vm_engine.nest"). Derived from NestedVM, not an
+		// independent knob -- a nestedVM=true build always wants the engine
+		// whose OP_BINOP calls the helper; nestedVM=false (including the
+		// helper's own inner-virtualization) always wants the plain one.
+		const unsigned EngineId;
 		const uint32_t SaltConst;    // full 32-bit salt stored in vm.salt
 		const uint8_t  CTSalt;       // low byte of SaltConst must match deobf() key
 		const uint64_t EncSeed;      // seed for bytecode LCG encryption
@@ -367,44 +408,55 @@ namespace llvm {
 			unsigned P = 1; while (P < N) P <<= 1; return P;
 		}
 
-		explicit VMImpl(VMCtx& VCtx)
-			: F(VCtx.F), M(*VCtx.F.getParent()), Ctx(VCtx.F.getContext()),
+		// Normal per-function path: config + RNG come from the annotation-driven
+		// VMCtx (FunctionObfContextAnalysis-backed).
+		explicit VMImpl(VMCtx& VCtx) : VMImpl(VCtx.F, VCtx.Cfg, VCtx.R) {}
+
+		// Synthetic-function path: explicit config + RNG, no VMCtx/annotation.
+		// Used to virtualize compiler-authored helper functions (e.g. nested-VM
+		// opcode helpers) that have no FunctionObfContext of their own.
+		VMImpl(Function& Fn, const VMPassConfig& CfgIn, obf::Rng& RIn)
+			: F(Fn), M(*Fn.getParent()), Ctx(Fn.getContext()),
 			I8Ty(Type::getInt8Ty(Ctx)),
 			I16Ty(Type::getInt16Ty(Ctx)),
 			I32Ty(Type::getInt32Ty(Ctx)),
 			I64Ty(Type::getInt64Ty(Ctx)),
 			PtrTy(PointerType::getUnqual(Ctx)),
 			DoubleTy(Type::getDoubleTy(Ctx)),
-			VCtx(VCtx),
-			ObfRegIdx(VCtx.Cfg.obfRegIdx),
-			EncBytecode(VCtx.Cfg.encBytecode),
-			StrongBC(VCtx.Cfg.strongBytecode),
-			BlindTargets(VCtx.Cfg.blindTargets),
-			UseAES(VCtx.Cfg.useAES),
-			LazyDecrypt(VCtx.Cfg.lazyDecrypt),
-			RegEncrypt(VCtx.Cfg.regEncrypt),
-			RollingRegKey(VCtx.Cfg.rollingRegKey),
-			ConstInStream(VCtx.Cfg.constInStream),
-			SaltConst(VCtx.R.u32()),
+			Cfg(CfgIn), R(RIn),
+			ObfRegIdx(Cfg.obfRegIdx),
+			EncBytecode(Cfg.encBytecode),
+			StrongBC(Cfg.strongBytecode),
+			BlindTargets(Cfg.blindTargets),
+			UseAES(Cfg.useAES),
+			LazyDecrypt(Cfg.lazyDecrypt),
+			RegEncrypt(Cfg.regEncrypt),
+			RollingRegKey(Cfg.rollingRegKey),
+			ConstInStream(Cfg.constInStream),
+			NestedVM(Cfg.nestedVM),
+			NestedVMOpcodes(Cfg.nestedVMOpcodes),
+			NestedVMHardened(Cfg.nestedVMHardened),
+			EngineId(NestedVM ? 1u : 0u),
+			SaltConst(R.u32()),
 			// IMPORTANT: indices are only XOR-salted when obfRegIdx=1.
 			// When obfRegIdx=0, emitter must write raw indices (CTSalt=0).
 			CTSalt(ObfRegIdx ? (uint8_t)(SaltConst & 0xFF) : 0),
-			EncSeed(((uint64_t)VCtx.R.u32() << 32) | VCtx.R.u32()) {
+			EncSeed(((uint64_t)R.u32() << 32) | R.u32()) {
 			// per-function opcode permutation for handler-table/bytecode diversity.
-			OpMap.initPermuted(VCtx.R);
+			OpMap.initPermuted(R);
 
 			//  generate per-function AES key material from RNG
 			if (UseAES) {
 				for (int i = 0; i < 4; i++) {
-					uint32_t W = VCtx.R.u32();
+					uint32_t W = R.u32();
 					AESKey[i * 4 + 0] = (W >> 0) & 0xFF;
 					AESKey[i * 4 + 1] = (W >> 8) & 0xFF;
 					AESKey[i * 4 + 2] = (W >> 16) & 0xFF;
 					AESKey[i * 4 + 3] = (W >> 24) & 0xFF;
 				}
 				vm_aes::keyExpand(AESKey, AESExpandedKey);
-				for (auto& b : AESRKMask) b = (uint8_t)(VCtx.R.u32() & 0xFF);
-				AESNonce = ((uint64_t)VCtx.R.u32() << 32) | VCtx.R.u32();
+				for (auto& b : AESRKMask) b = (uint8_t)(R.u32() & 0xFF);
+				AESNonce = ((uint64_t)R.u32() << 32) | R.u32();
 			}
 		}
 
@@ -701,6 +753,23 @@ namespace llvm {
 		void buildHandlersFloat();     // all float/freg opcodes (LOADI_F .. FNEG)
 		void buildHandlersCall();      // CALL_VOID CALL_INT CALL_PTR CALL_INT64 CALL_F
 		void buildCall2(VMOp Opc, const Twine& Name, llvm::VMEngine::RetKind2 RK);
+
+		// Nested-VM: pure per-opcode helpers authored fresh + virtualized via a
+		// second VMImpl over the shared engine. See VMPass_Impl.cpp for the
+		// sequencing rationale.
+		Function* getOrCreateNestedBinopHelper();   // idempotent per module
+		Function* getOrCreateNestedBinop64Helper(); // idempotent per module
+		Function* getOrCreateNestedIcmpHelper();    // idempotent per module
+		Function* getOrCreateNestedIcmp64Helper();  // idempotent per module
+		Function* getOrCreateNestedFcmpHelper();    // idempotent per module
+		Function* getOrCreateNestedCastHelper();    // idempotent per module
+		Function* getOrCreateNestedHelper(VMOp Op); // dispatches to the per-opcode authors above
+		void virtualizeNestedHelpersOnce();         // idempotent per module
+
+		// Whether Op is nested for this build: NestedVM is on, and (Op is
+		// within the first NestedVMOpcodes entries of the fixed nesting order,
+		// or NestedVMOpcodes==0, meaning "all eligible opcodes nest").
+		bool opcodeNests(VMOp Op) const;
 
 		void buildHandlerTable();   // must come AFTER buildOpcodeHandlers
 		void buildDispatch();       // must come AFTER buildHandlerTable

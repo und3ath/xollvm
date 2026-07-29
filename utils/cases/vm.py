@@ -70,6 +70,13 @@ VM_LAZYDECRYPT_GATES = [
 # the bytecode stream.
 VM_CONSTINSTREAM_GATES = ["vm_constinstream_no_plaintext_magic"]
 
+# nestedVM: BINOP/BINOP64/ICMP/ICMP64/FCMP/CAST handlers call a pure helper
+# that is itself virtualized against a second shared engine. Feature-active
+# gate: both @__vm_engine and @__vm_engine.nest must exist, and at least one
+# @__vm_h_* helper must have been virtualized (its own handler table targets
+# the plain @__vm_engine). Off: neither .nest nor __vm_h_* present.
+VM_NESTEDVM_GATES = ["vm_nestedvm_dual_engine", "vm_nestedvm_helper_virtualized"]
+
 _DBG = ["--obf-debug", "--obf-verbose"]
 
 
@@ -494,3 +501,44 @@ def register(reg: Registry, **_opts) -> None:
             gates=VM_CORE_GATES + VM_AES_GATES + VM_LAZYDECRYPT_GATES,
             extra_opts=_DBG, category="vm",
             src_override=render_vm_v7_i64_ops_program(vm_v7_cis_lazy))
+
+    # ── nestedVM (BINOP/BINOP64/ICMP/ICMP64/FCMP/CAST call an inner-
+    # virtualized pure helper instead of computing inline) ──
+    # Correctness gate: differential output proves the depth-2 interpretation
+    # (outer engine -> helper call -> plain engine) computes the exact same
+    # result as the inline handlers. Feature-active gate (VM_NESTEDVM_GATES)
+    # proves both engines exist and the helper was actually virtualized.
+    vm_v7_nvm = ann_extra("vm_v7_nestedvm")
+    vm_v7_nvm_multi = ann_extra("vm_v7_nestedvm_multi_fn")
+
+    reg.add(name="rt_vm_v7_nestedvm_multi_fn", passes=["vm"],
+            ann_override=vm_v7_nvm_multi,
+            gates=VM_SHARED_GATES + VM_NESTEDVM_GATES + [
+                "vm_enc_ctor", "vm_callees_global", "vm_multi_fn_shared",
+            ],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_multi_fn_aes_program(vm_v7_nvm_multi))
+    reg.add(name="rt_vm_v7_nestedvm_i64", passes=["vm"],
+            ann_override=vm_v7_nvm,
+            gates=VM_CORE_GATES + VM_NESTEDVM_GATES + ["vm_enc_ctor"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_i64_ops_program(vm_v7_nvm))
+    reg.add(name="rt_vm_v7_nestedvm_float", passes=["vm"],
+            ann_override=vm_v7_nvm,
+            gates=VM_FLOAT_GATES + VM_NESTEDVM_GATES,
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_float_fcmp_program(vm_v7_nvm))
+    reg.add(name="rt_vm_v7_nestedvm_cast", passes=["vm"],
+            ann_override=vm_v7_nvm,
+            gates=VM_CORE_GATES + VM_NESTEDVM_GATES + ["vm_enc_ctor"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_casts_program(vm_v7_nvm))
+    reg.add(name="rt_vm_v7_nestedvm_cmp", passes=["vm"],
+            ann_override=vm_v7_nvm,
+            gates=VM_CORE_GATES + VM_NESTEDVM_GATES + ["vm_enc_ctor"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_icmp_program(vm_v7_nvm))
+    reg.add(name="rt_vm_v7_nestedvm_determinism", passes=["vm"],
+            ann_override=vm_v7_nvm,
+            extra_opts=_DBG, gates=["seed_determinism"], category="vm",
+            src_override=render_vm_v7_multi_function_program(vm_v7_nvm))

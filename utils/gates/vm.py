@@ -205,3 +205,34 @@ def vm_constinstream_no_plaintext_magic(ir: str) -> Optional[str]:
         return ("plaintext `store i32 43981` (0xABCDu) found — constant "
                  "was not moved into the bytecode stream")
     return None
+
+
+@register("vm_nestedvm_dual_engine")
+def vm_nestedvm_dual_engine(ir: str) -> Optional[str]:
+    # nestedVM=1 targets EngineId 1 (@__vm_engine.nest) for the outer
+    # function, but every nested-eligible opcode's helper is always
+    # inner-virtualized against EngineId 0 (@__vm_engine, plain) -- that's
+    # what makes the depth-2 recursion terminate. Both engine functions must
+    # therefore be present. Off (nestedVM=0) only @__vm_engine exists.
+    if "@__vm_engine(" not in ir:
+        return "@__vm_engine (plain) not found"
+    if "@__vm_engine.nest(" not in ir:
+        return "@__vm_engine.nest not found — nesting engine was not built"
+    return None
+
+
+@register("vm_nestedvm_helper_virtualized")
+def vm_nestedvm_helper_virtualized(ir: str) -> Optional[str]:
+    # At least one __vm_h_* pure helper (see kNestedHelperOrder in
+    # VMPass_Impl.cpp) must exist, and it must itself have been virtualized
+    # -- proven by its own per-function handler table (<name>.vm.ophandlers)
+    # referencing the PLAIN engine (@__vm_engine), never the nesting engine.
+    # A helper left un-virtualized would still be a bare switch/ret function
+    # with no .vm.ophandlers table at all.
+    tables = re.findall(r"@__vm_h_\w+\.vm\.ophandlers\s*=[^\n]*", ir)
+    if not tables:
+        return "no @__vm_h_*.vm.ophandlers table found — nested helper was never virtualized"
+    for line in tables:
+        if re.search(r"@__vm_engine(?!\.nest)\b", line):
+            return None
+    return "nested helper handler table(s) do not reference the plain @__vm_engine"

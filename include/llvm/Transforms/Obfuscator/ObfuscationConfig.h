@@ -297,6 +297,12 @@ namespace llvm {
 		unsigned adDispatchInterval = 64;    // check every N fetch iterations (power of 2)
 		unsigned adHandlerProb = 10;    // % of handlers to trap (0-100)
 
+		bool     nestedVM = false;         // virtualize eligible opcode handlers with a second VM layer
+		// 0 = all eligible opcodes nest; N>0 = only the first N, in the fixed
+		// order BINOP, BINOP64, ICMP, ICMP64, FCMP, CAST (see kNestedHelperOrder).
+		unsigned nestedVMOpcodes = 0;
+		bool     nestedVMHardened = false; // reserved: harden the inner VM layer (unused)
+
 		static VMPassConfig fromPassConfig(const PassConfig& PC);
 		bool validate() const;
 	};

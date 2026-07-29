@@ -135,6 +135,12 @@ EXTRA_ANN: Dict[str, str] = {
     "vm_v7_constinstream":          "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,constInStream=1)",
     "vm_v7_constinstream_lazy":     "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,useAES=1,constInStream=1,lazyDecrypt=1)",
     "vm_v7_constinstream_hardened": "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,constInStream=1,hardened=1)",
+    # nestedVM: BINOP/BINOP64/ICMP/ICMP64/FCMP/CAST handlers call a pure
+    # helper that is itself virtualized against a second shared engine
+    # (@__vm_engine.nest), depth-2 interpretation for those opcodes.
+    "vm_v7_nestedvm":          "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,nestedVM=1)",
+    "vm_v7_nestedvm_multi_fn": "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,nestedVM=1)",
+    "vm_v7_nestedvm_hardened": "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,nestedVM=1,hardened=1)",
 }
 
 
