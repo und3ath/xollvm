@@ -34,3 +34,6 @@ CLAUDE.md
 .idea/
 .vscode/
 *.user
+
+# Private planning docs (never commit)
+docs/VM_HARDENING_PLAN.md
