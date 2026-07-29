@@ -1900,39 +1900,45 @@ void VMImpl::buildEncryptCtorAES() {
 	// Resolve dangling __strenc_key_a / __strenc_key_b declarations
 	provideStubKeyProviderBodies(M);
 
-	// Create masked expanded-key global 
-	SmallVector<Constant*, 176> MaskedRK;
-	for (int i = 0; i < 176; i++)
-		MaskedRK.push_back(ConstantInt::get(I8Ty, AESExpandedKey[i] ^ AESRKMask[i]));
-
 	auto* RKTy = ArrayType::get(I8Ty, 176);
-	GVAESExpandedKey = new GlobalVariable(
-		M, RKTy, /*isConst=*/true, GlobalValue::PrivateLinkage,
-		ConstantArray::get(RKTy, MaskedRK),
-		(F.getName() + ".vm.aes.rk").str());
-	GVAESExpandedKey->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
-	GVAESExpandedKey->setAlignment(Align(16));
 
-	// Nonce global (8 bytes, little-endian)
-	SmallVector<Constant*, 8> NonceBytes;
-	for (int i = 0; i < 8; i++)
-		NonceBytes.push_back(ConstantInt::get(I8Ty, (AESNonce >> (8 * i)) & 0xFF));
-	auto* NonceTy = ArrayType::get(I8Ty, 8);
-	GVAESNonce = new GlobalVariable(
-		M, NonceTy, /*isConst=*/true, GlobalValue::PrivateLinkage,
-		ConstantArray::get(NonceTy, NonceBytes),
-		(F.getName() + ".vm.aes.nonce").str());
-	GVAESNonce->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
+	// Masked expanded-key / nonce / mask globals: when lazyDecrypt is active,
+	// buildWrapper() already created these (it runs before this ctor and
+	// needs them to unmask the key into its own per-call stack context) —
+	// reuse them instead of emitting duplicates. Otherwise create as before.
+	if (!GVAESExpandedKey) {
+		SmallVector<Constant*, 176> MaskedRK;
+		for (int i = 0; i < 176; i++)
+			MaskedRK.push_back(ConstantInt::get(I8Ty, AESExpandedKey[i] ^ AESRKMask[i]));
 
-	// Mask global (used to unmask the expanded key on the stack)
-	SmallVector<Constant*, 176> MaskConsts;
-	for (int i = 0; i < 176; i++)
-		MaskConsts.push_back(ConstantInt::get(I8Ty, AESRKMask[i]));
-	auto* MaskGV = new GlobalVariable(
-		M, RKTy, /*isConst=*/true, GlobalValue::PrivateLinkage,
-		ConstantArray::get(RKTy, MaskConsts),
-		(F.getName() + ".vm.aes.rkmask").str());
-	MaskGV->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
+		GVAESExpandedKey = new GlobalVariable(
+			M, RKTy, /*isConst=*/true, GlobalValue::PrivateLinkage,
+			ConstantArray::get(RKTy, MaskedRK),
+			(F.getName() + ".vm.aes.rk").str());
+		GVAESExpandedKey->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
+		GVAESExpandedKey->setAlignment(Align(16));
+
+		// Nonce global (8 bytes, little-endian)
+		SmallVector<Constant*, 8> NonceBytes;
+		for (int i = 0; i < 8; i++)
+			NonceBytes.push_back(ConstantInt::get(I8Ty, (AESNonce >> (8 * i)) & 0xFF));
+		auto* NonceTy = ArrayType::get(I8Ty, 8);
+		GVAESNonce = new GlobalVariable(
+			M, NonceTy, /*isConst=*/true, GlobalValue::PrivateLinkage,
+			ConstantArray::get(NonceTy, NonceBytes),
+			(F.getName() + ".vm.aes.nonce").str());
+		GVAESNonce->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
+
+		// Mask global (used to unmask the expanded key on the stack)
+		SmallVector<Constant*, 176> MaskConsts;
+		for (int i = 0; i < 176; i++)
+			MaskConsts.push_back(ConstantInt::get(I8Ty, AESRKMask[i]));
+		GVAESRKMask = new GlobalVariable(
+			M, RKTy, /*isConst=*/true, GlobalValue::PrivateLinkage,
+			ConstantArray::get(RKTy, MaskConsts),
+			(F.getName() + ".vm.aes.rkmask").str());
+		GVAESRKMask->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
+	}
 
 	// Build the .init_array constructor 
 	std::string FnName = (F.getName() + ".vm.ctor").str();
@@ -1966,7 +1972,7 @@ void VMImpl::buildEncryptCtorAES() {
 	IRBuilder<> LB(LoopBody);
 	Value* Idx64 = LB.CreateZExt(Idx, I64Ty);
 	Value* RKPtr = LB.CreateGEP(I8Ty, RKAlloca, Idx64, "vm.ctor.rkp");
-	Value* MkPtr = LB.CreateGEP(I8Ty, MaskGV, Idx64, "vm.ctor.mkp");
+	Value* MkPtr = LB.CreateGEP(I8Ty, GVAESRKMask, Idx64, "vm.ctor.mkp");
 	Value* RKByte = LB.CreateLoad(I8Ty, RKPtr);
 	Value* MkByte = LB.CreateLoad(I8Ty, MkPtr);
 	LB.CreateStore(LB.CreateXor(RKByte, MkByte), RKPtr);
@@ -1979,16 +1985,21 @@ void VMImpl::buildEncryptCtorAES() {
 	AB.CreateMemCpy(GVBytecodeRT, Align(16), GVBytecode, Align(1),
 		ConstantInt::get(I64Ty, BCLen));
 
-	// c) Call __obf_aes_ctr_decrypt(rt_buf, len, rk_stack, nonce_ptr)
-	Value* RTBufPtr = AB.CreateBitCast(GVBytecodeRT, PointerType::getUnqual(Ctx));
-	Value* RKPtr2 = AB.CreateBitCast(RKAlloca, PointerType::getUnqual(Ctx));
-	Value* NoncePtr = AB.CreateBitCast(GVAESNonce, PointerType::getUnqual(Ctx));
-	AB.CreateCall(CTRDecryptFn, {
-		RTBufPtr,
-		ConstantInt::get(I32Ty, BCLen),
-		RKPtr2,
-		NoncePtr
-		});
+	// c) Call __obf_aes_ctr_decrypt(rt_buf, len, rk_stack, nonce_ptr) — strips
+	// the AES layer from the whole runtime buffer up front. Skipped when
+	// LazyDecrypt: the buffer stays ciphertext and the engine's per-byte
+	// fetch (loadBC/loadBCDyn) removes AES one 16-byte block at a time.
+	if (!LazyDecrypt) {
+		Value* RTBufPtr = AB.CreateBitCast(GVBytecodeRT, PointerType::getUnqual(Ctx));
+		Value* RKPtr2 = AB.CreateBitCast(RKAlloca, PointerType::getUnqual(Ctx));
+		Value* NoncePtr = AB.CreateBitCast(GVAESNonce, PointerType::getUnqual(Ctx));
+		AB.CreateCall(CTRDecryptFn, {
+			RTBufPtr,
+			ConstantInt::get(I32Ty, BCLen),
+			RKPtr2,
+			NoncePtr
+			});
+	}
 	AB.CreateRetVoid();
 
 	appendToGlobalCtors(M, CtorFn, 65535, nullptr);
@@ -2029,7 +2040,8 @@ namespace llvm {
 			// Lookup only — returns null if not yet created.
 			// populateVMEngine() handles atomic creation + population.
 			if (Function* Existing = M.getFunction(kVMEngineName)) {
-				assert(Existing->arg_size() == kNumParams &&
+				assert((Existing->arg_size() == kNumParams ||
+					Existing->arg_size() == kNumParams + 1) &&
 					"vm_engine parameter count mismatch");
 				return Existing;
 			}
@@ -2093,6 +2105,7 @@ void VMImpl::setupEffLocal() {
 	EffReg64Keys = nullptr;
 	EffFRegKeys = nullptr;
 	EffCalleeMask = nullptr;  // no callee masking in local mode
+	EffLazyCtx = nullptr;    // local mode never uses lazy AES fetch
 	SharedEngineMode = false;
 }
 
@@ -2108,7 +2121,7 @@ void VMImpl::populateVMEngine() {
 	// anything iterates an empty basic block list.  We create the function
 	// and immediately start adding blocks in the same C++ scope.
 
-	FunctionType* FTy = VMEngine::getVMEngineFunctionType(Ctx);
+	FunctionType* FTy = VMEngine::getVMEngineFunctionType(Ctx, LazyDecrypt);
 	Function* EF = Function::Create(FTy, GlobalValue::InternalLinkage,
 		VMEngine::kVMEngineName, &M);
 
@@ -2126,6 +2139,7 @@ void VMImpl::populateVMEngine() {
 			"handlers", "fty_indices",
 			"regkeys", "reg64keys", "fregkeys",
 			"callee_mask",
+			"lazyctx",
 		};
 		for (Argument& A : EF->args()) A.setName(PNames[PIdx++]);
 	}
@@ -2159,6 +2173,22 @@ void VMImpl::populateVMEngine() {
 	EffReg64Keys = EF->getArg(VMEngine::kParamReg64Keys);
 	EffFRegKeys = EF->getArg(VMEngine::kParamFRegKeys);
 	EffCalleeMask = EF->getArg(VMEngine::kParamCalleeMask);
+	EffLazyCtx = LazyDecrypt ? EF->getArg(VMEngine::kParamLazyCtx) : nullptr;
+
+	// lazyDecrypt: forward-declare the runtime keystream helper so the fetch
+	// path (loadBC/loadBCDyn, built below) can call it. buildEncryptCtorAES()
+	// links the AES stub bitcode (which defines this symbol) later, for the
+	// founding function's own ctor — the linker resolves this declaration
+	// against that definition.
+	if (LazyDecrypt) {
+		KeystreamFn = M.getFunction("__obf_aes_ctr_keystream_block");
+		if (!KeystreamFn) {
+			FunctionType* KSFTy = FunctionType::get(Type::getVoidTy(Ctx),
+				{ PtrTy, PtrTy, I32Ty, PtrTy }, /*isVarArg=*/false);
+			KeystreamFn = Function::Create(KSFTy, GlobalValue::ExternalLinkage,
+				"__obf_aes_ctr_keystream_block", &M);
+		}
+	}
 
 	// Build vm.entry with VMIP + salt alloca
 	Entry = EngEntry;  // already created above
@@ -2189,6 +2219,7 @@ void VMImpl::populateVMEngine() {
 
 	SS->NumVariants = NumVariants;
 	SS->EncDispatch = EncDispatch;
+	SS->LazyMode = LazyDecrypt;
 	for (unsigned i = 0; i < OP_COUNT; ++i)
 		for (unsigned v = 0; v < NumVariants; ++v)
 			SS->OpcBB[i][v] = OpcBB[i][v];
@@ -3037,6 +3068,78 @@ void VMImpl::buildWrapper() {
 	}
 
 
+	// Lazy AES fetch: build the per-call context (unmasked round key + nonce +
+	// keystream-block cache) that the shared engine's loadBC/loadBCDyn use.
+	// Gated on SS->LazyMode (fixed by whichever function founded the shared
+	// engine), not this function's own LazyDecrypt: the wrapper's argument
+	// list must match the already-built engine signature regardless.
+	auto* SS = VMEngine::getSharedState(M);
+	const bool LazyActive = SS->LazyMode;
+	Value* LazyCtxArg = nullptr;
+	if (LazyActive) {
+		// buildWrapper() runs before buildEncryptCtorAES(); when lazy, create
+		// the masked key-schedule/nonce/mask globals here so both this
+		// wrapper and the later ctor (which reuses them instead of
+		// re-emitting) can reference them.
+		if (!GVAESExpandedKey) {
+			SmallVector<Constant*, 176> MaskedRK;
+			for (int i = 0; i < 176; i++)
+				MaskedRK.push_back(ConstantInt::get(I8Ty, AESExpandedKey[i] ^ AESRKMask[i]));
+			auto* RKTy = ArrayType::get(I8Ty, 176);
+			GVAESExpandedKey = new GlobalVariable(
+				M, RKTy, /*isConst=*/true, GlobalValue::PrivateLinkage,
+				ConstantArray::get(RKTy, MaskedRK),
+				(F.getName() + ".vm.aes.rk").str());
+			GVAESExpandedKey->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
+			GVAESExpandedKey->setAlignment(Align(16));
+
+			SmallVector<Constant*, 8> NonceBytes;
+			for (int i = 0; i < 8; i++)
+				NonceBytes.push_back(ConstantInt::get(I8Ty, (AESNonce >> (8 * i)) & 0xFF));
+			auto* NonceTy = ArrayType::get(I8Ty, 8);
+			GVAESNonce = new GlobalVariable(
+				M, NonceTy, /*isConst=*/true, GlobalValue::PrivateLinkage,
+				ConstantArray::get(NonceTy, NonceBytes),
+				(F.getName() + ".vm.aes.nonce").str());
+			GVAESNonce->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
+
+			SmallVector<Constant*, 176> MaskConsts;
+			for (int i = 0; i < 176; i++)
+				MaskConsts.push_back(ConstantInt::get(I8Ty, AESRKMask[i]));
+			GVAESRKMask = new GlobalVariable(
+				M, RKTy, /*isConst=*/true, GlobalValue::PrivateLinkage,
+				ConstantArray::get(RKTy, MaskConsts),
+				(F.getName() + ".vm.aes.rkmask").str());
+			GVAESRKMask->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
+		}
+
+		auto* CtxTy = ArrayType::get(I8Ty, VMEngine::kLazyCtxSize);
+		AllocaInst* LazyCtx = B.CreateAlloca(CtxTy, nullptr, "vm.lazy.ctx");
+		LazyCtx->setAlignment(Align(16));
+
+		// Unmask rk into ctx[0..175] (mirrors buildEncryptCtorAES's stack-unmask).
+		B.CreateMemCpy(LazyCtx, Align(16), GVAESExpandedKey, Align(16), B.getInt64(176));
+		for (unsigned i = 0; i < 176; i++) {
+			Value* Ptr = B.CreateGEP(I8Ty, LazyCtx, B.getInt64(i), "vm.lazy.rk.p");
+			Value* Byte = B.CreateLoad(I8Ty, Ptr, "vm.lazy.rk.b");
+			Value* MkPtr = B.CreateGEP(I8Ty, GVAESRKMask, B.getInt64(i), "vm.lazy.mk.p");
+			Value* Mk = B.CreateLoad(I8Ty, MkPtr, "vm.lazy.mk.b");
+			B.CreateStore(B.CreateXor(Byte, Mk), Ptr);
+		}
+
+		// Copy nonce into ctx[176..183].
+		Value* NonceDst = B.CreateGEP(I8Ty, LazyCtx,
+			B.getInt64(VMEngine::kLazyCtxNonceOff), "vm.lazy.nonce.p");
+		B.CreateMemCpy(NonceDst, Align(1), GVAESNonce, Align(1), B.getInt64(8));
+
+		// cachedBlk = 0xFFFFFFFF: no block cached yet, forces a fetch on first use.
+		Value* CachedBlkPtr = B.CreateGEP(I8Ty, LazyCtx,
+			B.getInt64(VMEngine::kLazyCtxCachedBlkOff), "vm.lazy.cb.p");
+		B.CreateStore(B.getInt32(0xFFFFFFFFu), CachedBlkPtr);
+
+		LazyCtxArg = LazyCtx;
+	}
+
 	// Call vm_engine (indirect via handler table)
 	// the engine pointer is stored in GVHandlers[OP_COUNT].
 	// We load it and make an indirect call.  This eliminates every direct
@@ -3046,7 +3149,7 @@ void VMImpl::buildWrapper() {
 	// Bytecode base: use runtime copy if encryption is enabled
 	Value* BCBase = (EncBytecode && GVBytecodeRT) ? (Value*)GVBytecodeRT : (Value*)GVBytecode;
 
-	Value* Args[VMEngine::kNumParams] = {
+	SmallVector<Value*, VMEngine::kNumParams + 1> Args = {
 		BCBase,                                                          // bc
 		blindI32((uint32_t)E.BC.size()),                                 // bc_len
 		WRegs,                                                           // regs
@@ -3073,13 +3176,14 @@ void VMImpl::buildWrapper() {
 		// per-function callee XOR mask (0 when unhardened)
 		VCtx.Cfg.hardened ? blindI64(CalleeMask) : B.getInt64(0),       // callee_mask
 	};
+	if (LazyActive) Args.push_back(LazyCtxArg);              // lazyctx
 
 	// Load engine function pointer from handler table slot [OP_COUNT]
 	Value* EngSlot = B.CreateGEP(PtrTy, GVHandlers,
 		blindI32(OP_COUNT), "vm.eng.slot");
 	Value* EngPtr = B.CreateLoad(PtrTy, EngSlot, "vm.eng.ptr");
 
-	FunctionType* EngFTy = VMEngine::getVMEngineFunctionType(Ctx);
+	FunctionType* EngFTy = VMEngine::getVMEngineFunctionType(Ctx, LazyActive);
 	B.CreateCall(EngFTy, EngPtr, Args);
 
 	// Extract return value and return

@@ -51,6 +51,7 @@ VMPassConfig VMPassConfig::fromPassConfig(const PassConfig& PC) {
 	getBool("strongBytecode", Cfg.strongBytecode);
 	getBool("blindTargets", Cfg.blindTargets);
 	getBool("useAES", Cfg.useAES);
+	getBool("lazyDecrypt", Cfg.lazyDecrypt);
 	getBool("hardened", Cfg.hardened);
 	getBool("regEncrypt", Cfg.regEncrypt);
 	getBool("rollingRegKey", Cfg.rollingRegKey);
@@ -64,6 +65,8 @@ VMPassConfig VMPassConfig::fromPassConfig(const PassConfig& PC) {
 	// useAES requires encBytecode — if the user disabled encryption entirely,
 	// AES has nothing to replace.
 	if (!Cfg.encBytecode) Cfg.useAES = false;
+	// lazyDecrypt requires useAES — nothing to defer if AES isn't the cipher.
+	if (!Cfg.useAES) Cfg.lazyDecrypt = false;
 	// hardened requires encBytecode (meaningful only with encrypted bytecode)
 	if (!Cfg.encBytecode) Cfg.hardened = false;
 	// hardened implies regEncrypt — encrypted registers complement MBA-obscured handlers

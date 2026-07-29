@@ -123,6 +123,12 @@ EXTRA_ANN: Dict[str, str] = {
     "vm_v7_rolling":        "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,regEncrypt=1,rollingRegKey=1)",
     # Full P2+P3 stack: variants + keyed dispatch + strong keystream + target blinding + hardened.
     "vm_v7_p3_full":        "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,strongBytecode=1,blindTargets=1,encDispatch=1,hardened=1,handlerVariants=3)",
+    # lazyDecrypt (P5): AES layer removed per-instruction at fetch (block-cached
+    # in a per-call context) instead of by the ctor decrypting the whole
+    # runtime buffer up front. Requires useAES + encBytecode.
+    "vm_v7_lazydecrypt":          "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,useAES=1,lazyDecrypt=1)",
+    "vm_v7_lazydecrypt_hardened": "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,useAES=1,lazyDecrypt=1,hardened=1,encDispatch=1,handlerVariants=3)",
+    "vm_v7_lazydecrypt_multi_fn": "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,useAES=1,lazyDecrypt=1)",
 }
 
 

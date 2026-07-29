@@ -1,5 +1,6 @@
 #pragma once
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/BasicBlock.h"
@@ -144,24 +145,45 @@ namespace llvm {
 		static constexpr unsigned kParamFRegKeys = 16;
 		static constexpr unsigned kParamCalleeMask = 17;
 		static constexpr unsigned kNumParams = 18;
+		// Present only when the engine was built with lazyDecrypt=1 (one extra
+		// trailing ptr param). kNumParams above is unchanged so the non-lazy
+		// signature — and therefore all output when the feature is off — is
+		// byte-identical to before this param was added.
+		static constexpr unsigned kParamLazyCtx = kNumParams;
+
+		// Layout of the per-call lazy-decrypt context block (a flat byte buffer
+		// allocated by buildWrapper() and threaded through as kParamLazyCtx):
+		//   [0..175]   rk      — unmasked 176-byte AES round-key schedule
+		//   [176..183] nonce   — 8-byte AES-CTR nonce
+		//   [184..199] window  — last-fetched 16-byte AES keystream block
+		//   [200..203] cachedBlk (i32) — block index currently held in `window`
+		static constexpr unsigned kLazyCtxRKOff = 0;
+		static constexpr unsigned kLazyCtxNonceOff = 176;
+		static constexpr unsigned kLazyCtxWindowOff = 184;
+		static constexpr unsigned kLazyCtxCachedBlkOff = 200;
+		static constexpr unsigned kLazyCtxSize = 204;
 
 		/// The well-known symbol name for the shared engine function.
 		static constexpr const char* kVMEngineName = "__vm_engine";
 
-		/// Return the canonical FunctionType for vm_engine.
-		inline FunctionType* getVMEngineFunctionType(LLVMContext& Ctx) {
+		/// Return the canonical FunctionType for vm_engine. `lazy` appends the
+		/// trailing lazyctx ptr param; false (default) reproduces the exact
+		/// pre-existing signature.
+		inline FunctionType* getVMEngineFunctionType(LLVMContext& Ctx, bool lazy = false) {
 			Type* PtrTy = PointerType::getUnqual(Ctx);
 			Type* I32Ty = Type::getInt32Ty(Ctx);
 			Type* VoidTy = Type::getVoidTy(Ctx);
 			Type* I64Ty = Type::getInt64Ty(Ctx);
-			Type* Params[kNumParams] = {
+			Type* Params[kNumParams + 1] = {
 				PtrTy, I32Ty, PtrTy, PtrTy, PtrTy, PtrTy,
 				PtrTy, I32Ty, I32Ty, I32Ty, I32Ty, I32Ty,
 				PtrTy, PtrTy,
 				PtrTy, PtrTy, PtrTy,   // regkeys, reg64keys, fregkeys
 				I64Ty,                 // callee_mask
+				PtrTy,                 // lazyctx (only present when lazy)
 			};
-			return FunctionType::get(VoidTy, Params, /*isVarArg=*/false);
+			unsigned N = lazy ? (kNumParams + 1) : kNumParams;
+			return FunctionType::get(VoidTy, ArrayRef<Type*>(Params, N), /*isVarArg=*/false);
 		}
 
 		/// Get or create the module-level @__vm_engine function.
@@ -183,6 +205,7 @@ namespace llvm {
 			BasicBlock* OpcBB[OP_COUNT][kMaxHandlerVariants] = {};
 			unsigned    NumVariants = 1;   // active variant count for this engine
 			bool        EncDispatch = false;   // engine-wide: dispatch uses encrypted index map
+			bool        LazyMode = false;      // engine-wide: fetch removes AES per-block instead of ctor whole-buffer
 			BasicBlock* Dispatch = nullptr;
 			BasicBlock* ExitBB = nullptr;
 			BasicBlock* Entry = nullptr;
@@ -225,6 +248,7 @@ namespace llvm {
 		const bool     StrongBC;     // P3: per-position PRF Layer-1 keystream
 		const bool     BlindTargets; // P3-B: XOR-blind bytecode branch targets
 		const bool     UseAES;       // AES-CTR replaces LCG
+		const bool     LazyDecrypt;  // AES layer removed per-instruction at fetch instead of whole-buffer in ctor
 		const bool     RegEncrypt;   // XOR-encrypt register values at rest
 		const bool     RollingRegKey; // P4-C: evolve per-slot reg XOR key on each store
 		const uint32_t SaltConst;    // full 32-bit salt stored in vm.salt
@@ -288,6 +312,12 @@ namespace llvm {
 		// Globals for AES runtime decryption
 		GlobalVariable* GVAESExpandedKey = nullptr;  // @fn.vm.aes.rk (masked)
 		GlobalVariable* GVAESNonce = nullptr;  // @fn.vm.aes.nonce
+		GlobalVariable* GVAESRKMask = nullptr;  // @fn.vm.aes.rkmask (unmask key for GVAESExpandedKey)
+
+		// lazyDecrypt: forward-declared/looked-up once per module (during the
+		// founding function's populateVMEngine call) so the shared engine's
+		// fetch path can call it before buildEncryptCtorAES() links the stub.
+		Function* KeystreamFn = nullptr;
 
 		// Handler indirection layer
 		Function* HFn = nullptr;       // target for BasicBlock creation
@@ -302,6 +332,7 @@ namespace llvm {
 		Value* EffFTyIndices = nullptr;// FTy index table base
 		Value* EffHandlers = nullptr;  // handler table base
 		Value* EffCalleeMask = nullptr;// callee XOR mask (i64, null when off)
+		Value* EffLazyCtx = nullptr;   // lazy-decrypt context block ptr (null unless LazyDecrypt)
 		Value* MaskVR = nullptr;       // i32 mask values
 		Value* MaskVR64 = nullptr;
 		Value* MaskFR = nullptr;
@@ -349,6 +380,7 @@ namespace llvm {
 			StrongBC(VCtx.Cfg.strongBytecode),
 			BlindTargets(VCtx.Cfg.blindTargets),
 			UseAES(VCtx.Cfg.useAES),
+			LazyDecrypt(VCtx.Cfg.lazyDecrypt),
 			RegEncrypt(VCtx.Cfg.regEncrypt),
 			RollingRegKey(VCtx.Cfg.rollingRegKey),
 			SaltConst(VCtx.R.u32()),
@@ -416,12 +448,37 @@ namespace llvm {
 			return k;
 		}
 
+		// Lazy AES fetch: remove the AES-CTR layer for the byte at Idx32.
+		// Recomputes the 16-byte keystream block covering Idx32 via KeystreamFn
+		// into the per-call scratch window (EffLazyCtx), then reads the covering
+		// byte. Emitted straight-line (no control flow) so callers that assume
+		// linear emission across loadBC/loadBCDyn stay valid.
+		// Only called when LazyDecrypt (implies EncBytecode + UseAES).
+		Value* lazyAESByte(IRBuilder<>& B, Value* Idx32, const Twine& N) {
+			Value* RKPtr = B.CreateGEP(I8Ty, EffLazyCtx,
+				B.getInt64(VMEngine::kLazyCtxRKOff), N + ".lz.rk");
+			Value* NoncePtr = B.CreateGEP(I8Ty, EffLazyCtx,
+				B.getInt64(VMEngine::kLazyCtxNonceOff), N + ".lz.nc");
+			Value* WindowPtr = B.CreateGEP(I8Ty, EffLazyCtx,
+				B.getInt64(VMEngine::kLazyCtxWindowOff), N + ".lz.win");
+
+			Value* Blk = B.CreateLShr(Idx32, B.getInt32(4), N + ".lz.blk");
+			B.CreateCall(KeystreamFn, { RKPtr, NoncePtr, Blk, WindowPtr });
+			Value* ByteOff = B.CreateAnd(Idx32, B.getInt32(0xF), N + ".lz.boff");
+			Value* BytePtr = B.CreateGEP(I8Ty, WindowPtr,
+				B.CreateZExt(ByteOff, I64Ty, N + ".lz.boff64"), N + ".lz.bytep");
+			return B.CreateLoad(I8Ty, BytePtr, N + ".lz.byte");
+		}
+
 		Value* loadBC(IRBuilder<>& B, Value* IP, uint32_t Off, const Twine& N = "vm.bc") {
 			Value* Idx32 = Off ? B.CreateAdd(IP, B.getInt32(Off), N + ".i32") : IP;
 			Value* Idx64 = B.CreateSExt(Idx32, I64Ty, N + ".ip64");
 			Value* Ptr = B.CreateGEP(I8Ty, EffBC, Idx64, N + ".p");
 			Value* Raw = B.CreateLoad(I8Ty, Ptr, N);
 			if (!EncBytecode) return Raw;
+
+			if (LazyDecrypt && EffLazyCtx)
+				Raw = B.CreateXor(Raw, lazyAESByte(B, Idx32, N), N + ".aesx");
 
 			auto* SL = B.CreateLoad(I32Ty, EffSalt, N + ".s");
 			SL->setVolatile(true);
@@ -441,6 +498,9 @@ namespace llvm {
 			Value* Ptr = B.CreateGEP(I8Ty, EffBC, Idx64, N + ".p");
 			Value* Raw = B.CreateLoad(I8Ty, Ptr, N);
 			if (!EncBytecode) return Raw;
+
+			if (LazyDecrypt && EffLazyCtx)
+				Raw = B.CreateXor(Raw, lazyAESByte(B, Idx32, N), N + ".aesx");
 
 			auto* SL = B.CreateLoad(I32Ty, EffSalt, N + ".s");
 			SL->setVolatile(true);

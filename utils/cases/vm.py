@@ -55,6 +55,14 @@ VM_REGENC_GATES = [
     "vm_regenc_key_geps", "vm_regenc_pregs_exempt",
 ]
 
+# lazyDecrypt: AES layer removed per-instruction at fetch instead of by the
+# ctor decrypting the whole runtime buffer up front. Feature-active gate:
+# the engine must actually call the per-block keystream helper, and the
+# ctor must NOT still call the whole-buffer decrypt.
+VM_LAZYDECRYPT_GATES = [
+    "vm_lazydecrypt_keystream_call", "vm_lazydecrypt_ctor_no_bulk_decrypt",
+]
+
 _DBG = ["--obf-debug", "--obf-verbose"]
 
 
@@ -394,3 +402,42 @@ def register(reg: Registry, **_opts) -> None:
     reg.add(name="rt_vm_v7_regenc_seed_divergence", passes=["vm"],
             ann_override=vm_v7_regenc,
             gates=["seed_divergence"], category="vm")
+
+    # ── P5-A lazy decrypt (lazyDecrypt=1) ──
+    # AES layer removed per bytecode-fetch instead of by the ctor decrypting
+    # the whole runtime buffer up front. Correctness gate: differential
+    # output proves the per-block keystream + windowed cache round-trips the
+    # same bytecode the eager path decrypts in one shot. Feature-active gate
+    # (VM_LAZYDECRYPT_GATES) proves the lazy path was actually taken, not
+    # silently ignored/back off to eager.
+    vm_v7_lazy = ann_extra("vm_v7_lazydecrypt")
+    vm_v7_lazy_multi = ann_extra("vm_v7_lazydecrypt_multi_fn")
+
+    reg.add(name="rt_vm_v7_lazydecrypt_multi_fn", passes=["vm"],
+            ann_override=vm_v7_lazy_multi,
+            gates=VM_SHARED_GATES + VM_AES_GATES + VM_LAZYDECRYPT_GATES + [
+                "vm_enc_ctor", "vm_callees_global", "vm_multi_fn_shared",
+            ],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_multi_fn_aes_program(vm_v7_lazy_multi))
+    reg.add(name="rt_vm_v7_lazydecrypt_i64", passes=["vm"],
+            ann_override=vm_v7_lazy,
+            gates=VM_CORE_GATES + VM_AES_GATES + VM_LAZYDECRYPT_GATES + ["vm_enc_ctor"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_i64_ops_program(vm_v7_lazy))
+    reg.add(name="rt_vm_v7_lazydecrypt_float", passes=["vm"],
+            ann_override=vm_v7_lazy,
+            gates=VM_FLOAT_GATES + VM_AES_GATES + VM_LAZYDECRYPT_GATES,
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_float_basic_program(vm_v7_lazy))
+    reg.add(name="rt_vm_v7_lazydecrypt_switch", passes=["vm"],
+            ann_override=vm_v7_lazy,
+            gates=VM_SHARED_GATES + VM_AES_GATES + VM_LAZYDECRYPT_GATES + [
+                "vm_enc_ctor", "vm_multi_fn_shared",
+            ],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_switch_dispatch_program(vm_v7_lazy))
+    reg.add(name="rt_vm_v7_lazydecrypt_determinism", passes=["vm"],
+            ann_override=vm_v7_lazy,
+            extra_opts=_DBG, gates=["seed_determinism"], category="vm",
+            src_override=render_vm_v7_multi_function_program(vm_v7_lazy))

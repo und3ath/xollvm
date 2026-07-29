@@ -279,6 +279,7 @@ namespace llvm {
 		unsigned minBlocks = 1;
 		unsigned maxBlocks = 400;     // 0 = no limit
 		bool     useAES = true;       // AES-CTR replaces LCG (Layer 2)
+		bool     lazyDecrypt = false; // AES layer removed per-instruction at fetch instead of whole-buffer in ctor (requires useAES + encBytecode)
 		bool     obfRegIdx = true;    // XOR register indices with compile-time salt
 		bool     encDispatch = true;   // P2: encrypted per-opcode->handler index indirection (on)
 		unsigned handlerVariants = 3;  // K handler-body variants per opcode (P1 polymorphism on; 1 = off)

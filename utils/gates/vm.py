@@ -161,3 +161,33 @@ def vm_obf_aes_ctr_present(ir: str) -> Optional[str]:
     if "__obf_aes_ctr_decrypt" not in ir:
         return "__obf_aes_ctr_decrypt not found — AES stub not linked"
     return None
+
+
+@register("vm_lazydecrypt_keystream_call")
+def vm_lazydecrypt_keystream_call(ir: str) -> Optional[str]:
+    # The whole AES stub module (incl. the __obf_aes_ctr_keystream_block
+    # *definition*) is linked in whenever useAES=1, lazy or not, so a bare
+    # substring match on the callee name would always pass. Require an
+    # actual `call` instruction instead — only the lazy fetch path emits one.
+    if not re.search(r"\bcall\b[^\n]*@__obf_aes_ctr_keystream_block\s*\(", ir):
+        return ("no call to __obf_aes_ctr_keystream_block found — "
+                "lazy per-block fetch path not emitted")
+    return None
+
+
+@register("vm_lazydecrypt_ctor_no_bulk_decrypt")
+def vm_lazydecrypt_ctor_no_bulk_decrypt(ir: str) -> Optional[str]:
+    # Scoped to the .vm.ctor function bodies specifically: the linked-in AES
+    # stub also contains __aes_decrypt (strenc's entry point), whose body
+    # itself calls __obf_aes_ctr_decrypt — that call is unrelated and would
+    # false-negative a whole-module substring/regex check.
+    ctor_bodies = re.findall(
+        r"define[^\n]*@\"?[\w.$]*\.vm\.ctor[\w.$]*\"?\s*\([^\n]*\{(.*?)\n\}",
+        ir, re.DOTALL)
+    if not ctor_bodies:
+        return "no .vm.ctor function found — AES ctor not built"
+    for body in ctor_bodies:
+        if re.search(r"\bcall\b[^\n]*@__obf_aes_ctr_decrypt\s*\(", body):
+            return ("vm ctor calls __obf_aes_ctr_decrypt — whole-buffer "
+                     "decrypt was not removed under lazyDecrypt")
+    return None

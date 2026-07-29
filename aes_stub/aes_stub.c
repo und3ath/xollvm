@@ -4,6 +4,7 @@
  * Public entry points:
  *   __aes_decrypt()       — used by strenc (reconstructs key from providers)
  *   __obf_aes_ctr_decrypt()  — used by vmpass (caller supplies expanded key)
+ *   __obf_aes_ctr_keystream_block() — used by vmpass lazyDecrypt (single-block keystream)
  *   __strenc_chacha_decrypt() — used by strenc's ChaCha20 (cipher=chacha) path
  *
  * Both passes link this same bitcode; the linker-level dedup check in
@@ -195,6 +196,35 @@ void __obf_aes_ctr_decrypt(uint8_t *buf, uint32_t len,
         offset += 16u;
         ctr_inc(ctr);
     }
+}
+
+
+/*
+* __obf_aes_ctr_keystream_block  —  Single AES-CTR keystream block.
+*
+* Produces the 16-byte keystream block for a given block index without
+* touching any plaintext/ciphertext buffer. Used by vmpass lazyDecrypt to
+* remove the AES layer for one bytecode byte at a time instead of decrypting
+* the whole buffer up front.
+*
+* rk176   : pointer to the full 176-byte expanded AES-128 round-key schedule.
+* nonce8  : 8-byte nonce; counter block = nonce8 || 0x00000000 || block_be32.
+* block   : block index (matches vm_aes::ctr's per-16-byte counter).
+* out16   : receives the 16-byte keystream block.
+*/
+__attribute__((noinline))
+void __obf_aes_ctr_keystream_block(const uint8_t *rk176, const uint8_t *nonce8,
+                                    uint32_t block, uint8_t out16[16]) {
+    uint8_t ctr[16];
+    se_memcpy(ctr, nonce8, 8);
+    ctr[8] = 0; ctr[9] = 0; ctr[10] = 0; ctr[11] = 0;
+    ctr[12] = (uint8_t)(block >> 24);
+    ctr[13] = (uint8_t)(block >> 16);
+    ctr[14] = (uint8_t)(block >> 8);
+    ctr[15] = (uint8_t)(block);
+
+    se_memcpy(out16, ctr, 16);
+    aes128_encrypt_block(rk176, out16);
 }
 
 
