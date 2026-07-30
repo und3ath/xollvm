@@ -280,7 +280,7 @@ void VMImpl::buildCalleeGlobal() {
 	auto* ATy = ArrayType::get(PtrTy, Cs.size());
 	// writable when hardened (callee XOR ctor modifies in-place)
 	GVCallees = new GlobalVariable(M, ATy,
-		/*isConstant=*/!VCtx.Cfg.hardened,
+		/*isConstant=*/!Cfg.hardened,
 		GlobalValue::PrivateLinkage,
 		ConstantArray::get(ATy, Cs), (F.getName() + ".vm.callees").str());
 	GVCallees->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
@@ -288,7 +288,7 @@ void VMImpl::buildCalleeGlobal() {
 
 	// emit GVFTyIndices [C x i8] and populate shared FTy registry.
 	UniqueFTys.clear();
-	auto* SS = VMEngine::getSharedState(M);
+	auto* SS = VMEngine::getSharedState(M, EngineId);
 	SmallVector<uint8_t, 8> IdxBytes;
 	IdxBytes.reserve(E.CalleeFTyTab.size());
 	for (FunctionType* FTy : E.CalleeFTyTab) {
@@ -409,6 +409,564 @@ void VMImpl::buildVMEntry()
 
 
 
+// ============================================================================
+// Nested-VM
+//
+// Concept: an eligible opcode's compute step is a call to a pure helper
+// function, and that helper is itself virtualized. Executing one outer
+// nested-eligible instruction therefore drives a full inner VM dispatch loop
+// -- depth-2 interpretation. Eligible opcodes: BINOP, BINOP64, ICMP, ICMP64,
+// FCMP, CAST (kNestedHelperOrder below; the nestedVMOpcodes cap -- see
+// opcodeNests() -- selects a prefix of this fixed order).
+//
+// Two engines, not a runtime flag on one: a build with NestedVM=true targets
+// EngineId 1 (@__vm_engine.nest), whose nested-eligible handlers call their
+// helper. Every helper is always inner-virtualized with nestedVM=false, so it
+// targets EngineId 0 (@__vm_engine), whose handlers compute inline. This is
+// what makes recursion terminate: a helper's own bytecode may itself contain
+// nested-eligible opcodes (its body is a plain switch like any other
+// function), but those run through the PLAIN engine, which never calls back
+// into a helper. An earlier version of this shared one engine for both layers
+// and used the same handler code regardless of which bytecode it was
+// interpreting -- that recursed unboundedly (engine -> helper -> engine ->
+// helper -> ...) and stack-overflowed at runtime; see EngineId below.
+//
+// Sequencing (see call sites in run()):
+//   1. getOrCreateNestedHelper(Op) runs BEFORE populateVMEngine(), once per
+//      eligible Op. It only creates the helper Function with a plain
+//      (non-virtualized) switch body -- the opcode's handler case needs the
+//      Function* to exist so it can emit a call to it.
+//   2. populateVMEngine() builds EngineId 1's (@__vm_engine.nest) handler
+//      blocks as normal (first NestedVM function only; independent of, and
+//      does not perturb, EngineId 0's SharedState).
+//   3. virtualizeNestedHelpersOnce() runs AFTER populateVMEngine(), guarded
+//      to run once per module. For every helper Function that was created,
+//      this replaces its plain body with a VM wrapper by running a second,
+//      independent VMImpl over it with nestedVM=false (so it targets
+//      EngineId 0) and a forked RNG.
+//
+// Step 3 MUST come after step 2: with a single shared engine, inner-
+// virtualizing a helper first would make it the one to trigger
+// populateVMEngine()'s "first function" build, baking non-nested handler
+// bodies in permanently. With two independent EngineId-keyed SharedStates
+// this specific failure mode can no longer happen (helpers target id 0,
+// outer targets id 1), but the ordering is kept because it's already been
+// verified correct and step 3 still depends on nothing from step 2 that
+// would change.
+// ============================================================================
+
+namespace {
+	constexpr const char* kNestedBinopHelperName = "__vm_h_binop";
+	constexpr const char* kNestedBinop64HelperName = "__vm_h_binop64";
+	constexpr const char* kNestedIcmpHelperName = "__vm_h_icmp";
+	constexpr const char* kNestedIcmp64HelperName = "__vm_h_icmp64";
+	constexpr const char* kNestedFcmpHelperName = "__vm_h_fcmp";
+	constexpr const char* kNestedCastHelperName = "__vm_h_cast";
+	constexpr const char* kNestedBinopFHelperName = "__vm_h_binop_f";
+
+	// Fixed deterministic nesting order, consumed by run() (helper creation),
+	// opcodeNests() (the nestedVMOpcodes cap), and virtualizeNestedHelpersOnce()
+	// (inner virtualization). NestedVMOpcodes==N>0 nests only the first N
+	// entries of this list; the rest stay inline.
+	struct NestedHelperDesc { VMOp Op; const char* Name; };
+	constexpr NestedHelperDesc kNestedHelperOrder[] = {
+		{ OP_BINOP,   kNestedBinopHelperName },
+		{ OP_BINOP64, kNestedBinop64HelperName },
+		{ OP_ICMP,    kNestedIcmpHelperName },
+		{ OP_ICMP64,  kNestedIcmp64HelperName },
+		{ OP_FCMP,    kNestedFcmpHelperName },
+		{ OP_CAST,    kNestedCastHelperName },
+		{ OP_BINOP_F, kNestedBinopFHelperName },
+	};
+	constexpr unsigned kNumNestedHelpers =
+		sizeof(kNestedHelperOrder) / sizeof(kNestedHelperOrder[0]);
+}
+
+bool VMImpl::opcodeNests(VMOp Op) const {
+	if (!NestedVM) return false;
+	for (unsigned i = 0; i < kNumNestedHelpers; ++i) {
+		if (kNestedHelperOrder[i].Op == Op)
+			return NestedVMOpcodes == 0 || i < NestedVMOpcodes;
+	}
+	return false;
+}
+
+Function* VMImpl::getOrCreateNestedHelper(VMOp Op) {
+	switch (Op) {
+	case OP_BINOP:   return getOrCreateNestedBinopHelper();
+	case OP_BINOP64: return getOrCreateNestedBinop64Helper();
+	case OP_ICMP:    return getOrCreateNestedIcmpHelper();
+	case OP_ICMP64:  return getOrCreateNestedIcmp64Helper();
+	case OP_FCMP:    return getOrCreateNestedFcmpHelper();
+	case OP_CAST:    return getOrCreateNestedCastHelper();
+	case OP_BINOP_F: return getOrCreateNestedBinopFHelper();
+	default:         return nullptr;
+	}
+}
+
+// Pure helper `i32 __vm_h_binop(i32 a, i32 b, i8 subop)` -- replicates
+// OP_BINOP's subop switch (VMPass_Impl.cpp buildHandlersIntArith) exactly,
+// including using a switch (not a select chain) so div/rem are never
+// speculatively executed for a non-div/rem subop. Idempotent: reused across
+// every nested-eligible function in the module.
+Function* VMImpl::getOrCreateNestedBinopHelper() {
+	if (Function* Existing = M.getFunction(kNestedBinopHelperName))
+		return Existing;
+
+	FunctionType* FTy = FunctionType::get(I32Ty, { I32Ty, I32Ty, I8Ty }, false);
+	Function* HF = Function::Create(FTy, GlobalValue::InternalLinkage,
+		kNestedBinopHelperName, &M);
+	HF->addFnAttr(Attribute::NoUnwind);
+	Argument* AArg = HF->getArg(0); AArg->setName("a");
+	Argument* BArg = HF->getArg(1); BArg->setName("b");
+	Argument* SubArg = HF->getArg(2); SubArg->setName("subop");
+
+	BasicBlock* EntryBB = BasicBlock::Create(Ctx, "entry", HF);
+	IRBuilder<> B(EntryBB);
+	Value* Sub32 = B.CreateZExt(SubArg, I32Ty, "sub32");
+
+	BasicBlock* MergeBB = BasicBlock::Create(Ctx, "merge", HF);
+	BasicBlock* DefBB = BasicBlock::Create(Ctx, "def", HF);
+	SwitchInst* SW = B.CreateSwitch(Sub32, DefBB, 12);
+
+	IRBuilder<> BM(MergeBB);
+	auto* Phi = BM.CreatePHI(I32Ty, 13, "r");
+	BM.CreateRet(Phi);
+
+	{
+		// Default implements BS_ADD (matches OP_BINOP's fallback).
+		IRBuilder<> BD(DefBB);
+		Value* Rv = BD.CreateAdd(AArg, BArg, "add");
+		Phi->addIncoming(Rv, DefBB);
+		BD.CreateBr(MergeBB);
+	}
+
+	auto addCase = [&](uint32_t Case, const Twine& Name, auto Emit) {
+		BasicBlock* CBB = BasicBlock::Create(Ctx, Name, HF);
+		IRBuilder<> BC(CBB);
+		Value* Rv = Emit(BC);
+		Phi->addIncoming(Rv, CBB);
+		BC.CreateBr(MergeBB);
+		SW->addCase(B.getInt32(Case), CBB);
+		};
+
+	addCase(BS_SUB, "sub", [&](IRBuilder<>& BC) { return BC.CreateSub(AArg, BArg, "sub"); });
+	addCase(BS_MUL, "mul", [&](IRBuilder<>& BC) { return BC.CreateMul(AArg, BArg, "mul"); });
+	addCase(BS_AND, "and", [&](IRBuilder<>& BC) { return BC.CreateAnd(AArg, BArg, "and"); });
+	addCase(BS_OR, "or", [&](IRBuilder<>& BC) { return BC.CreateOr(AArg, BArg, "or"); });
+	addCase(BS_XOR, "xor", [&](IRBuilder<>& BC) { return BC.CreateXor(AArg, BArg, "xor"); });
+	addCase(BS_SHL, "shl", [&](IRBuilder<>& BC) { return BC.CreateShl(AArg, BArg, "shl"); });
+	addCase(BS_LSHR, "lshr", [&](IRBuilder<>& BC) { return BC.CreateLShr(AArg, BArg, "lshr"); });
+	addCase(BS_ASHR, "ashr", [&](IRBuilder<>& BC) { return BC.CreateAShr(AArg, BArg, "ashr"); });
+	addCase(BS_SDIV, "sdiv", [&](IRBuilder<>& BC) { return BC.CreateSDiv(AArg, BArg, "sdiv"); });
+	addCase(BS_UDIV, "udiv", [&](IRBuilder<>& BC) { return BC.CreateUDiv(AArg, BArg, "udiv"); });
+	addCase(BS_SREM, "srem", [&](IRBuilder<>& BC) { return BC.CreateSRem(AArg, BArg, "srem"); });
+	addCase(BS_UREM, "urem", [&](IRBuilder<>& BC) { return BC.CreateURem(AArg, BArg, "urem"); });
+
+	return HF;
+}
+
+// Pure helper `i64 __vm_h_binop64(i64 a, i64 b, i8 subop)` -- replicates
+// OP_BINOP64's subop switch (buildHandlersIntArith) exactly, same shape as
+// getOrCreateNestedBinopHelper() but over I64Ty operands/result.
+Function* VMImpl::getOrCreateNestedBinop64Helper() {
+	if (Function* Existing = M.getFunction(kNestedBinop64HelperName))
+		return Existing;
+
+	FunctionType* FTy = FunctionType::get(I64Ty, { I64Ty, I64Ty, I8Ty }, false);
+	Function* HF = Function::Create(FTy, GlobalValue::InternalLinkage,
+		kNestedBinop64HelperName, &M);
+	HF->addFnAttr(Attribute::NoUnwind);
+	Argument* AArg = HF->getArg(0); AArg->setName("a");
+	Argument* BArg = HF->getArg(1); BArg->setName("b");
+	Argument* SubArg = HF->getArg(2); SubArg->setName("subop");
+
+	BasicBlock* EntryBB = BasicBlock::Create(Ctx, "entry", HF);
+	IRBuilder<> B(EntryBB);
+	Value* Sub32 = B.CreateZExt(SubArg, I32Ty, "sub32");
+
+	BasicBlock* MergeBB = BasicBlock::Create(Ctx, "merge", HF);
+	BasicBlock* DefBB = BasicBlock::Create(Ctx, "def", HF);
+	SwitchInst* SW = B.CreateSwitch(Sub32, DefBB, 12);
+
+	IRBuilder<> BM(MergeBB);
+	auto* Phi = BM.CreatePHI(I64Ty, 13, "r");
+	BM.CreateRet(Phi);
+
+	{
+		// Default implements BS_ADD (matches OP_BINOP64's fallback).
+		IRBuilder<> BD(DefBB);
+		Value* Rv = BD.CreateAdd(AArg, BArg, "add");
+		Phi->addIncoming(Rv, DefBB);
+		BD.CreateBr(MergeBB);
+	}
+
+	auto addCase = [&](uint32_t Case, const Twine& Name, auto Emit) {
+		BasicBlock* CBB = BasicBlock::Create(Ctx, Name, HF);
+		IRBuilder<> BC(CBB);
+		Value* Rv = Emit(BC);
+		Phi->addIncoming(Rv, CBB);
+		BC.CreateBr(MergeBB);
+		SW->addCase(B.getInt32(Case), CBB);
+		};
+
+	addCase(BS_SUB, "sub", [&](IRBuilder<>& BC) { return BC.CreateSub(AArg, BArg, "sub"); });
+	addCase(BS_MUL, "mul", [&](IRBuilder<>& BC) { return BC.CreateMul(AArg, BArg, "mul"); });
+	addCase(BS_AND, "and", [&](IRBuilder<>& BC) { return BC.CreateAnd(AArg, BArg, "and"); });
+	addCase(BS_OR, "or", [&](IRBuilder<>& BC) { return BC.CreateOr(AArg, BArg, "or"); });
+	addCase(BS_XOR, "xor", [&](IRBuilder<>& BC) { return BC.CreateXor(AArg, BArg, "xor"); });
+	addCase(BS_SHL, "shl", [&](IRBuilder<>& BC) { return BC.CreateShl(AArg, BArg, "shl"); });
+	addCase(BS_LSHR, "lshr", [&](IRBuilder<>& BC) { return BC.CreateLShr(AArg, BArg, "lshr"); });
+	addCase(BS_ASHR, "ashr", [&](IRBuilder<>& BC) { return BC.CreateAShr(AArg, BArg, "ashr"); });
+	addCase(BS_SDIV, "sdiv", [&](IRBuilder<>& BC) { return BC.CreateSDiv(AArg, BArg, "sdiv"); });
+	addCase(BS_UDIV, "udiv", [&](IRBuilder<>& BC) { return BC.CreateUDiv(AArg, BArg, "udiv"); });
+	addCase(BS_SREM, "srem", [&](IRBuilder<>& BC) { return BC.CreateSRem(AArg, BArg, "srem"); });
+	addCase(BS_UREM, "urem", [&](IRBuilder<>& BC) { return BC.CreateURem(AArg, BArg, "urem"); });
+
+	return HF;
+}
+
+// Pure helper `i32 __vm_h_icmp(i32 a, i32 b, i8 pred)` -- replicates OP_ICMP's
+// predicate select-chain (buildHandlersIntArith) as a switch. `pred` is the
+// raw CmpInst::Predicate byte (ICMP_EQ..ICMP_SLE). Default (pred matches none
+// of the 10 integer predicates) returns 0, matching the select chain's
+// initial R=false.
+Function* VMImpl::getOrCreateNestedIcmpHelper() {
+	if (Function* Existing = M.getFunction(kNestedIcmpHelperName))
+		return Existing;
+
+	FunctionType* FTy = FunctionType::get(I32Ty, { I32Ty, I32Ty, I8Ty }, false);
+	Function* HF = Function::Create(FTy, GlobalValue::InternalLinkage,
+		kNestedIcmpHelperName, &M);
+	HF->addFnAttr(Attribute::NoUnwind);
+	Argument* AArg = HF->getArg(0); AArg->setName("a");
+	Argument* BArg = HF->getArg(1); BArg->setName("b");
+	Argument* PredArg = HF->getArg(2); PredArg->setName("pred");
+
+	BasicBlock* EntryBB = BasicBlock::Create(Ctx, "entry", HF);
+	IRBuilder<> B(EntryBB);
+	Value* Pred32 = B.CreateZExt(PredArg, I32Ty, "pred32");
+
+	BasicBlock* MergeBB = BasicBlock::Create(Ctx, "merge", HF);
+	BasicBlock* DefBB = BasicBlock::Create(Ctx, "def", HF);
+	SwitchInst* SW = B.CreateSwitch(Pred32, DefBB, 10);
+
+	IRBuilder<> BM(MergeBB);
+	auto* Phi = BM.CreatePHI(I32Ty, 11, "r");
+	BM.CreateRet(Phi);
+
+	{
+		// Default: pred matches none of the 10 -- result 0 (matches OP_ICMP's
+		// initial R=false).
+		IRBuilder<> BD(DefBB);
+		Phi->addIncoming(BD.getInt32(0), DefBB);
+		BD.CreateBr(MergeBB);
+	}
+
+	using P = CmpInst::Predicate;
+	auto addCase = [&](P Pred, const Twine& Name, auto Emit) {
+		BasicBlock* CBB = BasicBlock::Create(Ctx, Name, HF);
+		IRBuilder<> BC(CBB);
+		Value* Rv = BC.CreateZExt(Emit(BC), I32Ty, "z");
+		Phi->addIncoming(Rv, CBB);
+		BC.CreateBr(MergeBB);
+		SW->addCase(B.getInt32((uint32_t)Pred), CBB);
+		};
+
+	addCase(P::ICMP_EQ, "eq", [&](IRBuilder<>& BC) { return BC.CreateICmpEQ(AArg, BArg); });
+	addCase(P::ICMP_NE, "ne", [&](IRBuilder<>& BC) { return BC.CreateICmpNE(AArg, BArg); });
+	addCase(P::ICMP_UGT, "ugt", [&](IRBuilder<>& BC) { return BC.CreateICmpUGT(AArg, BArg); });
+	addCase(P::ICMP_UGE, "uge", [&](IRBuilder<>& BC) { return BC.CreateICmpUGE(AArg, BArg); });
+	addCase(P::ICMP_ULT, "ult", [&](IRBuilder<>& BC) { return BC.CreateICmpULT(AArg, BArg); });
+	addCase(P::ICMP_ULE, "ule", [&](IRBuilder<>& BC) { return BC.CreateICmpULE(AArg, BArg); });
+	addCase(P::ICMP_SGT, "sgt", [&](IRBuilder<>& BC) { return BC.CreateICmpSGT(AArg, BArg); });
+	addCase(P::ICMP_SGE, "sge", [&](IRBuilder<>& BC) { return BC.CreateICmpSGE(AArg, BArg); });
+	addCase(P::ICMP_SLT, "slt", [&](IRBuilder<>& BC) { return BC.CreateICmpSLT(AArg, BArg); });
+	addCase(P::ICMP_SLE, "sle", [&](IRBuilder<>& BC) { return BC.CreateICmpSLE(AArg, BArg); });
+
+	return HF;
+}
+
+// Pure helper `i32 __vm_h_icmp64(i64 a, i64 b, i8 pred)` -- replicates
+// OP_ICMP64's predicate select-chain, same shape as getOrCreateNestedIcmpHelper()
+// but over I64Ty operands (result stays i32, matching OP_ICMP64's vreg dest).
+Function* VMImpl::getOrCreateNestedIcmp64Helper() {
+	if (Function* Existing = M.getFunction(kNestedIcmp64HelperName))
+		return Existing;
+
+	FunctionType* FTy = FunctionType::get(I32Ty, { I64Ty, I64Ty, I8Ty }, false);
+	Function* HF = Function::Create(FTy, GlobalValue::InternalLinkage,
+		kNestedIcmp64HelperName, &M);
+	HF->addFnAttr(Attribute::NoUnwind);
+	Argument* AArg = HF->getArg(0); AArg->setName("a");
+	Argument* BArg = HF->getArg(1); BArg->setName("b");
+	Argument* PredArg = HF->getArg(2); PredArg->setName("pred");
+
+	BasicBlock* EntryBB = BasicBlock::Create(Ctx, "entry", HF);
+	IRBuilder<> B(EntryBB);
+	Value* Pred32 = B.CreateZExt(PredArg, I32Ty, "pred32");
+
+	BasicBlock* MergeBB = BasicBlock::Create(Ctx, "merge", HF);
+	BasicBlock* DefBB = BasicBlock::Create(Ctx, "def", HF);
+	SwitchInst* SW = B.CreateSwitch(Pred32, DefBB, 10);
+
+	IRBuilder<> BM(MergeBB);
+	auto* Phi = BM.CreatePHI(I32Ty, 11, "r");
+	BM.CreateRet(Phi);
+
+	{
+		// Default: pred matches none of the 10 -- result 0 (matches OP_ICMP64's
+		// initial R=false).
+		IRBuilder<> BD(DefBB);
+		Phi->addIncoming(BD.getInt32(0), DefBB);
+		BD.CreateBr(MergeBB);
+	}
+
+	using P = CmpInst::Predicate;
+	auto addCase = [&](P Pred, const Twine& Name, auto Emit) {
+		BasicBlock* CBB = BasicBlock::Create(Ctx, Name, HF);
+		IRBuilder<> BC(CBB);
+		Value* Rv = BC.CreateZExt(Emit(BC), I32Ty, "z");
+		Phi->addIncoming(Rv, CBB);
+		BC.CreateBr(MergeBB);
+		SW->addCase(B.getInt32((uint32_t)Pred), CBB);
+		};
+
+	addCase(P::ICMP_EQ, "eq", [&](IRBuilder<>& BC) { return BC.CreateICmpEQ(AArg, BArg); });
+	addCase(P::ICMP_NE, "ne", [&](IRBuilder<>& BC) { return BC.CreateICmpNE(AArg, BArg); });
+	addCase(P::ICMP_UGT, "ugt", [&](IRBuilder<>& BC) { return BC.CreateICmpUGT(AArg, BArg); });
+	addCase(P::ICMP_UGE, "uge", [&](IRBuilder<>& BC) { return BC.CreateICmpUGE(AArg, BArg); });
+	addCase(P::ICMP_ULT, "ult", [&](IRBuilder<>& BC) { return BC.CreateICmpULT(AArg, BArg); });
+	addCase(P::ICMP_ULE, "ule", [&](IRBuilder<>& BC) { return BC.CreateICmpULE(AArg, BArg); });
+	addCase(P::ICMP_SGT, "sgt", [&](IRBuilder<>& BC) { return BC.CreateICmpSGT(AArg, BArg); });
+	addCase(P::ICMP_SGE, "sge", [&](IRBuilder<>& BC) { return BC.CreateICmpSGE(AArg, BArg); });
+	addCase(P::ICMP_SLT, "slt", [&](IRBuilder<>& BC) { return BC.CreateICmpSLT(AArg, BArg); });
+	addCase(P::ICMP_SLE, "sle", [&](IRBuilder<>& BC) { return BC.CreateICmpSLE(AArg, BArg); });
+
+	return HF;
+}
+
+// Pure helper `i32 __vm_h_fcmp(double a, double b, i8 pred)` -- replicates
+// OP_FCMP's predicate switch (buildHandlersFloat) exactly. `pred` is the raw
+// CmpInst::Predicate byte (FCMP_OEQ..FCMP_UNO). Default -- FCMP_FALSE
+// (pred=0), and any unmatched pred value (e.g. FCMP_TRUE) -- returns 0,
+// matching OP_FCMP's default block exactly (including its FCMP_TRUE gap).
+Function* VMImpl::getOrCreateNestedFcmpHelper() {
+	if (Function* Existing = M.getFunction(kNestedFcmpHelperName))
+		return Existing;
+
+	FunctionType* FTy = FunctionType::get(I32Ty, { DoubleTy, DoubleTy, I8Ty }, false);
+	Function* HF = Function::Create(FTy, GlobalValue::InternalLinkage,
+		kNestedFcmpHelperName, &M);
+	HF->addFnAttr(Attribute::NoUnwind);
+	Argument* AArg = HF->getArg(0); AArg->setName("a");
+	Argument* BArg = HF->getArg(1); BArg->setName("b");
+	Argument* PredArg = HF->getArg(2); PredArg->setName("pred");
+
+	BasicBlock* EntryBB = BasicBlock::Create(Ctx, "entry", HF);
+	IRBuilder<> B(EntryBB);
+	Value* Pred32 = B.CreateZExt(PredArg, I32Ty, "pred32");
+
+	BasicBlock* MergeBB = BasicBlock::Create(Ctx, "merge", HF);
+	BasicBlock* DefBB = BasicBlock::Create(Ctx, "def", HF);
+	SwitchInst* SW = B.CreateSwitch(Pred32, DefBB, 14);
+
+	IRBuilder<> BM(MergeBB);
+	auto* Phi = BM.CreatePHI(I32Ty, 15, "r");
+	BM.CreateRet(Phi);
+
+	{
+		IRBuilder<> BD(DefBB);
+		Phi->addIncoming(BD.getInt32(0), DefBB);
+		BD.CreateBr(MergeBB);
+	}
+
+	using FP = CmpInst::Predicate;
+	auto addCase = [&](FP Pred, const Twine& Name, auto Emit) {
+		BasicBlock* CBB = BasicBlock::Create(Ctx, Name, HF);
+		IRBuilder<> BC(CBB);
+		Value* Rv = BC.CreateZExt(Emit(BC), I32Ty, "z");
+		Phi->addIncoming(Rv, CBB);
+		BC.CreateBr(MergeBB);
+		SW->addCase(B.getInt32((uint32_t)Pred), CBB);
+		};
+
+	addCase(FP::FCMP_OEQ, "oeq", [&](IRBuilder<>& BC) { return BC.CreateFCmpOEQ(AArg, BArg); });
+	addCase(FP::FCMP_OGT, "ogt", [&](IRBuilder<>& BC) { return BC.CreateFCmpOGT(AArg, BArg); });
+	addCase(FP::FCMP_OGE, "oge", [&](IRBuilder<>& BC) { return BC.CreateFCmpOGE(AArg, BArg); });
+	addCase(FP::FCMP_OLT, "olt", [&](IRBuilder<>& BC) { return BC.CreateFCmpOLT(AArg, BArg); });
+	addCase(FP::FCMP_OLE, "ole", [&](IRBuilder<>& BC) { return BC.CreateFCmpOLE(AArg, BArg); });
+	addCase(FP::FCMP_ONE, "one", [&](IRBuilder<>& BC) { return BC.CreateFCmpONE(AArg, BArg); });
+	addCase(FP::FCMP_ORD, "ord", [&](IRBuilder<>& BC) { return BC.CreateFCmpORD(AArg, BArg); });
+	addCase(FP::FCMP_UEQ, "ueq", [&](IRBuilder<>& BC) { return BC.CreateFCmpUEQ(AArg, BArg); });
+	addCase(FP::FCMP_UGT, "ugt", [&](IRBuilder<>& BC) { return BC.CreateFCmpUGT(AArg, BArg); });
+	addCase(FP::FCMP_UGE, "uge", [&](IRBuilder<>& BC) { return BC.CreateFCmpUGE(AArg, BArg); });
+	addCase(FP::FCMP_ULT, "ult", [&](IRBuilder<>& BC) { return BC.CreateFCmpULT(AArg, BArg); });
+	addCase(FP::FCMP_ULE, "ule", [&](IRBuilder<>& BC) { return BC.CreateFCmpULE(AArg, BArg); });
+	addCase(FP::FCMP_UNE, "une", [&](IRBuilder<>& BC) { return BC.CreateFCmpUNE(AArg, BArg); });
+	addCase(FP::FCMP_UNO, "uno", [&](IRBuilder<>& BC) { return BC.CreateFCmpUNO(AArg, BArg); });
+
+	return HF;
+}
+
+// Pure helper `i32 __vm_h_cast(i32 src, i8 kind)` -- replicates OP_CAST's
+// kind select-chain (buildHandlersIntArith) as a switch. `kind` 0..7 covers
+// CK_ZEXT1/8/16, CK_SEXT8/16, CK_TRUNC1/8/16 -- all operate within the i32
+// reg file, so zextN and truncN of an already-i32 value share the same
+// AND/shift body (mirroring OP_CAST's Cvs[] table, which reuses ze() for both
+// the ZEXT and TRUNC cases). Default (kind not in 0..7) returns src
+// unchanged, matching the select chain's initial R=SV.
+Function* VMImpl::getOrCreateNestedCastHelper() {
+	if (Function* Existing = M.getFunction(kNestedCastHelperName))
+		return Existing;
+
+	FunctionType* FTy = FunctionType::get(I32Ty, { I32Ty, I8Ty }, false);
+	Function* HF = Function::Create(FTy, GlobalValue::InternalLinkage,
+		kNestedCastHelperName, &M);
+	HF->addFnAttr(Attribute::NoUnwind);
+	Argument* SrcArg = HF->getArg(0); SrcArg->setName("src");
+	Argument* KindArg = HF->getArg(1); KindArg->setName("kind");
+
+	BasicBlock* EntryBB = BasicBlock::Create(Ctx, "entry", HF);
+	IRBuilder<> B(EntryBB);
+	Value* Kind32 = B.CreateZExt(KindArg, I32Ty, "kind32");
+
+	BasicBlock* MergeBB = BasicBlock::Create(Ctx, "merge", HF);
+	BasicBlock* DefBB = BasicBlock::Create(Ctx, "def", HF);
+	SwitchInst* SW = B.CreateSwitch(Kind32, DefBB, 8);
+
+	IRBuilder<> BM(MergeBB);
+	auto* Phi = BM.CreatePHI(I32Ty, 9, "r");
+	BM.CreateRet(Phi);
+
+	{
+		// Default: kind not in 0..7 -- result is src unchanged.
+		IRBuilder<> BD(DefBB);
+		Phi->addIncoming(SrcArg, DefBB);
+		BD.CreateBr(MergeBB);
+	}
+
+	auto addCase = [&](uint32_t Case, const Twine& Name, auto Emit) {
+		BasicBlock* CBB = BasicBlock::Create(Ctx, Name, HF);
+		IRBuilder<> BC(CBB);
+		Value* Rv = Emit(BC);
+		Phi->addIncoming(Rv, CBB);
+		BC.CreateBr(MergeBB);
+		SW->addCase(B.getInt32(Case), CBB);
+		};
+
+	auto ze = [&](IRBuilder<>& BC, uint32_t Mask) -> Value* {
+		return BC.CreateAnd(SrcArg, BC.getInt32(Mask), "ze"); };
+	auto se = [&](IRBuilder<>& BC, uint32_t W) -> Value* {
+		return BC.CreateAShr(BC.CreateShl(SrcArg, BC.getInt32(32 - W), "ssl"),
+			BC.getInt32(32 - W), "ssr");
+		};
+
+	addCase(CK_ZEXT1, "zext1", [&](IRBuilder<>& BC) { return ze(BC, 1); });
+	addCase(CK_ZEXT8, "zext8", [&](IRBuilder<>& BC) { return ze(BC, 0xFF); });
+	addCase(CK_ZEXT16, "zext16", [&](IRBuilder<>& BC) { return ze(BC, 0xFFFF); });
+	addCase(CK_SEXT8, "sext8", [&](IRBuilder<>& BC) { return se(BC, 8); });
+	addCase(CK_SEXT16, "sext16", [&](IRBuilder<>& BC) { return se(BC, 16); });
+	addCase(CK_TRUNC1, "trunc1", [&](IRBuilder<>& BC) { return ze(BC, 1); });
+	addCase(CK_TRUNC8, "trunc8", [&](IRBuilder<>& BC) { return ze(BC, 0xFF); });
+	addCase(CK_TRUNC16, "trunc16", [&](IRBuilder<>& BC) { return ze(BC, 0xFFFF); });
+
+	return HF;
+}
+
+// Pure helper `double __vm_h_binop_f(double a, double b, i8 subop)` -- replicates
+// OP_BINOP_F's compute (buildHandlersFloat). subop bits[6:0] = FBinSubop, bit[7]
+// = f32-mode flag: when set, the f64 result is rounded to f32 precision
+// (fptrunc->fpext), matching native float arithmetic. Plain (no fast-math) FP
+// ops, mirroring the handler. Default case is FBS_FADD.
+Function* VMImpl::getOrCreateNestedBinopFHelper() {
+	if (Function* Existing = M.getFunction(kNestedBinopFHelperName))
+		return Existing;
+
+	FunctionType* FTy = FunctionType::get(DoubleTy, { DoubleTy, DoubleTy, I8Ty }, false);
+	Function* HF = Function::Create(FTy, GlobalValue::InternalLinkage,
+		kNestedBinopFHelperName, &M);
+	HF->addFnAttr(Attribute::NoUnwind);
+	Argument* AArg = HF->getArg(0); AArg->setName("a");
+	Argument* BArg = HF->getArg(1); BArg->setName("b");
+	Argument* SubArg = HF->getArg(2); SubArg->setName("subop");
+
+	BasicBlock* EntryBB = BasicBlock::Create(Ctx, "entry", HF);
+	IRBuilder<> B(EntryBB);
+	Value* Sub32 = B.CreateZExt(SubArg, I32Ty, "sub32");
+	Value* Op = B.CreateAnd(Sub32, B.getInt32(0x7F), "op");      // FBinSubop
+	Value* IsF32 = B.CreateICmpNE(
+		B.CreateAnd(Sub32, B.getInt32(0x80), "f32b"), B.getInt32(0), "f32");
+
+	BasicBlock* MergeBB = BasicBlock::Create(Ctx, "merge", HF);
+	BasicBlock* DefBB = BasicBlock::Create(Ctx, "def", HF);
+	SwitchInst* SW = B.CreateSwitch(Op, DefBB, 5);
+
+	IRBuilder<> BM(MergeBB);
+	auto* Phi = BM.CreatePHI(DoubleTy, 6, "r");
+	// Round to f32 precision when bit 7 was set (matches the handler).
+	Value* Narrow = BM.CreateFPExt(
+		BM.CreateFPTrunc(Phi, Type::getFloatTy(Ctx), "nt"), DoubleTy, "ne");
+	Value* Final = BM.CreateSelect(IsF32, Narrow, Phi, "fin");
+	BM.CreateRet(Final);
+
+	{
+		// Default implements FBS_FADD (matches OP_BINOP_F's fallback).
+		IRBuilder<> BD(DefBB);
+		Phi->addIncoming(BD.CreateFAdd(AArg, BArg, "fadd"), DefBB);
+		BD.CreateBr(MergeBB);
+	}
+
+	auto addCase = [&](uint32_t Case, const Twine& Name, auto Emit) {
+		BasicBlock* CBB = BasicBlock::Create(Ctx, Name, HF);
+		IRBuilder<> BC(CBB);
+		Phi->addIncoming(Emit(BC), CBB);
+		BC.CreateBr(MergeBB);
+		SW->addCase(B.getInt32(Case), CBB);
+		};
+
+	addCase(FBS_FSUB, "fsub", [&](IRBuilder<>& BC) { return BC.CreateFSub(AArg, BArg, "fsub"); });
+	addCase(FBS_FMUL, "fmul", [&](IRBuilder<>& BC) { return BC.CreateFMul(AArg, BArg, "fmul"); });
+	addCase(FBS_FDIV, "fdiv", [&](IRBuilder<>& BC) { return BC.CreateFDiv(AArg, BArg, "fdiv"); });
+	addCase(FBS_FREM, "frem", [&](IRBuilder<>& BC) { return BC.CreateFRem(AArg, BArg, "frem"); });
+
+	return HF;
+}
+
+// Inner-virtualize every created pure helper, exactly once per module. Must
+// run AFTER populateVMEngine() -- see the sequencing note above. Loops over
+// the fixed nesting order; a helper not found by name was never referenced
+// (opcodeNests() excluded it, e.g. via the nestedVMOpcodes cap).
+void VMImpl::virtualizeNestedHelpersOnce() {
+	VMEngine::SharedState* SS = VMEngine::getSharedState(M, EngineId);
+	if (SS->NestedHelpersBuilt) return;
+	SS->NestedHelpersBuilt = true;
+
+	VMPassConfig InnerCfg = Cfg;
+	InnerCfg.nestedVM = false; // hard recursion guard: no helper is ever itself nested
+	InnerCfg.minBlocks = 1;    // helper is a single small switch
+	// NOTE: NestedVMHardened is reserved. Hardening the helper's thin wrapper
+	// via the standard wrapper-hardening passes currently yields dominance-
+	// invalid IR on the helper's small wrapper shape; left off until that is
+	// fixed. The distinct inner engine already provides the second layer.
+	InnerCfg.hardened = false;
+
+	for (unsigned i = 0; i < kNumNestedHelpers; ++i) {
+		Function* HelperFn = M.getFunction(kNestedHelperOrder[i].Name);
+		if (!HelperFn) continue; // this opcode's helper was never referenced
+
+		obf::Rng InnerRng = R.fork((Twine("vm.nested.inner.") + kNestedHelperOrder[i].Name).str());
+		VMImpl Inner(*HelperFn, InnerCfg, InnerRng);
+		if (!Inner.run()) {
+			LLVM_DEBUG(dbgs() << "[vm] nested-VM: failed to virtualize '"
+				<< HelperFn->getName() << "': " << Inner.FailReason << "\n");
+			if (ObfVerbose)
+				errs() << "[vm] nested-VM: failed to virtualize '" << HelperFn->getName()
+				<< "': " << Inner.FailReason << "\n";
+		}
+	}
+}
+
 void VMImpl::buildOpcodeHandlers() {
 	for (unsigned v = 0; v < NumVariants; ++v) {
 		CurVariant = v;
@@ -435,15 +993,27 @@ void VMImpl::buildHandlersIntArith() {
 		auto B = mkOpc(OP_LOADI, "loadi");
 		Value* IP = advIP(B, 5);
 		stVR(B, rdVR(B, IP, 0, "vm.li.d"), rdU32(B, IP, 1, "vm.li.i"));
-		B.CreateBr(Dispatch);
+		nextInsn(B);
 	}
 
-	//  OP_MOVR  [dst:u8 src:u8] -- vreg[dst] = vreg[src] 
+	//  OP_LOADI64  [dst64:u8 imm:i64le] -- vreg64[dst] = imm
+	{
+		auto B = mkOpc(OP_LOADI64, "loadi64");
+		Value* IP = advIP(B, 9);
+		Value* Dst = rdVR64(B, IP, 0, "vm.li64.d");
+		Value* Lo = B.CreateZExt(rdU32(B, IP, 1, "vm.li64.lo"), I64Ty, "vm.li64.loz");
+		Value* Hi = B.CreateZExt(rdU32(B, IP, 5, "vm.li64.hi"), I64Ty, "vm.li64.hiz");
+		Value* Imm = B.CreateOr(Lo, B.CreateShl(Hi, B.getInt64(32), "vm.li64.hs"), "vm.li64.v");
+		stVR64(B, Dst, Imm);
+		nextInsn(B);
+	}
+
+	//  OP_MOVR  [dst:u8 src:u8] -- vreg[dst] = vreg[src]
 	{
 		auto B = mkOpc(OP_MOVR, "movr");
 		Value* IP = advIP(B, 2);
 		stVR(B, rdVR(B, IP, 0, "vm.mr.d"), ldVR(B, rdVR(B, IP, 1, "vm.mr.s")));
-		B.CreateBr(Dispatch);
+		nextInsn(B);
 	}
 
 	//  OP_BINOP  -- [dst:u8 a:u8 b:u8 subop:u8] 
@@ -458,46 +1028,58 @@ void VMImpl::buildHandlersIntArith() {
 		Value* AV = ldVR(B, AIdx);
 		Value* BV = ldVR(B, BIdx);
 
-		BasicBlock* MergeBB = BasicBlock::Create(Ctx, "vm.bo.merge", HFn);
-		BasicBlock* DefBB = BasicBlock::Create(Ctx, "vm.bo.def", HFn);
+		if (NestedVM) {
+			// Compute via a call into the pure helper, itself separately
+			// inner-virtualized (see virtualizeNestedHelpersOnce()), instead
+			// of the inline switch below. Decode/load stay identical to the
+			// non-nested path; only the compute step differs.
+			Function* HelperFn = M.getFunction(kNestedBinopHelperName);
+			Value* Sub8 = B.CreateTrunc(Sub, I8Ty, "vm.bo.sub8");
+			Value* Rv = B.CreateCall(HelperFn, { AV, BV, Sub8 }, "vm.bo.nested");
+			stVR(B, Dst, Rv);
+			nextInsn(B);
+		} else {
+			BasicBlock* MergeBB = BasicBlock::Create(Ctx, "vm.bo.merge", HFn);
+			BasicBlock* DefBB = BasicBlock::Create(Ctx, "vm.bo.def", HFn);
 
 
-		// Default implements BS_ADD (matches previous select-chain fallback)
-		SwitchInst* SW = B.CreateSwitch(Sub, DefBB, 12);
+			// Default implements BS_ADD (matches previous select-chain fallback)
+			SwitchInst* SW = B.CreateSwitch(Sub, DefBB, 12);
 
-		IRBuilder<> BM(MergeBB);
-		auto* Phi = BM.CreatePHI(I32Ty, 13, "vm.bo.r");
-		stVR(BM, Dst, Phi);
-		BM.CreateBr(Dispatch);
+			IRBuilder<> BM(MergeBB);
+			auto* Phi = BM.CreatePHI(I32Ty, 13, "vm.bo.r");
+			stVR(BM, Dst, Phi);
+			nextInsn(BM);
 
-		{
-			IRBuilder<> BD(DefBB);
-			Value* R = BD.CreateAdd(AV, BV, "vm.add");
-			Phi->addIncoming(R, DefBB);
-			BD.CreateBr(MergeBB);
+			{
+				IRBuilder<> BD(DefBB);
+				Value* R = BD.CreateAdd(AV, BV, "vm.add");
+				Phi->addIncoming(R, DefBB);
+				BD.CreateBr(MergeBB);
+			}
+
+			auto addCase = [&](uint32_t Case, const Twine& BBName, auto Emit) {
+				BasicBlock* CBB = BasicBlock::Create(Ctx, BBName, HFn);
+				IRBuilder<> BC(CBB);
+				Value* R = Emit(BC);
+				Phi->addIncoming(R, CBB);
+				BC.CreateBr(MergeBB);
+				SW->addCase(B.getInt32(Case), CBB);
+				};
+
+			addCase(BS_SUB, "vm.bo.sub", [&](IRBuilder<>& BC) { return BC.CreateSub(AV, BV, "vm.sub"); });
+			addCase(BS_MUL, "vm.bo.mul", [&](IRBuilder<>& BC) { return BC.CreateMul(AV, BV, "vm.mul"); });
+			addCase(BS_AND, "vm.bo.and", [&](IRBuilder<>& BC) { return BC.CreateAnd(AV, BV, "vm.and"); });
+			addCase(BS_OR, "vm.bo.or", [&](IRBuilder<>& BC) { return BC.CreateOr(AV, BV, "vm.or"); });
+			addCase(BS_XOR, "vm.bo.xor", [&](IRBuilder<>& BC) { return BC.CreateXor(AV, BV, "vm.xor"); });
+			addCase(BS_SHL, "vm.bo.shl", [&](IRBuilder<>& BC) { return BC.CreateShl(AV, BV, "vm.shl"); });
+			addCase(BS_LSHR, "vm.bo.lshr", [&](IRBuilder<>& BC) { return BC.CreateLShr(AV, BV, "vm.lshr"); });
+			addCase(BS_ASHR, "vm.bo.ashr", [&](IRBuilder<>& BC) { return BC.CreateAShr(AV, BV, "vm.ashr"); });
+			addCase(BS_SDIV, "vm.bo.sdiv", [&](IRBuilder<>& BC) { return BC.CreateSDiv(AV, BV, "vm.sdiv"); });
+			addCase(BS_UDIV, "vm.bo.udiv", [&](IRBuilder<>& BC) { return BC.CreateUDiv(AV, BV, "vm.udiv"); });
+			addCase(BS_SREM, "vm.bo.srem", [&](IRBuilder<>& BC) { return BC.CreateSRem(AV, BV, "vm.srem"); });
+			addCase(BS_UREM, "vm.bo.urem", [&](IRBuilder<>& BC) { return BC.CreateURem(AV, BV, "vm.urem"); });
 		}
-
-		auto addCase = [&](uint32_t Case, const Twine& BBName, auto Emit) {
-			BasicBlock* CBB = BasicBlock::Create(Ctx, BBName, HFn);
-			IRBuilder<> BC(CBB);
-			Value* R = Emit(BC);
-			Phi->addIncoming(R, CBB);
-			BC.CreateBr(MergeBB);
-			SW->addCase(B.getInt32(Case), CBB);
-			};
-
-		addCase(BS_SUB, "vm.bo.sub", [&](IRBuilder<>& BC) { return BC.CreateSub(AV, BV, "vm.sub"); });
-		addCase(BS_MUL, "vm.bo.mul", [&](IRBuilder<>& BC) { return BC.CreateMul(AV, BV, "vm.mul"); });
-		addCase(BS_AND, "vm.bo.and", [&](IRBuilder<>& BC) { return BC.CreateAnd(AV, BV, "vm.and"); });
-		addCase(BS_OR, "vm.bo.or", [&](IRBuilder<>& BC) { return BC.CreateOr(AV, BV, "vm.or"); });
-		addCase(BS_XOR, "vm.bo.xor", [&](IRBuilder<>& BC) { return BC.CreateXor(AV, BV, "vm.xor"); });
-		addCase(BS_SHL, "vm.bo.shl", [&](IRBuilder<>& BC) { return BC.CreateShl(AV, BV, "vm.shl"); });
-		addCase(BS_LSHR, "vm.bo.lshr", [&](IRBuilder<>& BC) { return BC.CreateLShr(AV, BV, "vm.lshr"); });
-		addCase(BS_ASHR, "vm.bo.ashr", [&](IRBuilder<>& BC) { return BC.CreateAShr(AV, BV, "vm.ashr"); });
-		addCase(BS_SDIV, "vm.bo.sdiv", [&](IRBuilder<>& BC) { return BC.CreateSDiv(AV, BV, "vm.sdiv"); });
-		addCase(BS_UDIV, "vm.bo.udiv", [&](IRBuilder<>& BC) { return BC.CreateUDiv(AV, BV, "vm.udiv"); });
-		addCase(BS_SREM, "vm.bo.srem", [&](IRBuilder<>& BC) { return BC.CreateSRem(AV, BV, "vm.srem"); });
-		addCase(BS_UREM, "vm.bo.urem", [&](IRBuilder<>& BC) { return BC.CreateURem(AV, BV, "vm.urem"); });
 	}
 
 
@@ -513,45 +1095,55 @@ void VMImpl::buildHandlersIntArith() {
 		Value* AV = ldVR64(B, AIdx);
 		Value* BV = ldVR64(B, BIdx);
 
-		BasicBlock* MergeBB = BasicBlock::Create(Ctx, "vm.bo64.merge", HFn);
-		BasicBlock* DefBB = BasicBlock::Create(Ctx, "vm.bo64.def", HFn);
+		if (NestedVM && opcodeNests(OP_BINOP64)) {
+			// See OP_BINOP's NestedVM branch: decode/load stay identical to
+			// the inline path below, only the compute step calls the helper.
+			Function* HelperFn = M.getFunction(kNestedBinop64HelperName);
+			Value* Sub8 = B.CreateTrunc(Sub, I8Ty, "vm.bo64.sub8");
+			Value* Rv = B.CreateCall(HelperFn, { AV, BV, Sub8 }, "vm.bo64.nested");
+			stVR64(B, Dst, Rv);
+			nextInsn(B);
+		} else {
+			BasicBlock* MergeBB = BasicBlock::Create(Ctx, "vm.bo64.merge", HFn);
+			BasicBlock* DefBB = BasicBlock::Create(Ctx, "vm.bo64.def", HFn);
 
-		// Default implements BS_ADD (matches previous select-chain fallback)
-		SwitchInst* SW = B.CreateSwitch(Sub, DefBB, 12);
+			// Default implements BS_ADD (matches previous select-chain fallback)
+			SwitchInst* SW = B.CreateSwitch(Sub, DefBB, 12);
 
-		IRBuilder<> BM(MergeBB);
-		auto* Phi = BM.CreatePHI(I64Ty, 13, "vm.bo64.r");
-		stVR64(BM, Dst, Phi);
-		BM.CreateBr(Dispatch);
+			IRBuilder<> BM(MergeBB);
+			auto* Phi = BM.CreatePHI(I64Ty, 13, "vm.bo64.r");
+			stVR64(BM, Dst, Phi);
+			nextInsn(BM);
 
-		{
-			IRBuilder<> BD(DefBB);
-			Value* R = BD.CreateAdd(AV, BV, "vm64.add");
-			Phi->addIncoming(R, DefBB);
-			BD.CreateBr(MergeBB);
+			{
+				IRBuilder<> BD(DefBB);
+				Value* R = BD.CreateAdd(AV, BV, "vm64.add");
+				Phi->addIncoming(R, DefBB);
+				BD.CreateBr(MergeBB);
+			}
+
+			auto addCase = [&](uint32_t Case, const Twine& BBName, auto Emit) {
+				BasicBlock* CBB = BasicBlock::Create(Ctx, BBName, HFn);
+				IRBuilder<> BC(CBB);
+				Value* R = Emit(BC);
+				Phi->addIncoming(R, CBB);
+				BC.CreateBr(MergeBB);
+				SW->addCase(B.getInt32(Case), CBB);
+				};
+
+			addCase(BS_SUB, "vm.bo64.sub", [&](IRBuilder<>& BC) { return BC.CreateSub(AV, BV, "vm64.sub"); });
+			addCase(BS_MUL, "vm.bo64.mul", [&](IRBuilder<>& BC) { return BC.CreateMul(AV, BV, "vm64.mul"); });
+			addCase(BS_AND, "vm.bo64.and", [&](IRBuilder<>& BC) { return BC.CreateAnd(AV, BV, "vm64.and"); });
+			addCase(BS_OR, "vm.bo64.or", [&](IRBuilder<>& BC) { return BC.CreateOr(AV, BV, "vm64.or"); });
+			addCase(BS_XOR, "vm.bo64.xor", [&](IRBuilder<>& BC) { return BC.CreateXor(AV, BV, "vm64.xor"); });
+			addCase(BS_SHL, "vm.bo64.shl", [&](IRBuilder<>& BC) { return BC.CreateShl(AV, BV, "vm64.shl"); });
+			addCase(BS_LSHR, "vm.bo64.lshr", [&](IRBuilder<>& BC) { return BC.CreateLShr(AV, BV, "vm64.lshr"); });
+			addCase(BS_ASHR, "vm.bo64.ashr", [&](IRBuilder<>& BC) { return BC.CreateAShr(AV, BV, "vm64.ashr"); });
+			addCase(BS_SDIV, "vm.bo64.sdiv", [&](IRBuilder<>& BC) { return BC.CreateSDiv(AV, BV, "vm64.sdiv"); });
+			addCase(BS_UDIV, "vm.bo64.udiv", [&](IRBuilder<>& BC) { return BC.CreateUDiv(AV, BV, "vm64.udiv"); });
+			addCase(BS_SREM, "vm.bo64.srem", [&](IRBuilder<>& BC) { return BC.CreateSRem(AV, BV, "vm64.srem"); });
+			addCase(BS_UREM, "vm.bo64.urem", [&](IRBuilder<>& BC) { return BC.CreateURem(AV, BV, "vm64.urem"); });
 		}
-
-		auto addCase = [&](uint32_t Case, const Twine& BBName, auto Emit) {
-			BasicBlock* CBB = BasicBlock::Create(Ctx, BBName, HFn);
-			IRBuilder<> BC(CBB);
-			Value* R = Emit(BC);
-			Phi->addIncoming(R, CBB);
-			BC.CreateBr(MergeBB);
-			SW->addCase(B.getInt32(Case), CBB);
-			};
-
-		addCase(BS_SUB, "vm.bo64.sub", [&](IRBuilder<>& BC) { return BC.CreateSub(AV, BV, "vm64.sub"); });
-		addCase(BS_MUL, "vm.bo64.mul", [&](IRBuilder<>& BC) { return BC.CreateMul(AV, BV, "vm64.mul"); });
-		addCase(BS_AND, "vm.bo64.and", [&](IRBuilder<>& BC) { return BC.CreateAnd(AV, BV, "vm64.and"); });
-		addCase(BS_OR, "vm.bo64.or", [&](IRBuilder<>& BC) { return BC.CreateOr(AV, BV, "vm64.or"); });
-		addCase(BS_XOR, "vm.bo64.xor", [&](IRBuilder<>& BC) { return BC.CreateXor(AV, BV, "vm64.xor"); });
-		addCase(BS_SHL, "vm.bo64.shl", [&](IRBuilder<>& BC) { return BC.CreateShl(AV, BV, "vm64.shl"); });
-		addCase(BS_LSHR, "vm.bo64.lshr", [&](IRBuilder<>& BC) { return BC.CreateLShr(AV, BV, "vm64.lshr"); });
-		addCase(BS_ASHR, "vm.bo64.ashr", [&](IRBuilder<>& BC) { return BC.CreateAShr(AV, BV, "vm64.ashr"); });
-		addCase(BS_SDIV, "vm.bo64.sdiv", [&](IRBuilder<>& BC) { return BC.CreateSDiv(AV, BV, "vm64.sdiv"); });
-		addCase(BS_UDIV, "vm.bo64.udiv", [&](IRBuilder<>& BC) { return BC.CreateUDiv(AV, BV, "vm64.udiv"); });
-		addCase(BS_SREM, "vm.bo64.srem", [&](IRBuilder<>& BC) { return BC.CreateSRem(AV, BV, "vm64.srem"); });
-		addCase(BS_UREM, "vm.bo64.urem", [&](IRBuilder<>& BC) { return BC.CreateURem(AV, BV, "vm64.urem"); });
 	}
 	//  OP_ICMP -- [dst:u8 a:u8 b:u8 pred:u8] 
 	{
@@ -560,20 +1152,29 @@ void VMImpl::buildHandlersIntArith() {
 		Value* Dst = rdVR(B, IP, 0, "vm.ic.d"), * AIdx = rdVR(B, IP, 1, "vm.ic.a");
 		Value* BIdx = rdVR(B, IP, 2, "vm.ic.b"), * Pred = rdByte(B, IP, 3, "vm.ic.p");
 		Value* AV = ldVR(B, AIdx), * BV = ldVR(B, BIdx);
-		using P = CmpInst::Predicate;
-		Value* Cs[] = {
-		  B.CreateICmpEQ(AV,BV), B.CreateICmpNE(AV,BV),
-		  B.CreateICmpUGT(AV,BV), B.CreateICmpUGE(AV,BV),
-		  B.CreateICmpULT(AV,BV), B.CreateICmpULE(AV,BV),
-		  B.CreateICmpSGT(AV,BV), B.CreateICmpSGE(AV,BV),
-		  B.CreateICmpSLT(AV,BV), B.CreateICmpSLE(AV,BV),
-		};
-		P Ps[] = { P::ICMP_EQ,P::ICMP_NE,P::ICMP_UGT,P::ICMP_UGE,P::ICMP_ULT,
-				P::ICMP_ULE,P::ICMP_SGT,P::ICMP_SGE,P::ICMP_SLT,P::ICMP_SLE };
-		Value* R = B.getInt1(false);
-		for (unsigned i = 0; i < 10; i++)
-			R = B.CreateSelect(B.CreateICmpEQ(Pred, B.getInt32((uint32_t)Ps[i])), Cs[i], R);
-		stVR(B, Dst, B.CreateZExt(R, I32Ty, "vm.ic.r")); B.CreateBr(Dispatch);
+
+		if (NestedVM && opcodeNests(OP_ICMP)) {
+			Function* HelperFn = M.getFunction(kNestedIcmpHelperName);
+			Value* Pred8 = B.CreateTrunc(Pred, I8Ty, "vm.ic.pred8");
+			Value* Rv = B.CreateCall(HelperFn, { AV, BV, Pred8 }, "vm.ic.nested");
+			stVR(B, Dst, Rv);
+			nextInsn(B);
+		} else {
+			using P = CmpInst::Predicate;
+			Value* Cs[] = {
+			  B.CreateICmpEQ(AV,BV), B.CreateICmpNE(AV,BV),
+			  B.CreateICmpUGT(AV,BV), B.CreateICmpUGE(AV,BV),
+			  B.CreateICmpULT(AV,BV), B.CreateICmpULE(AV,BV),
+			  B.CreateICmpSGT(AV,BV), B.CreateICmpSGE(AV,BV),
+			  B.CreateICmpSLT(AV,BV), B.CreateICmpSLE(AV,BV),
+			};
+			P Ps[] = { P::ICMP_EQ,P::ICMP_NE,P::ICMP_UGT,P::ICMP_UGE,P::ICMP_ULT,
+					P::ICMP_ULE,P::ICMP_SGT,P::ICMP_SGE,P::ICMP_SLT,P::ICMP_SLE };
+			Value* R = B.getInt1(false);
+			for (unsigned i = 0; i < 10; i++)
+				R = B.CreateSelect(B.CreateICmpEQ(Pred, B.getInt32((uint32_t)Ps[i])), Cs[i], R);
+			stVR(B, Dst, B.CreateZExt(R, I32Ty, "vm.ic.r")); nextInsn(B);
+		}
 	}
 
 
@@ -591,23 +1192,31 @@ void VMImpl::buildHandlersIntArith() {
 		Value* Pred = rdByte(B, IP, 3, "vm.ic64.p");
 		Value* AV = ldVR64(B, AIdx), * BV = ldVR64(B, BIdx);
 
-		using P = CmpInst::Predicate;
-		Value* Cs[] = {
-		  B.CreateICmpEQ(AV,BV), B.CreateICmpNE(AV,BV),
-		  B.CreateICmpUGT(AV,BV), B.CreateICmpUGE(AV,BV),
-		  B.CreateICmpULT(AV,BV), B.CreateICmpULE(AV,BV),
-		  B.CreateICmpSGT(AV,BV), B.CreateICmpSGE(AV,BV),
-		  B.CreateICmpSLT(AV,BV), B.CreateICmpSLE(AV,BV),
-		};
-		P Ps[] = { P::ICMP_EQ,P::ICMP_NE,P::ICMP_UGT,P::ICMP_UGE,P::ICMP_ULT,
-				   P::ICMP_ULE,P::ICMP_SGT,P::ICMP_SGE,P::ICMP_SLT,P::ICMP_SLE };
+		if (NestedVM && opcodeNests(OP_ICMP64)) {
+			Function* HelperFn = M.getFunction(kNestedIcmp64HelperName);
+			Value* Pred8 = B.CreateTrunc(Pred, I8Ty, "vm.ic64.pred8");
+			Value* Rv = B.CreateCall(HelperFn, { AV, BV, Pred8 }, "vm.ic64.nested");
+			stVR(B, Dst, Rv);
+			nextInsn(B);
+		} else {
+			using P = CmpInst::Predicate;
+			Value* Cs[] = {
+			  B.CreateICmpEQ(AV,BV), B.CreateICmpNE(AV,BV),
+			  B.CreateICmpUGT(AV,BV), B.CreateICmpUGE(AV,BV),
+			  B.CreateICmpULT(AV,BV), B.CreateICmpULE(AV,BV),
+			  B.CreateICmpSGT(AV,BV), B.CreateICmpSGE(AV,BV),
+			  B.CreateICmpSLT(AV,BV), B.CreateICmpSLE(AV,BV),
+			};
+			P Ps[] = { P::ICMP_EQ,P::ICMP_NE,P::ICMP_UGT,P::ICMP_UGE,P::ICMP_ULT,
+					   P::ICMP_ULE,P::ICMP_SGT,P::ICMP_SGE,P::ICMP_SLT,P::ICMP_SLE };
 
-		Value* R = B.getInt1(false);
-		for (unsigned i = 0; i < 10; i++)
-			R = B.CreateSelect(B.CreateICmpEQ(Pred, B.getInt32((uint32_t)Ps[i])), Cs[i], R);
+			Value* R = B.getInt1(false);
+			for (unsigned i = 0; i < 10; i++)
+				R = B.CreateSelect(B.CreateICmpEQ(Pred, B.getInt32((uint32_t)Ps[i])), Cs[i], R);
 
-		stVR(B, Dst, B.CreateZExt(R, I32Ty, "vm.ic64.r"));
-		B.CreateBr(Dispatch);
+			stVR(B, Dst, B.CreateZExt(R, I32Ty, "vm.ic64.r"));
+			nextInsn(B);
+		}
 	}
 
 
@@ -617,14 +1226,23 @@ void VMImpl::buildHandlersIntArith() {
 		Value* IP = advIP(B, 3);
 		Value* Dst = rdVR(B, IP, 0, "vm.ca.d"), * Src = rdVR(B, IP, 1, "vm.ca.s"), * Kind = rdByte(B, IP, 2, "vm.ca.k");
 		Value* SV = ldVR(B, Src);
-		auto ze = [&](uint32_t M) {return B.CreateAnd(SV, B.getInt32(M), "vm.ze"); };
-		auto se = [&](uint32_t W)->Value* {
-			return B.CreateAShr(B.CreateShl(SV, B.getInt32(32 - W), "vm.ssl"), B.getInt32(32 - W), "vm.ssr"); };
-		Value* Cvs[] = { ze(1),ze(0xFF),ze(0xFFFF),se(8),se(16),ze(1),ze(0xFF),ze(0xFFFF) };
-		Value* R = SV;
-		for (unsigned i = 0; i < 8; i++)
-			R = B.CreateSelect(B.CreateICmpEQ(Kind, B.getInt32(i)), Cvs[i], R, "vm.ca.r");
-		stVR(B, Dst, R); B.CreateBr(Dispatch);
+
+		if (NestedVM && opcodeNests(OP_CAST)) {
+			Function* HelperFn = M.getFunction(kNestedCastHelperName);
+			Value* Kind8 = B.CreateTrunc(Kind, I8Ty, "vm.ca.kind8");
+			Value* Rv = B.CreateCall(HelperFn, { SV, Kind8 }, "vm.ca.nested");
+			stVR(B, Dst, Rv);
+			nextInsn(B);
+		} else {
+			auto ze = [&](uint32_t M) {return B.CreateAnd(SV, B.getInt32(M), "vm.ze"); };
+			auto se = [&](uint32_t W)->Value* {
+				return B.CreateAShr(B.CreateShl(SV, B.getInt32(32 - W), "vm.ssl"), B.getInt32(32 - W), "vm.ssr"); };
+			Value* Cvs[] = { ze(1),ze(0xFF),ze(0xFFFF),se(8),se(16),ze(1),ze(0xFF),ze(0xFFFF) };
+			Value* R = SV;
+			for (unsigned i = 0; i < 8; i++)
+				R = B.CreateSelect(B.CreateICmpEQ(Kind, B.getInt32(i)), Cvs[i], R, "vm.ca.r");
+			stVR(B, Dst, R); nextInsn(B);
+		}
 	}
 }
 
@@ -659,7 +1277,7 @@ void VMImpl::buildHandlersConv() {
 			Value* FP = ldPR(BP, rdPR(BP, IP, 4, "vm.sl.pf"));
 			Value* Bool = BP.CreateICmpNE(ldVR(BP, Cond), BP.getInt32(0), "vm.sl.pb");
 			stPR(BP, DstP, BP.CreateSelect(Bool, TP, FP, "vm.sl.pr"));
-			BP.CreateBr(Dispatch);
+			nextInsn(BP);
 		}
 
 		//  int path 
@@ -671,7 +1289,7 @@ void VMImpl::buildHandlersConv() {
 			Value* FV = ldVR(BI, rdVR(BI, IP, 4, "vm.sl.if"));
 			Value* Bool = BI.CreateICmpNE(ldVR(BI, Cond), BI.getInt32(0), "vm.sl.ib");
 			stVR(BI, Dst, BI.CreateSelect(Bool, TV, FV, "vm.sl.ir"));
-			BI.CreateBr(Dispatch);
+			nextInsn(BI);
 		}
 
 		//  i64 path 
@@ -683,7 +1301,7 @@ void VMImpl::buildHandlersConv() {
 			Value* FV = ldVR64(B64, rdVR64(B64, IP, 4, "vm.sl.64f"));
 			Value* Bool = B64.CreateICmpNE(ldVR(B64, Cond), B64.getInt32(0), "vm.sl.64b");
 			stVR64(B64, Dst, B64.CreateSelect(Bool, TV, FV, "vm.sl.64r"));
-			B64.CreateBr(Dispatch);
+			nextInsn(B64);
 		}
 	}
 	//  OP_PTRTOINT -- [dst:u8 srcp:u8] 
@@ -691,7 +1309,7 @@ void VMImpl::buildHandlersConv() {
 		auto B = mkOpc(OP_PTRTOINT, "ptrtoint");
 		Value* IP = advIP(B, 2);
 		Value* Dst = rdVR(B, IP, 0, "vm.pi.d"), * SP = rdPR(B, IP, 1, "vm.pi.s");
-		stVR(B, Dst, B.CreatePtrToInt(ldPR(B, SP), I32Ty, "vm.pi.v")); B.CreateBr(Dispatch);
+		stVR(B, Dst, B.CreatePtrToInt(ldPR(B, SP), I32Ty, "vm.pi.v")); nextInsn(B);
 	}
 
 
@@ -740,7 +1358,7 @@ void VMImpl::buildHandlersConv() {
 			R = BE.CreateSelect(BE.CreateICmpEQ(Kind, BE.getInt32((uint32_t)C64_SEXT32)), S32, R, "vm.c64.r");
 
 			stVR64(BE, Dst, R);
-			BE.CreateBr(Dispatch);
+			nextInsn(BE);
 		}
 
 		//  trunc path: VR64(i64) -> VR(i32) 
@@ -763,7 +1381,7 @@ void VMImpl::buildHandlersConv() {
 			R = BT.CreateSelect(BT.CreateICmpEQ(Kind, BT.getInt32((uint32_t)C64_TRUNC32)), T32, R, "vm.c64.tr");
 
 			stVR(BT, Dst, R);
-			BT.CreateBr(Dispatch);
+			nextInsn(BT);
 		}
 	}
 
@@ -773,7 +1391,7 @@ void VMImpl::buildHandlersConv() {
 		auto B = mkOpc(OP_PTRTOINT64, "ptrtoint64");
 		Value* IP = advIP(B, 2);
 		Value* Dst = rdVR64(B, IP, 0, "vm.pi64.d"), * SP = rdPR(B, IP, 1, "vm.pi64.s");
-		stVR64(B, Dst, B.CreatePtrToInt(ldPR(B, SP), I64Ty, "vm.pi64.v")); B.CreateBr(Dispatch);
+		stVR64(B, Dst, B.CreatePtrToInt(ldPR(B, SP), I64Ty, "vm.pi64.v")); nextInsn(B);
 	}
 
 
@@ -782,7 +1400,7 @@ void VMImpl::buildHandlersConv() {
 		auto B = mkOpc(OP_INTTOPTR, "inttoptr");
 		Value* IP = advIP(B, 2);
 		Value* DP = rdPR(B, IP, 0, "vm.pp.d"), * Src = rdVR(B, IP, 1, "vm.pp.s");
-		stPR(B, DP, B.CreateIntToPtr(ldVR(B, Src), PtrTy, "vm.pp.v")); B.CreateBr(Dispatch);
+		stPR(B, DP, B.CreateIntToPtr(ldVR(B, Src), PtrTy, "vm.pp.v")); nextInsn(B);
 	}
 
 }
@@ -793,7 +1411,7 @@ void VMImpl::buildHandlersMem() {
 		auto B = mkOpc(OP_LOAD32, "load32");
 		Value* IP = advIP(B, 2);
 		Value* Dst = rdVR(B, IP, 0, "vm.ld.d"), * PP = rdPR(B, IP, 1, "vm.ld.p");
-		stVR(B, Dst, B.CreateLoad(I32Ty, ldPR(B, PP), "vm.ld.v")); B.CreateBr(Dispatch);
+		stVR(B, Dst, B.CreateLoad(I32Ty, ldPR(B, PP), "vm.ld.v")); nextInsn(B);
 	}
 
 	//  OP_LOAD64 -- [dst64:u8 ptrreg:u8] 
@@ -801,7 +1419,7 @@ void VMImpl::buildHandlersMem() {
 		auto B = mkOpc(OP_LOAD64, "load64");
 		Value* IP = advIP(B, 2);
 		Value* Dst = rdVR64(B, IP, 0, "vm.ld64.d"), * PP = rdPR(B, IP, 1, "vm.ld64.p");
-		stVR64(B, Dst, B.CreateLoad(I64Ty, ldPR(B, PP), "vm.ld64.v")); B.CreateBr(Dispatch);
+		stVR64(B, Dst, B.CreateLoad(I64Ty, ldPR(B, PP), "vm.ld64.v")); nextInsn(B);
 	}
 
 	//  OP_STORE32 -- [val:u8 ptrreg:u8] 
@@ -809,7 +1427,7 @@ void VMImpl::buildHandlersMem() {
 		auto B = mkOpc(OP_STORE32, "store32");
 		Value* IP = advIP(B, 2);
 		Value* VR = rdVR(B, IP, 0, "vm.st.v"), * PP = rdPR(B, IP, 1, "vm.st.p");
-		B.CreateStore(ldVR(B, VR), ldPR(B, PP)); B.CreateBr(Dispatch);
+		B.CreateStore(ldVR(B, VR), ldPR(B, PP)); nextInsn(B);
 	}
 
 	//  OP_STORE64 -- [val64:u8 ptrreg:u8] 
@@ -817,7 +1435,7 @@ void VMImpl::buildHandlersMem() {
 		auto B = mkOpc(OP_STORE64, "store64");
 		Value* IP = advIP(B, 2);
 		Value* VIdx = rdVR64(B, IP, 0, "vm.st64.v"), * PP = rdPR(B, IP, 1, "vm.st64.p");
-		B.CreateStore(ldVR64(B, VIdx), ldPR(B, PP)); B.CreateBr(Dispatch);
+		B.CreateStore(ldVR64(B, VIdx), ldPR(B, PP)); nextInsn(B);
 	}
 
 	//  OP_GEP -- [dstp:u8 basep:u8 idx:u8 elemsz:u16le] 
@@ -833,7 +1451,7 @@ void VMImpl::buildHandlersMem() {
 		// Byte offset = (i64)idx_value * elemsz
 		Value* IdxVal = B.CreateSExt(ldVR(B, Idx), I64Ty, "vm.gp.iv");
 		Value* ByteOff = B.CreateMul(IdxVal, ESz, "vm.gp.bo");
-		stPR(B, DP, B.CreateGEP(I8Ty, ldPR(B, BP), ByteOff, "vm.gp.v")); B.CreateBr(Dispatch);
+		stPR(B, DP, B.CreateGEP(I8Ty, ldPR(B, BP), ByteOff, "vm.gp.v")); nextInsn(B);
 	}
 
 	//  OP_GEP64 -- [dstp:u8 basep:u8 idx64:u8 elemsz:u16le] 
@@ -847,7 +1465,7 @@ void VMImpl::buildHandlersMem() {
 		Value* ESz = B.CreateOr(ELo, B.CreateShl(EHi, B.getInt64(8), "vm.gp64.es"), "vm.gp64.esz");
 		Value* IdxVal = ldVR64(B, Idx);
 		Value* ByteOff = B.CreateMul(IdxVal, ESz, "vm.gp64.bo");
-		stPR(B, DP, B.CreateGEP(I8Ty, ldPR(B, BP), ByteOff, "vm.gp64.v")); B.CreateBr(Dispatch);
+		stPR(B, DP, B.CreateGEP(I8Ty, ldPR(B, BP), ByteOff, "vm.gp64.v")); nextInsn(B);
 	}
 
 
@@ -860,7 +1478,7 @@ void VMImpl::buildHandlersMem() {
 		Value* PP = rdPR(B, IP, 1, "vm.ld8.p");
 		Value* V8 = B.CreateLoad(I8Ty, ldPR(B, PP), "vm.ld8.v");
 		stVR(B, Dst, B.CreateZExt(V8, I32Ty, "vm.ld8.z"));
-		B.CreateBr(Dispatch);
+		nextInsn(B);
 	}
 	{
 		auto B = mkOpc(OP_STORE8, "store8");
@@ -869,7 +1487,7 @@ void VMImpl::buildHandlersMem() {
 		Value* PP = rdPR(B, IP, 1, "vm.st8.p");
 		Value* V8 = B.CreateTrunc(ldVR(B, VIdx), I8Ty, "vm.st8.t");
 		B.CreateStore(V8, ldPR(B, PP));
-		B.CreateBr(Dispatch);
+		nextInsn(B);
 	}
 	{
 		auto B = mkOpc(OP_LOAD16, "load16");
@@ -878,7 +1496,7 @@ void VMImpl::buildHandlersMem() {
 		Value* PP = rdPR(B, IP, 1, "vm.ld16.p");
 		Value* V16 = B.CreateLoad(I16Ty, ldPR(B, PP), "vm.ld16.v");
 		stVR(B, Dst, B.CreateZExt(V16, I32Ty, "vm.ld16.z"));
-		B.CreateBr(Dispatch);
+		nextInsn(B);
 	}
 	{
 		auto B = mkOpc(OP_STORE16, "store16");
@@ -887,7 +1505,7 @@ void VMImpl::buildHandlersMem() {
 		Value* PP = rdPR(B, IP, 1, "vm.st16.p");
 		Value* V16 = B.CreateTrunc(ldVR(B, VIdx), I16Ty, "vm.st16.t");
 		B.CreateStore(V16, ldPR(B, PP));
-		B.CreateBr(Dispatch);
+		nextInsn(B);
 	}
 
 
@@ -899,7 +1517,7 @@ void VMImpl::buildHandlersMem() {
 		Value* PP = rdPR(B, IP, 1, "vm.lp.p");
 		Value* V = B.CreateLoad(PtrTy, ldPR(B, PP), "vm.lp.v");
 		stPR(B, Dst, V);
-		B.CreateBr(Dispatch);
+		nextInsn(B);
 	}
 	{
 		auto B = mkOpc(OP_STOREPTR, "storeptr");
@@ -907,7 +1525,7 @@ void VMImpl::buildHandlersMem() {
 		Value* VIdx = rdPR(B, IP, 0, "vm.sp.v");
 		Value* PP = rdPR(B, IP, 1, "vm.sp.p");
 		B.CreateStore(ldPR(B, VIdx), ldPR(B, PP));
-		B.CreateBr(Dispatch);
+		nextInsn(B);
 	}
 
 
@@ -921,7 +1539,7 @@ void VMImpl::buildHandlersControl() {
 		Value* JT = rdU32(B, IP, 0, "vm.jm.t");
 		if (BlindTargets) JT = B.CreateXor(JT, tgtKeyIR(B, "vm.jm"), "vm.jm.ub");
 		B.CreateStore(JT, VMIP)->setVolatile(true);
-		B.CreateBr(Dispatch);
+		nextInsn(B);
 	}
 
 	//  OP_JMPC -- [cond:u8 tgt_t:u32 tgt_f:u32] 
@@ -933,7 +1551,7 @@ void VMImpl::buildHandlersControl() {
 		Value* Sel = B.CreateSelect(Bool, Tt, Tf, "vm.jc.s");
 		if (BlindTargets) Sel = B.CreateXor(Sel, tgtKeyIR(B, "vm.jc"), "vm.jc.ub");
 		B.CreateStore(Sel, VMIP)->setVolatile(true);
-		B.CreateBr(Dispatch);
+		nextInsn(B);
 	}
 
 
@@ -998,7 +1616,7 @@ void VMImpl::buildHandlersControl() {
 		Value* SR = R;
 		if (BlindTargets) SR = DB.CreateXor(R, tgtKeyIR(DB, "vm.sw"), "vm.sw.ub");
 		DB.CreateStore(SR, VMIP)->setVolatile(true);
-		DB.CreateBr(Dispatch);
+		nextInsn(DB);
 	}
 
 
@@ -1089,7 +1707,7 @@ void VMImpl::buildHandlersFloat() {
 		}
 		Value* FV = B.CreateBitCast(Bits, DoubleTy, "vm.lif.v");
 		stFR(B, Dst, FV);
-		B.CreateBr(Dispatch);
+		nextInsn(B);
 	}
 
 	// OP_MOVR_F -- [dst_fr:u8 src_fr:u8]  freg[dst] = freg[src] 
@@ -1097,7 +1715,7 @@ void VMImpl::buildHandlersFloat() {
 		auto B = mkOpc(OP_MOVR_F, "movr_f");
 		Value* IP = advIP(B, 2);
 		stFR(B, rdFR(B, IP, 0, "vm.mrf.d"), ldFR(B, rdFR(B, IP, 1, "vm.mrf.s")));
-		B.CreateBr(Dispatch);
+		nextInsn(B);
 	}
 
 	// OP_BINOP_F -- [dst_fr:u8 a_fr:u8 b_fr:u8 subop:u8] 
@@ -1112,10 +1730,21 @@ void VMImpl::buildHandlersFloat() {
 		Value* AIdx = rdFR(B, IP, 1, "vm.bof.a");
 		Value* BIdx = rdFR(B, IP, 2, "vm.bof.b");
 		Value* Sub8 = rdByte(B, IP, 3, "vm.bof.op");   // raw byte incl. bit7
+		Value* AV = ldFR(B, AIdx), * BV = ldFR(B, BIdx);
+
+		if (NestedVM && opcodeNests(OP_BINOP_F)) {
+			// Compute via the pure helper (separately inner-virtualized). The
+			// helper takes the full subop byte and applies the f32 rounding
+			// itself, so the result is final.
+			Function* HelperFn = M.getFunction(kNestedBinopFHelperName);
+			Value* Sub8b = B.CreateTrunc(Sub8, I8Ty, "vm.bof.sub8");
+			Value* Rv = B.CreateCall(HelperFn, { AV, BV, Sub8b }, "vm.bof.nested");
+			stFR(B, Dst, Rv);
+			nextInsn(B);
+		} else {
 		Value* Sub = B.CreateAnd(Sub8, B.getInt32(0x7F), "vm.bof.sub"); // op only
 		Value* IsF32 = B.CreateICmpNE(
 			B.CreateAnd(Sub8, B.getInt32(0x80)), B.getInt32(0), "vm.bof.f32");
-		Value* AV = ldFR(B, AIdx), * BV = ldFR(B, BIdx);
 
 		// Carry IsF32 (i1) into the merge block via alloca so every incoming
 		// edge can read it without duplicating the comparison.
@@ -1136,7 +1765,7 @@ void VMImpl::buildHandlersFloat() {
 			DoubleTy, "vm.bof.ne");
 		Value* Final = FBM.CreateSelect(IsF32M, Narrow, FPhi, "vm.bof.fin");
 		stFR(FBM, Dst, Final);
-		FBM.CreateBr(Dispatch);
+		nextInsn(FBM);
 
 		{
 			IRBuilder<> BD(FDefBB); Value* R = BD.CreateFAdd(AV, BV, "vm.fadd");
@@ -1153,6 +1782,7 @@ void VMImpl::buildHandlersFloat() {
 		addFCase(FBS_FMUL, "vm.bof.mul", [&](IRBuilder<>& BC) { return BC.CreateFMul(AV, BV, "vm.fmul"); });
 		addFCase(FBS_FDIV, "vm.bof.div", [&](IRBuilder<>& BC) { return BC.CreateFDiv(AV, BV, "vm.fdiv"); });
 		addFCase(FBS_FREM, "vm.bof.rem", [&](IRBuilder<>& BC) { return BC.CreateFRem(AV, BV, "vm.frem"); });
+		}
 	}
 
 	// OP_FCMP -- [dst_vr:u8 a_fr:u8 b_fr:u8 pred:u8] 
@@ -1170,50 +1800,58 @@ void VMImpl::buildHandlersFloat() {
 		Value* AV = ldFR(B, AIdx);
 		Value* BV = ldFR(B, BIdx);
 
-		using FP = CmpInst::Predicate;
+		if (NestedVM && opcodeNests(OP_FCMP)) {
+			Function* HelperFn = M.getFunction(kNestedFcmpHelperName);
+			Value* Pred8 = B.CreateTrunc(Pred, I8Ty, "vm.fcp.pred8");
+			Value* Rv = B.CreateCall(HelperFn, { AV, BV, Pred8 }, "vm.fcp.nested");
+			stVR(B, Dst, Rv);
+			nextInsn(B);
+		} else {
+			using FP = CmpInst::Predicate;
 
-		BasicBlock* MergeBB = BasicBlock::Create(Ctx, "vm.fcp.merge", HFn);
-		BasicBlock* DefBB = BasicBlock::Create(Ctx, "vm.fcp.def", HFn);
+			BasicBlock* MergeBB = BasicBlock::Create(Ctx, "vm.fcp.merge", HFn);
+			BasicBlock* DefBB = BasicBlock::Create(Ctx, "vm.fcp.def", HFn);
 
-		// Default: FCMP_FALSE (pred=0) — result always 0.
-		SwitchInst* SW = B.CreateSwitch(Pred, DefBB, 14);
+			// Default: FCMP_FALSE (pred=0) — result always 0.
+			SwitchInst* SW = B.CreateSwitch(Pred, DefBB, 14);
 
-		// MergeBB: PHI first, then stVR, then br — same order as OP_BINOP.
-		IRBuilder<> BM(MergeBB);
-		auto* Phi = BM.CreatePHI(I32Ty, 15, "vm.fcp.r");
-		stVR(BM, Dst, Phi);
-		BM.CreateBr(Dispatch);
+			// MergeBB: PHI first, then stVR, then br — same order as OP_BINOP.
+			IRBuilder<> BM(MergeBB);
+			auto* Phi = BM.CreatePHI(I32Ty, 15, "vm.fcp.r");
+			stVR(BM, Dst, Phi);
+			nextInsn(BM);
 
-		// Default block handles FCMP_FALSE (pred==0): result is always 0.
-		{
-			IRBuilder<> BD(DefBB);
-			Phi->addIncoming(BD.getInt32(0), DefBB);
-			BD.CreateBr(MergeBB);
+			// Default block handles FCMP_FALSE (pred==0): result is always 0.
+			{
+				IRBuilder<> BD(DefBB);
+				Phi->addIncoming(BD.getInt32(0), DefBB);
+				BD.CreateBr(MergeBB);
+			}
+
+			auto addCase = [&](FP pred, const Twine& BBName, auto Emit) {
+				BasicBlock* CBB = BasicBlock::Create(Ctx, BBName, HFn);
+				IRBuilder<> BC(CBB);
+				Value* R = BC.CreateZExt(Emit(BC), I32Ty, "vm.fcp.z");
+				Phi->addIncoming(R, CBB);
+				BC.CreateBr(MergeBB);
+				SW->addCase(B.getInt32((uint32_t)pred), CBB);
+				};
+
+			addCase(FP::FCMP_OEQ, "vm.fcp.oeq", [&](IRBuilder<>& BC) { return BC.CreateFCmpOEQ(AV, BV, "vm.fcp.v"); });
+			addCase(FP::FCMP_OGT, "vm.fcp.ogt", [&](IRBuilder<>& BC) { return BC.CreateFCmpOGT(AV, BV, "vm.fcp.v"); });
+			addCase(FP::FCMP_OGE, "vm.fcp.oge", [&](IRBuilder<>& BC) { return BC.CreateFCmpOGE(AV, BV, "vm.fcp.v"); });
+			addCase(FP::FCMP_OLT, "vm.fcp.olt", [&](IRBuilder<>& BC) { return BC.CreateFCmpOLT(AV, BV, "vm.fcp.v"); });
+			addCase(FP::FCMP_OLE, "vm.fcp.ole", [&](IRBuilder<>& BC) { return BC.CreateFCmpOLE(AV, BV, "vm.fcp.v"); });
+			addCase(FP::FCMP_ONE, "vm.fcp.one", [&](IRBuilder<>& BC) { return BC.CreateFCmpONE(AV, BV, "vm.fcp.v"); });
+			addCase(FP::FCMP_ORD, "vm.fcp.ord", [&](IRBuilder<>& BC) { return BC.CreateFCmpORD(AV, BV, "vm.fcp.v"); });
+			addCase(FP::FCMP_UEQ, "vm.fcp.ueq", [&](IRBuilder<>& BC) { return BC.CreateFCmpUEQ(AV, BV, "vm.fcp.v"); });
+			addCase(FP::FCMP_UGT, "vm.fcp.ugt", [&](IRBuilder<>& BC) { return BC.CreateFCmpUGT(AV, BV, "vm.fcp.v"); });
+			addCase(FP::FCMP_UGE, "vm.fcp.uge", [&](IRBuilder<>& BC) { return BC.CreateFCmpUGE(AV, BV, "vm.fcp.v"); });
+			addCase(FP::FCMP_ULT, "vm.fcp.ult", [&](IRBuilder<>& BC) { return BC.CreateFCmpULT(AV, BV, "vm.fcp.v"); });
+			addCase(FP::FCMP_ULE, "vm.fcp.ule", [&](IRBuilder<>& BC) { return BC.CreateFCmpULE(AV, BV, "vm.fcp.v"); });
+			addCase(FP::FCMP_UNE, "vm.fcp.une", [&](IRBuilder<>& BC) { return BC.CreateFCmpUNE(AV, BV, "vm.fcp.v"); });
+			addCase(FP::FCMP_UNO, "vm.fcp.uno", [&](IRBuilder<>& BC) { return BC.CreateFCmpUNO(AV, BV, "vm.fcp.v"); });
 		}
-
-		auto addCase = [&](FP pred, const Twine& BBName, auto Emit) {
-			BasicBlock* CBB = BasicBlock::Create(Ctx, BBName, HFn);
-			IRBuilder<> BC(CBB);
-			Value* R = BC.CreateZExt(Emit(BC), I32Ty, "vm.fcp.z");
-			Phi->addIncoming(R, CBB);
-			BC.CreateBr(MergeBB);
-			SW->addCase(B.getInt32((uint32_t)pred), CBB);
-			};
-
-		addCase(FP::FCMP_OEQ, "vm.fcp.oeq", [&](IRBuilder<>& BC) { return BC.CreateFCmpOEQ(AV, BV, "vm.fcp.v"); });
-		addCase(FP::FCMP_OGT, "vm.fcp.ogt", [&](IRBuilder<>& BC) { return BC.CreateFCmpOGT(AV, BV, "vm.fcp.v"); });
-		addCase(FP::FCMP_OGE, "vm.fcp.oge", [&](IRBuilder<>& BC) { return BC.CreateFCmpOGE(AV, BV, "vm.fcp.v"); });
-		addCase(FP::FCMP_OLT, "vm.fcp.olt", [&](IRBuilder<>& BC) { return BC.CreateFCmpOLT(AV, BV, "vm.fcp.v"); });
-		addCase(FP::FCMP_OLE, "vm.fcp.ole", [&](IRBuilder<>& BC) { return BC.CreateFCmpOLE(AV, BV, "vm.fcp.v"); });
-		addCase(FP::FCMP_ONE, "vm.fcp.one", [&](IRBuilder<>& BC) { return BC.CreateFCmpONE(AV, BV, "vm.fcp.v"); });
-		addCase(FP::FCMP_ORD, "vm.fcp.ord", [&](IRBuilder<>& BC) { return BC.CreateFCmpORD(AV, BV, "vm.fcp.v"); });
-		addCase(FP::FCMP_UEQ, "vm.fcp.ueq", [&](IRBuilder<>& BC) { return BC.CreateFCmpUEQ(AV, BV, "vm.fcp.v"); });
-		addCase(FP::FCMP_UGT, "vm.fcp.ugt", [&](IRBuilder<>& BC) { return BC.CreateFCmpUGT(AV, BV, "vm.fcp.v"); });
-		addCase(FP::FCMP_UGE, "vm.fcp.uge", [&](IRBuilder<>& BC) { return BC.CreateFCmpUGE(AV, BV, "vm.fcp.v"); });
-		addCase(FP::FCMP_ULT, "vm.fcp.ult", [&](IRBuilder<>& BC) { return BC.CreateFCmpULT(AV, BV, "vm.fcp.v"); });
-		addCase(FP::FCMP_ULE, "vm.fcp.ule", [&](IRBuilder<>& BC) { return BC.CreateFCmpULE(AV, BV, "vm.fcp.v"); });
-		addCase(FP::FCMP_UNE, "vm.fcp.une", [&](IRBuilder<>& BC) { return BC.CreateFCmpUNE(AV, BV, "vm.fcp.v"); });
-		addCase(FP::FCMP_UNO, "vm.fcp.uno", [&](IRBuilder<>& BC) { return BC.CreateFCmpUNO(AV, BV, "vm.fcp.v"); });
 	}
 
 
@@ -1231,7 +1869,7 @@ void VMImpl::buildHandlersFloat() {
 			B.CreateFPTrunc(SV, Type::getFloatTy(Ctx), "vm.cff.nt"), DoubleTy, "vm.cff.ne");
 		Value* IsExt = B.CreateICmpEQ(Kind, B.getInt32(FK_FPEXT), "vm.cff.ie");
 		stFR(B, Dst, B.CreateSelect(IsExt, SV, Narrow, "vm.cff.r"));
-		B.CreateBr(Dispatch);
+		nextInsn(B);
 	}
 
 	//  OP_FCAST_FV --  [dst_vr:u8 src_fr:u8 kind:u8]  freg→vreg i32  (fptosi / fptoui) 
@@ -1245,7 +1883,7 @@ void VMImpl::buildHandlersFloat() {
 		Value* UI = B.CreateFPToUI(SV, I32Ty, "vm.cfv.ui");
 		Value* IsS = B.CreateICmpEQ(Kind, B.getInt32(FK_FPTOSI), "vm.cfv.is");
 		stVR(B, Dst, B.CreateSelect(IsS, SI, UI, "vm.cfv.r"));
-		B.CreateBr(Dispatch);
+		nextInsn(B);
 	}
 
 	// OP_FCAST_FV64 -- [dst_vr64:u8 src_fr:u8 kind:u8]  freg→vreg64 i64 
@@ -1259,7 +1897,7 @@ void VMImpl::buildHandlersFloat() {
 		Value* UI = B.CreateFPToUI(SV, I64Ty, "vm.cfv64.ui");
 		Value* IsS = B.CreateICmpEQ(Kind, B.getInt32(FK_FPTOSI64), "vm.cfv64.is");
 		stVR64(B, Dst, B.CreateSelect(IsS, SI, UI, "vm.cfv64.r"));
-		B.CreateBr(Dispatch);
+		nextInsn(B);
 	}
 
 	//  OP_FCAST_VF -- [dst_fr:u8 src_vr:u8 kind:u8]  vreg i32→freg  (sitofp / uitofp)
@@ -1281,7 +1919,7 @@ void VMImpl::buildHandlersFloat() {
 			B.CreateFPTrunc(Result, Type::getFloatTy(Ctx), "vm.cvf.nt"),
 			DoubleTy, "vm.cvf.ne");
 		stFR(B, Dst, B.CreateSelect(IsF32, Narrow, Result, "vm.cvf.fin"));
-		B.CreateBr(Dispatch);
+		nextInsn(B);
 	}
 
 	//  OP_FCAST_V64F -- [dst_fr:u8 src_vr64:u8 kind:u8]  vreg64 i64→freg
@@ -1303,7 +1941,7 @@ void VMImpl::buildHandlersFloat() {
 			B.CreateFPTrunc(Result, Type::getFloatTy(Ctx), "vm.cv64f.nt"),
 			DoubleTy, "vm.cv64f.ne");
 		stFR(B, Dst, B.CreateSelect(IsF32, Narrow, Result, "vm.cv64f.fin"));
-		B.CreateBr(Dispatch);
+		nextInsn(B);
 	}
 
 
@@ -1317,7 +1955,7 @@ void VMImpl::buildHandlersFloat() {
 		Value* Dst = rdFR(B, IP, 0, "vm.ldf.d");
 		Value* PP = rdPR(B, IP, 1, "vm.ldf.p");
 		stFR(B, Dst, B.CreateLoad(DoubleTy, ldPR(B, PP), "vm.ldf.v"));
-		B.CreateBr(Dispatch);
+		nextInsn(B);
 	}
 
 	//  OP_STORE_F  [src_fr:u8 ptrreg:u8]    *ptr = freg[src] (f64) 
@@ -1327,7 +1965,7 @@ void VMImpl::buildHandlersFloat() {
 		Value* Src = rdFR(B, IP, 0, "vm.stf.s");
 		Value* PP = rdPR(B, IP, 1, "vm.stf.p");
 		B.CreateStore(ldFR(B, Src), ldPR(B, PP));
-		B.CreateBr(Dispatch);
+		nextInsn(B);
 	}
 
 
@@ -1341,7 +1979,7 @@ void VMImpl::buildHandlersFloat() {
 		Value* PP = rdPR(B, IP, 1, "vm.ldf32.p");
 		Value* F32V = B.CreateLoad(Type::getFloatTy(Ctx), ldPR(B, PP), "vm.ldf32.v");
 		stFR(B, Dst, B.CreateFPExt(F32V, DoubleTy, "vm.ldf32.ext"));
-		B.CreateBr(Dispatch);
+		nextInsn(B);
 	}
 
 	// OP_STORE_F32  [val_fr:u8 ptrreg:u8]  →  *ptr (float*) = fptrunc(freg[val]) 
@@ -1354,7 +1992,7 @@ void VMImpl::buildHandlersFloat() {
 		Value* PP = rdPR(B, IP, 1, "vm.stf32.p");
 		Value* F32V = B.CreateFPTrunc(ldFR(B, Src), Type::getFloatTy(Ctx), "vm.stf32.tr");
 		B.CreateStore(F32V, ldPR(B, PP));
-		B.CreateBr(Dispatch);
+		nextInsn(B);
 	}
 
 	//  OP_RET_F  [src_fr:u8]    return freg[src] 
@@ -1392,7 +2030,7 @@ void VMImpl::buildHandlersFloat() {
 		Value* FV = ldFR(B, rdFR(B, IP, 3, "vm.slf.f"));
 		Value* Bool = B.CreateICmpNE(ldVR(B, Cond), B.getInt32(0), "vm.slf.b");
 		stFR(B, Dst, B.CreateSelect(Bool, TV, FV, "vm.slf.r"));
-		B.CreateBr(Dispatch);
+		nextInsn(B);
 	}
 
 
@@ -1404,7 +2042,7 @@ void VMImpl::buildHandlersFloat() {
 		Value* Dst = rdFR(B, IP, 0, "vm.neg.d");
 		Value* SV = ldFR(B, rdFR(B, IP, 1, "vm.neg.s"));
 		stFR(B, Dst, B.CreateFNeg(SV, "vm.neg.r"));
-		B.CreateBr(Dispatch);
+		nextInsn(B);
 	}
 
 
@@ -1560,7 +2198,7 @@ void VMImpl::buildCall2(VMOp Opc, const Twine& Name, llvm::VMEngine::RetKind2 RK
 
 	// Store switch info for ensureCallFTyCases() to extend later.
 	if (SharedEngineMode) {
-		auto* SS = VMEngine::getSharedState(M);
+		auto* SS = VMEngine::getSharedState(M, EngineId);
 		auto& CSW = SS->CallSW[(unsigned)RK];
 		CSW.SW = FTySW;
 		CSW.MergeBB = MergeBB;
@@ -1582,7 +2220,7 @@ void VMImpl::buildCall2(VMOp Opc, const Twine& Name, llvm::VMEngine::RetKind2 RK
 		default:      stVR(MB, DstSlot, RetPHI);  break;
 		}
 	}
-	MB.CreateBr(Dispatch);
+	nextInsn(MB);
 }
 
 
@@ -1600,7 +2238,7 @@ void VMImpl::buildHandlerTable() {
 	// load path so the connection is not trivially visible in the wrapper.
 	// In shared engine mode, OpcBB[] lives in vm_engine.
 	VMEngine::SharedState* SS =
-		SharedEngineMode ? VMEngine::getSharedState(M) : nullptr;
+		SharedEngineMode ? VMEngine::getSharedState(M, EngineId) : nullptr;
 	Function* BAFn = SharedEngineMode ? SS->EngineFn : &F;
 	unsigned K = SharedEngineMode ? SS->NumVariants : NumVariants;
 	bool ED = SharedEngineMode ? SS->EncDispatch : EncDispatch;
@@ -1615,14 +2253,14 @@ void VMImpl::buildHandlerTable() {
 	// Per-function random variant selection: fork does NOT consume the
 	// parent RNG stream, so at K==1 (vsel always 0, .range() never called)
 	// this is fully dormant and byte-identical to pre-variant behavior.
-	auto VarRng = VCtx.R.fork("vm.handler.variant");
+	auto VarRng = R.fork("vm.handler.variant");
 
 	// P2: secondary Fisher-Yates permutation of handler table slots.
 	// Identity when encDispatch is off (dormant, no RNG consumption).
 	uint8_t DispPerm[OP_COUNT];
 	for (unsigned i = 0; i < OP_COUNT; ++i) DispPerm[i] = (uint8_t)i;
 	if (ED) {
-		auto DR = VCtx.R.fork("vm.disp.perm");
+		auto DR = R.fork("vm.disp.perm");
 		for (unsigned i = OP_COUNT - 1; i > 0; --i) {
 			unsigned j = DR.range(i + 1);
 			uint8_t t = DispPerm[i]; DispPerm[i] = DispPerm[j]; DispPerm[j] = t;
@@ -1654,7 +2292,7 @@ void VMImpl::buildHandlerTable() {
 
 	// engine pointer in slot [OP_COUNT]
 	{
-		Function* EngFn = M.getFunction(VMEngine::kVMEngineName);
+		Function* EngFn = M.getFunction(VMEngine::vmEngineName(EngineId));
 		assert(EngFn && "vm_engine must exist before building handler table");
 		Es[OP_COUNT] = EngFn;
 	}
@@ -1684,6 +2322,20 @@ void VMImpl::buildHandlerTable() {
 // vm.dispatch: bounds-check IP  vm.fetch: fetch opcode  decrypt  indirectbr
 
 void VMImpl::buildDispatch() {
+	if (ThreadedDispatch) {
+		// No central vm.dispatch/vm.fetch pair: ExitBB and every OpcBB
+		// placeholder were already created before buildOpcodeHandlers() ran
+		// (see populateVMEngine), so every handler's own inlined tail
+		// (nextInsn -> emitThreadedTail) could reference the full successor
+		// set as it was built. All that remains is wiring vm.entry to fetch
+		// the first instruction, same as any other handler's back-edge.
+		if (Entry && !Entry->getTerminator()) {
+			IRBuilder<> EB(Entry);
+			nextInsn(EB);
+		}
+		return;
+	}
+
 	// ExitBB is new; Dispatch is the shell already created in run()
 	ExitBB = BasicBlock::Create(Ctx, "vm.exit", HFn);
 	auto* FetchBB = BasicBlock::Create(Ctx, "vm.fetch", HFn);
@@ -1708,6 +2360,14 @@ void VMImpl::buildDispatch() {
 
 		// loadBC() already decrypts when EncBytecode=1
 		Value* OpB = Raw;
+
+		// keyedDispatch: un-XOR the per-IP opcode key applied by
+		// BytecodeEmitter::bop() at write time, before mapping the byte to a
+		// permuted opcode index.
+		if (KeyedDispatch) {
+			auto* SaltL = B.CreateLoad(I32Ty, EffSalt, "vm.opk.salt"); SaltL->setVolatile(true);
+			OpB = B.CreateXor(OpB, opKeyByteIR(B, SaltL, IP, "vm.opk"), "vm.opd");
+		}
 
 		// Advance IP past opcode byte
 		B.CreateStore(B.CreateAdd(IP, B.getInt32(1), "vm.ip1"), VMIP)->setVolatile(true);
@@ -1748,8 +2408,86 @@ void VMImpl::buildDispatch() {
 	}
 
 	// Terminate vm.entry with branch to vm.dispatch
-	if (Entry && !Entry->getTerminator())
-		IRBuilder<>(Entry).CreateBr(Dispatch);
+	if (Entry && !Entry->getTerminator()) {
+		IRBuilder<> EB(Entry);
+		nextInsn(EB);
+	}
+}
+
+// emitThreadedTail / nextInsn
+// threadedDispatch: inline the fetch/decode/indirectbr sequence into every
+// handler's own back-edge instead of routing through one shared vm.dispatch/
+// vm.fetch pair. Mirrors buildDispatch()'s central logic exactly, just
+// emitted per call-site: a bounds check in the caller's current block,
+// followed by a private continuation block holding the fetch/decode/
+// indirectbr. Requires ExitBB and every OpcBB[i][v] to already exist (see
+// populateVMEngine's pre-creation pass) since the first handler built may
+// dispatch to the last one.
+
+void VMImpl::emitThreadedTail(IRBuilder<>& B) {
+	auto* IP = B.CreateLoad(I32Ty, VMIP, "vm.ip.d"); IP->setVolatile(true);
+	Value* BCLen = EffBCLen ? EffBCLen
+		: (Value*)B.getInt32((uint32_t)E.BC.size());
+	Value* OOB = B.CreateICmpUGE(IP, BCLen, "vm.oob");
+
+	BasicBlock* ContBB = BasicBlock::Create(Ctx, "vm.next", HFn);
+	B.CreateCondBr(OOB, ExitBB, ContBB);
+
+	IRBuilder<> FB(ContBB);
+	auto* IP2 = FB.CreateLoad(I32Ty, VMIP, "vm.ip.f"); IP2->setVolatile(true);
+	Value* Raw = loadBC(FB, IP2, 0, "vm.raw");
+
+	// loadBC() already decrypts when EncBytecode=1
+	Value* OpB = Raw;
+
+	// keyedDispatch: un-XOR the per-IP opcode key applied by
+	// BytecodeEmitter::bop() at write time, before mapping the byte to a
+	// permuted opcode index. Mirrors buildDispatch()'s vm.fetch logic exactly.
+	if (KeyedDispatch) {
+		auto* SaltL = FB.CreateLoad(I32Ty, EffSalt, "vm.opk.salt"); SaltL->setVolatile(true);
+		OpB = FB.CreateXor(OpB, opKeyByteIR(FB, SaltL, IP2, "vm.opk"), "vm.opd");
+	}
+
+	// Advance IP past opcode byte
+	FB.CreateStore(FB.CreateAdd(IP2, FB.getInt32(1), "vm.ip1"), VMIP)->setVolatile(true);
+
+	// Clamp opcode index (prevents out-of-bounds GEP on corrupted bytecode)
+	Value* OIdx = FB.CreateZExt(OpB, I32Ty, "vm.oidx");
+	Value* P = FB.CreateURem(OIdx, FB.getInt32(OP_COUNT), "vm.safe");
+
+	// P2: route through the encrypted dispatch map (dmap) when encDispatch
+	// is on -- mirrors buildDispatch()'s vm.fetch logic exactly.
+	Value* FinalSlot;
+	if (EncDispatch) {
+		Value* DmIdx = FB.CreateAdd(P, FB.getInt32(OP_COUNT + 1), "vm.dm.i");
+		Value* DmPtr = FB.CreateGEP(PtrTy, EffHandlers, DmIdx, "vm.dm.p");
+		Value* DmRaw = FB.CreateLoad(PtrTy, DmPtr, "vm.dm.raw");
+		Value* DmInt = FB.CreateTrunc(
+							FB.CreatePtrToInt(DmRaw, I64Ty, "vm.dm.i64"),
+							I32Ty, "vm.dm.i32");
+		auto*  SaltL = FB.CreateLoad(I32Ty, EffSalt, "vm.dm.salt");
+		SaltL->setVolatile(true);
+		Value* Dec   = FB.CreateXor(DmInt, SaltL, "vm.dm.dec");
+		FinalSlot    = FB.CreateURem(Dec, FB.getInt32(OP_COUNT), "vm.dm.slot");
+	} else {
+		FinalSlot = P;
+	}
+
+	// GEP into handler table[final_slot]
+	Value* Slot = FB.CreateGEP(PtrTy, EffHandlers, FinalSlot, "vm.ohsl");
+	Value* Hndl = FB.CreateLoad(PtrTy, Slot, "vm.hndl");
+
+	// indirectbr with all opcode blocks (all variants) declared as successors
+	IndirectBrInst* IBR = FB.CreateIndirectBr(Hndl, OP_COUNT * NumVariants + 1);
+	for (unsigned i = 0; i < OP_COUNT; ++i)
+		for (unsigned v = 0; v < NumVariants; ++v)
+			IBR->addDestination(OpcBB[i][v]);
+	IBR->addDestination(ExitBB);
+}
+
+void VMImpl::nextInsn(IRBuilder<>& B) {
+	if (ThreadedDispatch) emitThreadedTail(B);
+	else B.CreateBr(Dispatch);
 }
 
 
@@ -1900,39 +2638,45 @@ void VMImpl::buildEncryptCtorAES() {
 	// Resolve dangling __strenc_key_a / __strenc_key_b declarations
 	provideStubKeyProviderBodies(M);
 
-	// Create masked expanded-key global 
-	SmallVector<Constant*, 176> MaskedRK;
-	for (int i = 0; i < 176; i++)
-		MaskedRK.push_back(ConstantInt::get(I8Ty, AESExpandedKey[i] ^ AESRKMask[i]));
-
 	auto* RKTy = ArrayType::get(I8Ty, 176);
-	GVAESExpandedKey = new GlobalVariable(
-		M, RKTy, /*isConst=*/true, GlobalValue::PrivateLinkage,
-		ConstantArray::get(RKTy, MaskedRK),
-		(F.getName() + ".vm.aes.rk").str());
-	GVAESExpandedKey->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
-	GVAESExpandedKey->setAlignment(Align(16));
 
-	// Nonce global (8 bytes, little-endian)
-	SmallVector<Constant*, 8> NonceBytes;
-	for (int i = 0; i < 8; i++)
-		NonceBytes.push_back(ConstantInt::get(I8Ty, (AESNonce >> (8 * i)) & 0xFF));
-	auto* NonceTy = ArrayType::get(I8Ty, 8);
-	GVAESNonce = new GlobalVariable(
-		M, NonceTy, /*isConst=*/true, GlobalValue::PrivateLinkage,
-		ConstantArray::get(NonceTy, NonceBytes),
-		(F.getName() + ".vm.aes.nonce").str());
-	GVAESNonce->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
+	// Masked expanded-key / nonce / mask globals: when lazyDecrypt is active,
+	// buildWrapper() already created these (it runs before this ctor and
+	// needs them to unmask the key into its own per-call stack context) —
+	// reuse them instead of emitting duplicates. Otherwise create as before.
+	if (!GVAESExpandedKey) {
+		SmallVector<Constant*, 176> MaskedRK;
+		for (int i = 0; i < 176; i++)
+			MaskedRK.push_back(ConstantInt::get(I8Ty, AESExpandedKey[i] ^ AESRKMask[i]));
 
-	// Mask global (used to unmask the expanded key on the stack)
-	SmallVector<Constant*, 176> MaskConsts;
-	for (int i = 0; i < 176; i++)
-		MaskConsts.push_back(ConstantInt::get(I8Ty, AESRKMask[i]));
-	auto* MaskGV = new GlobalVariable(
-		M, RKTy, /*isConst=*/true, GlobalValue::PrivateLinkage,
-		ConstantArray::get(RKTy, MaskConsts),
-		(F.getName() + ".vm.aes.rkmask").str());
-	MaskGV->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
+		GVAESExpandedKey = new GlobalVariable(
+			M, RKTy, /*isConst=*/true, GlobalValue::PrivateLinkage,
+			ConstantArray::get(RKTy, MaskedRK),
+			(F.getName() + ".vm.aes.rk").str());
+		GVAESExpandedKey->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
+		GVAESExpandedKey->setAlignment(Align(16));
+
+		// Nonce global (8 bytes, little-endian)
+		SmallVector<Constant*, 8> NonceBytes;
+		for (int i = 0; i < 8; i++)
+			NonceBytes.push_back(ConstantInt::get(I8Ty, (AESNonce >> (8 * i)) & 0xFF));
+		auto* NonceTy = ArrayType::get(I8Ty, 8);
+		GVAESNonce = new GlobalVariable(
+			M, NonceTy, /*isConst=*/true, GlobalValue::PrivateLinkage,
+			ConstantArray::get(NonceTy, NonceBytes),
+			(F.getName() + ".vm.aes.nonce").str());
+		GVAESNonce->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
+
+		// Mask global (used to unmask the expanded key on the stack)
+		SmallVector<Constant*, 176> MaskConsts;
+		for (int i = 0; i < 176; i++)
+			MaskConsts.push_back(ConstantInt::get(I8Ty, AESRKMask[i]));
+		GVAESRKMask = new GlobalVariable(
+			M, RKTy, /*isConst=*/true, GlobalValue::PrivateLinkage,
+			ConstantArray::get(RKTy, MaskConsts),
+			(F.getName() + ".vm.aes.rkmask").str());
+		GVAESRKMask->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
+	}
 
 	// Build the .init_array constructor 
 	std::string FnName = (F.getName() + ".vm.ctor").str();
@@ -1966,7 +2710,7 @@ void VMImpl::buildEncryptCtorAES() {
 	IRBuilder<> LB(LoopBody);
 	Value* Idx64 = LB.CreateZExt(Idx, I64Ty);
 	Value* RKPtr = LB.CreateGEP(I8Ty, RKAlloca, Idx64, "vm.ctor.rkp");
-	Value* MkPtr = LB.CreateGEP(I8Ty, MaskGV, Idx64, "vm.ctor.mkp");
+	Value* MkPtr = LB.CreateGEP(I8Ty, GVAESRKMask, Idx64, "vm.ctor.mkp");
 	Value* RKByte = LB.CreateLoad(I8Ty, RKPtr);
 	Value* MkByte = LB.CreateLoad(I8Ty, MkPtr);
 	LB.CreateStore(LB.CreateXor(RKByte, MkByte), RKPtr);
@@ -1979,16 +2723,21 @@ void VMImpl::buildEncryptCtorAES() {
 	AB.CreateMemCpy(GVBytecodeRT, Align(16), GVBytecode, Align(1),
 		ConstantInt::get(I64Ty, BCLen));
 
-	// c) Call __obf_aes_ctr_decrypt(rt_buf, len, rk_stack, nonce_ptr)
-	Value* RTBufPtr = AB.CreateBitCast(GVBytecodeRT, PointerType::getUnqual(Ctx));
-	Value* RKPtr2 = AB.CreateBitCast(RKAlloca, PointerType::getUnqual(Ctx));
-	Value* NoncePtr = AB.CreateBitCast(GVAESNonce, PointerType::getUnqual(Ctx));
-	AB.CreateCall(CTRDecryptFn, {
-		RTBufPtr,
-		ConstantInt::get(I32Ty, BCLen),
-		RKPtr2,
-		NoncePtr
-		});
+	// c) Call __obf_aes_ctr_decrypt(rt_buf, len, rk_stack, nonce_ptr) — strips
+	// the AES layer from the whole runtime buffer up front. Skipped when
+	// LazyDecrypt: the buffer stays ciphertext and the engine's per-byte
+	// fetch (loadBC/loadBCDyn) removes AES one 16-byte block at a time.
+	if (!LazyDecrypt) {
+		Value* RTBufPtr = AB.CreateBitCast(GVBytecodeRT, PointerType::getUnqual(Ctx));
+		Value* RKPtr2 = AB.CreateBitCast(RKAlloca, PointerType::getUnqual(Ctx));
+		Value* NoncePtr = AB.CreateBitCast(GVAESNonce, PointerType::getUnqual(Ctx));
+		AB.CreateCall(CTRDecryptFn, {
+			RTBufPtr,
+			ConstantInt::get(I32Ty, BCLen),
+			RKPtr2,
+			NoncePtr
+			});
+	}
 	AB.CreateRetVoid();
 
 	appendToGlobalCtors(M, CtorFn, 65535, nullptr);
@@ -2009,7 +2758,10 @@ void VMImpl::buildEncryptCtorAES() {
 
 namespace {
 	static std::mutex SharedStateMu;
-	static DenseMap<Module*, std::unique_ptr<VMEngine::SharedState>> SharedStateMap;
+	// Keyed by (Module*, EngineId): EngineId 0 = plain engine, 1 = nesting
+	// engine. Each key gets its own independent SharedState, so the two
+	// engines' "first function populates" guards can never cross-contaminate.
+	static DenseMap<std::pair<Module*, unsigned>, std::unique_ptr<VMEngine::SharedState>> SharedStateMap;
 }
 
 namespace llvm {
@@ -2025,11 +2777,12 @@ namespace llvm {
 		};
 		static constexpr const char* kPopulatedMDKey = "obf.vm.engine.populated";
 
-		Function* getOrBuildVMEngine(Module& M) {
+		Function* getOrBuildVMEngine(Module& M, unsigned EngineId) {
 			// Lookup only — returns null if not yet created.
 			// populateVMEngine() handles atomic creation + population.
-			if (Function* Existing = M.getFunction(kVMEngineName)) {
-				assert(Existing->arg_size() == kNumParams &&
+			if (Function* Existing = M.getFunction(vmEngineName(EngineId))) {
+				assert((Existing->arg_size() == kNumParams ||
+					Existing->arg_size() == kNumParams + 1) &&
 					"vm_engine parameter count mismatch");
 				return Existing;
 			}
@@ -2055,16 +2808,19 @@ namespace llvm {
 			VMEngineFunc->setMetadata(kPopulatedMDKey, TrueMD);
 		}
 
-		SharedState* getSharedState(Module& M) {
+		SharedState* getSharedState(Module& M, unsigned EngineId) {
 			std::lock_guard<std::mutex> LK(SharedStateMu);
-			auto& Ptr = SharedStateMap[&M];
+			auto& Ptr = SharedStateMap[{&M, EngineId}];
 			if (!Ptr) Ptr = std::make_unique<SharedState>();
 			return Ptr.get();
 		}
 
 		void releaseSharedState(Module& M) {
 			std::lock_guard<std::mutex> LK(SharedStateMu);
-			SharedStateMap.erase(&M);
+			SmallVector<std::pair<Module*, unsigned>, 4> ToErase;
+			for (auto& KV : SharedStateMap)
+				if (KV.first.first == &M) ToErase.push_back(KV.first);
+			for (auto& K : ToErase) SharedStateMap.erase(K);
 		}
 
 	} // namespace VMEngine
@@ -2093,13 +2849,14 @@ void VMImpl::setupEffLocal() {
 	EffReg64Keys = nullptr;
 	EffFRegKeys = nullptr;
 	EffCalleeMask = nullptr;  // no callee masking in local mode
+	EffLazyCtx = nullptr;    // local mode never uses lazy AES fetch
 	SharedEngineMode = false;
 }
 
 // populateVMEngine: build all handlers inside shared vm_engine 
 
 void VMImpl::populateVMEngine() {
-	auto* SS = VMEngine::getSharedState(M);
+	auto* SS = VMEngine::getSharedState(M, EngineId);
 	if (SS->Populated) return;
 
 	// Create __vm_engine AND populate it atomically 
@@ -2108,9 +2865,9 @@ void VMImpl::populateVMEngine() {
 	// anything iterates an empty basic block list.  We create the function
 	// and immediately start adding blocks in the same C++ scope.
 
-	FunctionType* FTy = VMEngine::getVMEngineFunctionType(Ctx);
+	FunctionType* FTy = VMEngine::getVMEngineFunctionType(Ctx, LazyDecrypt);
 	Function* EF = Function::Create(FTy, GlobalValue::InternalLinkage,
-		VMEngine::kVMEngineName, &M);
+		VMEngine::vmEngineName(EngineId), &M);
 
 	// CRITICAL: Create the entry block IMMEDIATELY after Function::Create.
 	// The function must never be observable with an empty block list —
@@ -2126,6 +2883,7 @@ void VMImpl::populateVMEngine() {
 			"handlers", "fty_indices",
 			"regkeys", "reg64keys", "fregkeys",
 			"callee_mask",
+			"lazyctx",
 		};
 		for (Argument& A : EF->args()) A.setName(PNames[PIdx++]);
 	}
@@ -2159,6 +2917,22 @@ void VMImpl::populateVMEngine() {
 	EffReg64Keys = EF->getArg(VMEngine::kParamReg64Keys);
 	EffFRegKeys = EF->getArg(VMEngine::kParamFRegKeys);
 	EffCalleeMask = EF->getArg(VMEngine::kParamCalleeMask);
+	EffLazyCtx = LazyDecrypt ? EF->getArg(VMEngine::kParamLazyCtx) : nullptr;
+
+	// lazyDecrypt: forward-declare the runtime keystream helper so the fetch
+	// path (loadBC/loadBCDyn, built below) can call it. buildEncryptCtorAES()
+	// links the AES stub bitcode (which defines this symbol) later, for the
+	// founding function's own ctor — the linker resolves this declaration
+	// against that definition.
+	if (LazyDecrypt) {
+		KeystreamFn = M.getFunction("__obf_aes_ctr_keystream_block");
+		if (!KeystreamFn) {
+			FunctionType* KSFTy = FunctionType::get(Type::getVoidTy(Ctx),
+				{ PtrTy, PtrTy, I32Ty, PtrTy }, /*isVarArg=*/false);
+			KeystreamFn = Function::Create(KSFTy, GlobalValue::ExternalLinkage,
+				"__obf_aes_ctr_keystream_block", &M);
+		}
+	}
 
 	// Build vm.entry with VMIP + salt alloca
 	Entry = EngEntry;  // already created above
@@ -2173,15 +2947,36 @@ void VMImpl::populateVMEngine() {
 	SS->EngineSalt = SaltAlloca;
 	SS->Entry = Entry;
 
-	// Create Dispatch shell
-	Dispatch = BasicBlock::Create(Ctx, "vm.dispatch", EF);
-	SS->Dispatch = Dispatch;
+	// Create Dispatch shell (central-dispatch builds only; threadedDispatch
+	// has no shared vm.dispatch/vm.fetch pair -- see buildDispatch()).
+	if (!ThreadedDispatch) {
+		Dispatch = BasicBlock::Create(Ctx, "vm.dispatch", EF);
+		SS->Dispatch = Dispatch;
+	}
 
 	// Build all 51 opcode handlers
-	NumVariants = VCtx.Cfg.handlerVariants;
+	NumVariants = Cfg.handlerVariants;
 	if (NumVariants < 1) NumVariants = 1;
 	if (NumVariants > kMaxHandlerVariants) NumVariants = kMaxHandlerVariants;
-	EncDispatch = VCtx.Cfg.encDispatch;
+	EncDispatch = Cfg.encDispatch;
+
+	// threadedDispatch: every handler inlines its own fetch/decode/indirectbr
+	// tail (see emitThreadedTail()), which needs the FULL successor set --
+	// every opcode/variant block plus ExitBB -- before any handler body is
+	// built (the first handler emitted may branch to the last one). Pre-create
+	// empty placeholder blocks for all of them up front; mkOpc() fills each in
+	// (renaming, not reallocating) as buildOpcodeHandlers() reaches it.
+	if (ThreadedDispatch) {
+		ExitBB = BasicBlock::Create(Ctx, "vm.exit", EF);
+		new UnreachableInst(Ctx, ExitBB);
+		for (unsigned i = 0; i < OP_COUNT; ++i)
+			for (unsigned v = 0; v < NumVariants; ++v) {
+				BasicBlock* BB = BasicBlock::Create(Ctx, "vm.opc.pending", EF);
+				OpcBB[i][v] = BB;
+				VariantOf[BB] = (uint8_t)v;
+			}
+	}
+
 	buildOpcodeHandlers();
 
 	// Make the K structurally-identical variants distinct (per-variant MBA).
@@ -2189,6 +2984,7 @@ void VMImpl::populateVMEngine() {
 
 	SS->NumVariants = NumVariants;
 	SS->EncDispatch = EncDispatch;
+	SS->LazyMode = LazyDecrypt;
 	for (unsigned i = 0; i < OP_COUNT; ++i)
 		for (unsigned v = 0; v < NumVariants; ++v)
 			SS->OpcBB[i][v] = OpcBB[i][v];
@@ -2204,7 +3000,7 @@ void VMImpl::populateVMEngine() {
 	SS->FTyCountAtLastBuild = (unsigned)SS->SharedFTys.size();
 	VMEngine::markEnginePopulated(EF);
 
-	if (VCtx.Cfg.hardened)
+	if (Cfg.hardened)
 		hardenVMEngine(EF, SS);
 
 	LLVM_DEBUG(dbgs() << "[vm] populated vm_engine with "
@@ -2252,7 +3048,7 @@ static bool isHandlerBlock(const BasicBlock& BB) {
 void VMImpl::hardenVMEngine(Function* EF, VMEngine::SharedState* SS) {
 	if (!EF || !SS) return;
 
-	auto HardenRng = VCtx.R.fork("vm.harden");
+	auto HardenRng = R.fork("vm.harden");
 	llvm::obf::OpaqueUtils Opaque(M, HardenRng, "vm.opaque.salt.i32");
 	llvm::obf::MbaUtils MBA(M, HardenRng, "obf.vm.mba.noise.i32");
 
@@ -2330,54 +3126,61 @@ void VMImpl::hardenVMEngine(Function* EF, VMEngine::SharedState* SS) {
 	// Opaque predicates on dispatch + dead code
 	// ════════════════════════════════════════════════════════════════════
 
-	// Dead code blocks
-	// Create 3–5 dead code blocks with junk instructions that branch
-	// back to vm.dispatch (makes CFG look connected).
-	unsigned NDeadBlocks = 3 + HardenRng.range(3); // 3..5
-	SmallVector<BasicBlock*, 8> DeadBBs;
-	for (unsigned i = 0; i < NDeadBlocks; ++i) {
-		auto* DBB = BasicBlock::Create(Ctx, "vm.dead." + Twine(i), EF);
-		IRBuilder<> DB(DBB);
+	// Dead code blocks + opaque predicate on the dispatch back-edge both
+	// require a single shared SS->Dispatch block to branch to / split.
+	// threadedDispatch has no such block (every handler inlines its own
+	// tail) -- both sections are no-ops there. The handler-level MBA above
+	// and the hard-true handler guards below are unaffected and stay active.
+	if (!ThreadedDispatch && SS->Dispatch) {
+		// Dead code blocks
+		// Create 3–5 dead code blocks with junk instructions that branch
+		// back to vm.dispatch (makes CFG look connected).
+		unsigned NDeadBlocks = 3 + HardenRng.range(3); // 3..5
+		SmallVector<BasicBlock*, 8> DeadBBs;
+		for (unsigned i = 0; i < NDeadBlocks; ++i) {
+			auto* DBB = BasicBlock::Create(Ctx, "vm.dead." + Twine(i), EF);
+			IRBuilder<> DB(DBB);
 
-		// Junk arithmetic using opaque constants.
-		Value* J1 = Opaque.opaqueI32Const(DB, HardenRng.u32());
-		Value* J2 = Opaque.opaqueI32Const(DB, HardenRng.u32());
-		Value* R1 = DB.CreateXor(J1, J2, "vm.dead.xor");
-		Value* R2 = DB.CreateMul(R1, J1, "vm.dead.mul");
-		Value* R3 = DB.CreateAdd(R2, J2, "vm.dead.add");
-		(void)R3; // result unused — this is dead code
+			// Junk arithmetic using opaque constants.
+			Value* J1 = Opaque.opaqueI32Const(DB, HardenRng.u32());
+			Value* J2 = Opaque.opaqueI32Const(DB, HardenRng.u32());
+			Value* R1 = DB.CreateXor(J1, J2, "vm.dead.xor");
+			Value* R2 = DB.CreateMul(R1, J1, "vm.dead.mul");
+			Value* R3 = DB.CreateAdd(R2, J2, "vm.dead.add");
+			(void)R3; // result unused — this is dead code
 
-		// Branch back to dispatch (makes block look connected in CFG).
-		DB.CreateBr(SS->Dispatch);
-		DeadBBs.push_back(DBB);
-		++DeadBlocks;
-	}
-
-	// Opaque predicate on vm.dispatch back-edge 
-	// Split vm.dispatch: insert a pre-dispatch block with hard-false
-	// branch to dead code.
-	if (SS->Dispatch && !DeadBBs.empty()) {
-		BasicBlock* DispBB = SS->Dispatch;
-		// Create a new pre-dispatch block.
-		BasicBlock* PreDisp = BasicBlock::Create(Ctx, "vm.predisp", EF, DispBB);
-
-		// Redirect all predecessors of vm.dispatch to vm.predisp.
-		SmallVector<BasicBlock*, 32> Preds(predecessors(DispBB));
-		for (BasicBlock* Pred : Preds) {
-			if (Pred == PreDisp) continue; // skip self
-			Instruction* Term = Pred->getTerminator();
-			if (!Term) continue;
-			for (unsigned i = 0, e = Term->getNumSuccessors(); i < e; ++i) {
-				if (Term->getSuccessor(i) == DispBB)
-					Term->setSuccessor(i, PreDisp);
-			}
+			// Branch back to dispatch (makes block look connected in CFG).
+			DB.CreateBr(SS->Dispatch);
+			DeadBBs.push_back(DBB);
+			++DeadBlocks;
 		}
 
-		// PreDisp: hard-false → dead code, else → real dispatch.
-		IRBuilder<> PB(PreDisp);
-		Value* Fake = Opaque.hardFalse(PB);
-		unsigned DeadIdx = HardenRng.range((uint32_t)DeadBBs.size());
-		PB.CreateCondBr(Fake, DeadBBs[DeadIdx], DispBB);
+		// Opaque predicate on vm.dispatch back-edge
+		// Split vm.dispatch: insert a pre-dispatch block with hard-false
+		// branch to dead code.
+		if (!DeadBBs.empty()) {
+			BasicBlock* DispBB = SS->Dispatch;
+			// Create a new pre-dispatch block.
+			BasicBlock* PreDisp = BasicBlock::Create(Ctx, "vm.predisp", EF, DispBB);
+
+			// Redirect all predecessors of vm.dispatch to vm.predisp.
+			SmallVector<BasicBlock*, 32> Preds(predecessors(DispBB));
+			for (BasicBlock* Pred : Preds) {
+				if (Pred == PreDisp) continue; // skip self
+				Instruction* Term = Pred->getTerminator();
+				if (!Term) continue;
+				for (unsigned i = 0, e = Term->getNumSuccessors(); i < e; ++i) {
+					if (Term->getSuccessor(i) == DispBB)
+						Term->setSuccessor(i, PreDisp);
+				}
+			}
+
+			// PreDisp: hard-false → dead code, else → real dispatch.
+			IRBuilder<> PB(PreDisp);
+			Value* Fake = Opaque.hardFalse(PB);
+			unsigned DeadIdx = HardenRng.range((uint32_t)DeadBBs.size());
+			PB.CreateCondBr(Fake, DeadBBs[DeadIdx], DispBB);
+		}
 	}
 
 	// Hard-true guards on ~30% of handler entries
@@ -2396,14 +3199,15 @@ void VMImpl::hardenVMEngine(Function* EF, VMEngine::SharedState* SS) {
 		BasicBlock* GuardBB = BasicBlock::Create(Ctx,
 			HBB->getName().str() + ".guard", EF, HBB);
 
-		// Create bogus block (junk + branch to dispatch).
+		// Create bogus block (junk + back to dispatch / next-instruction
+		// tail -- nextInsn() picks whichever this build uses).
 		BasicBlock* BogusBB = BasicBlock::Create(Ctx,
 			HBB->getName().str() + ".bogus", EF);
 		{
 			IRBuilder<> BB(BogusBB);
 			Value* J = Opaque.opaqueI32Const(BB, HardenRng.u32());
 			(void)BB.CreateXor(J, J, "vm.bogus.j");
-			BB.CreateBr(SS->Dispatch);
+			nextInsn(BB);
 		}
 
 		// Redirect predecessors of handler to guard block.
@@ -2435,7 +3239,7 @@ void VMImpl::hardenVMEngine(Function* EF, VMEngine::SharedState* SS) {
 	// The check is self-contained within the handler block — no cross-BB
 	// alloca needed.
 	unsigned HandlerTraps = 0;
-	if (VCtx.Cfg.antiDebug && (TI.IsX86_64 || TI.IsAArch64)) {
+	if (Cfg.antiDebug && (TI.IsX86_64 || TI.IsAArch64)) {
 		Function* RCC = Intrinsic::getOrInsertDeclaration(&M, Intrinsic::readcyclecounter);
 
 
@@ -2450,7 +3254,7 @@ void VMImpl::hardenVMEngine(Function* EF, VMEngine::SharedState* SS) {
 			// and their cumulative false-positive exposure. Keep trap count
 			// independent of K. (At K=1 every handler block is variant 0.)
 			if (VariantOf.lookup(&BB) != 0) continue;
-			if (HardenRng.range(100) >= (int)VCtx.Cfg.adHandlerProb) continue;
+			if (HardenRng.range(100) >= (int)Cfg.adHandlerProb) continue;
 
 			TrapCandidates.push_back(&BB);
 		}
@@ -2480,7 +3284,7 @@ void VMImpl::hardenVMEngine(Function* EF, VMEngine::SharedState* SS) {
 
 			Value* Delta = B.CreateSub(T2, T1, "vm.ad.h.delta");
 			Value* Slow = B.CreateICmpUGT(Delta,
-				B.getInt64((uint64_t)VCtx.Cfg.adHandlerThreshold),
+				B.getInt64((uint64_t)Cfg.adHandlerThreshold),
 				"vm.ad.h.slow");
 
 			// One-shot gate: poison only if slow AND not yet fired.
@@ -2538,7 +3342,7 @@ void VMImpl::hardenVMEngine(Function* EF, VMEngine::SharedState* SS) {
 void VMImpl::diversifyHandlerVariants(Function* EF) {
 	if (!EF || NumVariants < 2) return;
 
-	auto DivRng = VCtx.R.fork("vm.variant.diversify");
+	auto DivRng = R.fork("vm.variant.diversify");
 	llvm::obf::MbaUtils   MBA(M, DivRng, "obf.vm.variant.mba.i32");
 	llvm::obf::OpaqueUtils Opaque(M, DivRng, "vm.variant.opaque.i32");
 
@@ -2618,7 +3422,7 @@ void VMImpl::diversifyHandlerVariants(Function* EF) {
 // inside __vm_engine.
 
 void VMImpl::ensureCallFTyCases() {
-	auto* SS = VMEngine::getSharedState(M);
+	auto* SS = VMEngine::getSharedState(M, EngineId);
 	if (!SS->Populated) return;
 	unsigned OldCount = SS->FTyCountAtLastBuild;
 	unsigned NewCount = (unsigned)SS->SharedFTys.size();
@@ -2758,9 +3562,9 @@ void VMImpl::buildWrapper() {
 	// keys, encrypted values, engine-table index) are materialised through
 	// opaque expression trees instead of bare immediates.  Structural
 	// constants (GEP indices, alloca sizes) are left as-is.
-	auto WrapBlindRng = VCtx.R.fork("vm.wrap.blind");
+	auto WrapBlindRng = R.fork("vm.wrap.blind");
 	llvm::obf::OpaqueUtils WrapOpaque(M, WrapBlindRng, "vm.wrap.opaque.i32");
-	const bool Blind = VCtx.Cfg.hardened;
+	const bool Blind = Cfg.hardened;
 
 	auto blindI32 = [&](uint32_t C) -> Value* {
 		if (!Blind) return B.getInt32(C);
@@ -2780,8 +3584,8 @@ void VMImpl::buildWrapper() {
 
 
 	// per-function polymorphism RNG
-	auto PolyRng = VCtx.R.fork("vm.wrap.poly");
-	const bool Poly = VCtx.Cfg.hardened;
+	auto PolyRng = R.fork("vm.wrap.poly");
+	const bool Poly = Cfg.hardened;
 
 	// Fisher-Yates shuffle helper
 	auto fyShuffle = [&](unsigned* Arr, unsigned N) {
@@ -3037,6 +3841,78 @@ void VMImpl::buildWrapper() {
 	}
 
 
+	// Lazy AES fetch: build the per-call context (unmasked round key + nonce +
+	// keystream-block cache) that the shared engine's loadBC/loadBCDyn use.
+	// Gated on SS->LazyMode (fixed by whichever function founded the shared
+	// engine), not this function's own LazyDecrypt: the wrapper's argument
+	// list must match the already-built engine signature regardless.
+	auto* SS = VMEngine::getSharedState(M, EngineId);
+	const bool LazyActive = SS->LazyMode;
+	Value* LazyCtxArg = nullptr;
+	if (LazyActive) {
+		// buildWrapper() runs before buildEncryptCtorAES(); when lazy, create
+		// the masked key-schedule/nonce/mask globals here so both this
+		// wrapper and the later ctor (which reuses them instead of
+		// re-emitting) can reference them.
+		if (!GVAESExpandedKey) {
+			SmallVector<Constant*, 176> MaskedRK;
+			for (int i = 0; i < 176; i++)
+				MaskedRK.push_back(ConstantInt::get(I8Ty, AESExpandedKey[i] ^ AESRKMask[i]));
+			auto* RKTy = ArrayType::get(I8Ty, 176);
+			GVAESExpandedKey = new GlobalVariable(
+				M, RKTy, /*isConst=*/true, GlobalValue::PrivateLinkage,
+				ConstantArray::get(RKTy, MaskedRK),
+				(F.getName() + ".vm.aes.rk").str());
+			GVAESExpandedKey->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
+			GVAESExpandedKey->setAlignment(Align(16));
+
+			SmallVector<Constant*, 8> NonceBytes;
+			for (int i = 0; i < 8; i++)
+				NonceBytes.push_back(ConstantInt::get(I8Ty, (AESNonce >> (8 * i)) & 0xFF));
+			auto* NonceTy = ArrayType::get(I8Ty, 8);
+			GVAESNonce = new GlobalVariable(
+				M, NonceTy, /*isConst=*/true, GlobalValue::PrivateLinkage,
+				ConstantArray::get(NonceTy, NonceBytes),
+				(F.getName() + ".vm.aes.nonce").str());
+			GVAESNonce->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
+
+			SmallVector<Constant*, 176> MaskConsts;
+			for (int i = 0; i < 176; i++)
+				MaskConsts.push_back(ConstantInt::get(I8Ty, AESRKMask[i]));
+			GVAESRKMask = new GlobalVariable(
+				M, RKTy, /*isConst=*/true, GlobalValue::PrivateLinkage,
+				ConstantArray::get(RKTy, MaskConsts),
+				(F.getName() + ".vm.aes.rkmask").str());
+			GVAESRKMask->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
+		}
+
+		auto* CtxTy = ArrayType::get(I8Ty, VMEngine::kLazyCtxSize);
+		AllocaInst* LazyCtx = B.CreateAlloca(CtxTy, nullptr, "vm.lazy.ctx");
+		LazyCtx->setAlignment(Align(16));
+
+		// Unmask rk into ctx[0..175] (mirrors buildEncryptCtorAES's stack-unmask).
+		B.CreateMemCpy(LazyCtx, Align(16), GVAESExpandedKey, Align(16), B.getInt64(176));
+		for (unsigned i = 0; i < 176; i++) {
+			Value* Ptr = B.CreateGEP(I8Ty, LazyCtx, B.getInt64(i), "vm.lazy.rk.p");
+			Value* Byte = B.CreateLoad(I8Ty, Ptr, "vm.lazy.rk.b");
+			Value* MkPtr = B.CreateGEP(I8Ty, GVAESRKMask, B.getInt64(i), "vm.lazy.mk.p");
+			Value* Mk = B.CreateLoad(I8Ty, MkPtr, "vm.lazy.mk.b");
+			B.CreateStore(B.CreateXor(Byte, Mk), Ptr);
+		}
+
+		// Copy nonce into ctx[176..183].
+		Value* NonceDst = B.CreateGEP(I8Ty, LazyCtx,
+			B.getInt64(VMEngine::kLazyCtxNonceOff), "vm.lazy.nonce.p");
+		B.CreateMemCpy(NonceDst, Align(1), GVAESNonce, Align(1), B.getInt64(8));
+
+		// cachedBlk = 0xFFFFFFFF: no block cached yet, forces a fetch on first use.
+		Value* CachedBlkPtr = B.CreateGEP(I8Ty, LazyCtx,
+			B.getInt64(VMEngine::kLazyCtxCachedBlkOff), "vm.lazy.cb.p");
+		B.CreateStore(B.getInt32(0xFFFFFFFFu), CachedBlkPtr);
+
+		LazyCtxArg = LazyCtx;
+	}
+
 	// Call vm_engine (indirect via handler table)
 	// the engine pointer is stored in GVHandlers[OP_COUNT].
 	// We load it and make an indirect call.  This eliminates every direct
@@ -3046,7 +3922,7 @@ void VMImpl::buildWrapper() {
 	// Bytecode base: use runtime copy if encryption is enabled
 	Value* BCBase = (EncBytecode && GVBytecodeRT) ? (Value*)GVBytecodeRT : (Value*)GVBytecode;
 
-	Value* Args[VMEngine::kNumParams] = {
+	SmallVector<Value*, VMEngine::kNumParams + 1> Args = {
 		BCBase,                                                          // bc
 		blindI32((uint32_t)E.BC.size()),                                 // bc_len
 		WRegs,                                                           // regs
@@ -3071,15 +3947,16 @@ void VMImpl::buildWrapper() {
 		DoRegEncrypt ? (Value*)WFRegKeys                                 // fregkeys
 			: ConstantPointerNull::get(cast<PointerType>(PtrTy)),
 		// per-function callee XOR mask (0 when unhardened)
-		VCtx.Cfg.hardened ? blindI64(CalleeMask) : B.getInt64(0),       // callee_mask
+		Cfg.hardened ? blindI64(CalleeMask) : B.getInt64(0),       // callee_mask
 	};
+	if (LazyActive) Args.push_back(LazyCtxArg);              // lazyctx
 
 	// Load engine function pointer from handler table slot [OP_COUNT]
 	Value* EngSlot = B.CreateGEP(PtrTy, GVHandlers,
 		blindI32(OP_COUNT), "vm.eng.slot");
 	Value* EngPtr = B.CreateLoad(PtrTy, EngSlot, "vm.eng.ptr");
 
-	FunctionType* EngFTy = VMEngine::getVMEngineFunctionType(Ctx);
+	FunctionType* EngFTy = VMEngine::getVMEngineFunctionType(Ctx, LazyActive);
 	B.CreateCall(EngFTy, EngPtr, Args);
 
 	// Extract return value and return
@@ -3165,7 +4042,7 @@ void VMImpl::buildWrapper() {
 //   - each edge gets: if (hardTrue) goto RealPhase else goto JunkBlock
 //   - 3-5 fully dead blocks with junk stores and opaque constants
 //
-// Gated by VCtx.Cfg.hardened — no-op when hardened=0.
+// Gated by Cfg.hardened — no-op when hardened=0.
 
 
 //salt corruption primitive
@@ -3195,7 +4072,7 @@ void VMImpl::emitSaltCorruption(IRBuilder<>& B, Value* SaltPtr, uint32_t PoisonK
 // Gated by hardened=1 && antiDebug=1.
 
 void VMImpl::buildIntegrityHashCtor() {
-	if (!VCtx.Cfg.hardened || !VCtx.Cfg.antiDebug) return;
+	if (!Cfg.hardened || !Cfg.antiDebug) return;
 	if (!GVBytecode || E.BC.empty()) return;
 
 	unsigned BCLen = (unsigned)E.BC.size();
@@ -3316,7 +4193,7 @@ void VMImpl::buildIntegrityHashCtor() {
 // Gated by hardened=1 and non-empty callee table.
 
 void VMImpl::buildCalleeXorCtor() {
-	if (!VCtx.Cfg.hardened || !GVCallees || E.CalleeTab.empty()) return;
+	if (!Cfg.hardened || !GVCallees || E.CalleeTab.empty()) return;
 	if (CalleeMask == 0) return;
 
 	unsigned NCallees = (unsigned)E.CalleeTab.size();
@@ -3365,7 +4242,12 @@ void VMImpl::buildCalleeXorCtor() {
 // that the branch predictor learns is almost-always-false (~1 cycle).
 
 void VMImpl::buildAntiDebugGate(VMEngine::SharedState* SS) {
-	if (!VCtx.Cfg.hardened || !VCtx.Cfg.antiDebug) return;
+	if (!Cfg.hardened || !Cfg.antiDebug) return;
+	// threadedDispatch has no central vm.dispatch/vm.fetch pair to insert
+	// this gate between (SS->Dispatch is null there too, so the next check
+	// would already no-op this -- explicit for clarity). The handler-level
+	// spot-check timing traps in hardenVMEngine() still fire independently.
+	if (ThreadedDispatch) return;
 	if (!SS || !SS->EngineFn || !SS->Dispatch || !SS->EngineSalt) return;
 
 	Function* EF = SS->EngineFn;
@@ -3396,7 +4278,7 @@ void VMImpl::buildAntiDebugGate(VMEngine::SharedState* SS) {
 		auto* NCtr = B.CreateAdd(Ctr, B.getInt32(1), "vm.ad.cn");
 		B.CreateStore(NCtr, CtrA)->setVolatile(true);
 		// interval from config (rounded to power-of-2 for AND mask)
-		unsigned Interval = VCtx.Cfg.adDispatchInterval;
+		unsigned Interval = Cfg.adDispatchInterval;
 		if (Interval == 0) Interval = 64;
 		unsigned Mask = 1;
 		while (Mask < Interval) Mask <<= 1;
@@ -3445,7 +4327,7 @@ void VMImpl::buildAntiDebugGate(VMEngine::SharedState* SS) {
 			auto* Delta = B.CreateSub(T2, T1, "vm.ad.delta");
 			// threshold from config
 			auto* Slow = B.CreateICmpUGT(Delta,
-				B.getInt64((uint64_t)VCtx.Cfg.adDispatchThreshold), "vm.ad.slow");
+				B.getInt64((uint64_t)Cfg.adDispatchThreshold), "vm.ad.slow");
 			Detected = B.CreateOr(Detected, Slow, "vm.ad.det.time");
 		}
 
@@ -3564,9 +4446,9 @@ void VMImpl::buildAntiDebugGate(VMEngine::SharedState* SS) {
 
 
 void VMImpl::hardenWrapper() {
-	if (!VCtx.Cfg.hardened) return;
+	if (!Cfg.hardened) return;
 
-	auto HRng = VCtx.R.fork("vm.wrap.split");
+	auto HRng = R.fork("vm.wrap.split");
 	llvm::obf::OpaqueUtils HOpaque(M, HRng, "vm.wrap.split.i32");
 	BasicBlock* EntryBB = &F.getEntryBlock();
 	if (!EntryBB || EntryBB->empty()) return;
@@ -3680,12 +4562,12 @@ void VMImpl::hardenWrapper() {
 // sees: state ^= <opaque_delta>;  This prevents trivial state recovery.
 //
 // Blocks that terminate with ret/unreachable are left as function exits.
-// Gated by VCtx.Cfg.hardened — no-op when hardened=0.
+// Gated by Cfg.hardened — no-op when hardened=0.
 
 void VMImpl::flattenWrapper() {
-	if (!VCtx.Cfg.hardened) return;
+	if (!Cfg.hardened) return;
 
-	auto FRng = VCtx.R.fork("vm.wrap.flat");
+	auto FRng = R.fork("vm.wrap.flat");
 	llvm::obf::OpaqueUtils FOpaque(M, FRng, "vm.wrap.flat.i32");
 
 	BasicBlock* EntryBB = &F.getEntryBlock();
@@ -3803,12 +4685,12 @@ void VMImpl::flattenWrapper() {
 //
 // Operates on all basic blocks of the wrapper function (including the
 // phase blocks and dead blocks created by hardenWrapper).
-// Gated by VCtx.Cfg.hardened — no-op when hardened=0.
+// Gated by Cfg.hardened — no-op when hardened=0.
 
 void VMImpl::mbaHardenWrapper() {
-	if (!VCtx.Cfg.hardened) return;
+	if (!Cfg.hardened) return;
 
-	auto MRng = VCtx.R.fork("vm.wrap.mba");
+	auto MRng = R.fork("vm.wrap.mba");
 	llvm::obf::MbaUtils    WMBA(M, MRng, "vm.wrap.mba.noise.i32");
 	llvm::obf::OpaqueUtils WOpq(M, MRng, "vm.wrap.mba.salt.i32");
 
@@ -4085,6 +4967,8 @@ bool VMImpl::run() {
 	// Compile function body to bytecode
 	E.setOpcodeMap(&OpMap);
 	E.setTargetBlind(SaltConst, BlindTargets);
+	E.setConstInStream(ConstInStream);
+	E.setKeyedDispatch(SaltConst, KeyedDispatch);
 	if (!E.run(F, CTSalt, M.getDataLayout())) {
 		FailReason = E.getFailReason().str();
 		if (FailReason.empty()) FailReason = "bytecode emission failed";
@@ -4094,7 +4978,7 @@ bool VMImpl::run() {
 	if (ObfVerify) {
 		std::string VErr;
 		uint32_t BadIP = 0;
-		if (!verifyBytecode(E, CTSalt, OpMap, VErr, BadIP, SaltConst, BlindTargets)) {
+		if (!verifyBytecode(E, CTSalt, OpMap, VErr, BadIP, SaltConst, BlindTargets, KeyedDispatch)) {
 			FailReason = ("bytecode verify failed at ip " + std::to_string(BadIP) + ": " + VErr);
 			return false;
 		}
@@ -4112,7 +4996,7 @@ bool VMImpl::run() {
 	// distinct label ("vm.regkeys") so they do not perturb any existing
 	// RNG sequence.  One key per allocated slot (power-of-2 padded).
 	if (RegEncrypt) {
-		auto KeyRng = VCtx.R.fork("vm.regkeys");
+		auto KeyRng = R.fork("vm.regkeys");
 		RegKeys.resize(NVRAlloc);
 		for (auto& K : RegKeys)   K = (uint32_t)KeyRng.u32();
 		Reg64Keys.resize(NVR64Alloc);
@@ -4130,7 +5014,7 @@ bool VMImpl::run() {
 	// Generate per-function engine-pointer XOR mask 
 	// Uses a forked RNG so it does not perturb any existing sequence.
 	{
-		auto EngRng = VCtx.R.fork("vm.engine.mask");
+		auto EngRng = R.fork("vm.engine.mask");
 		EngineMask = ((uint64_t)EngRng.u32() << 32) | EngRng.u32();
 		// Ensure mask is non-zero to avoid storing the raw pointer.
 		if (EngineMask == 0) EngineMask = 0xDEADBEEFCAFEBABEULL;
@@ -4138,7 +5022,7 @@ bool VMImpl::run() {
 
 	// generate anti-debug poison key + init TargetInfo 
 	{
-		auto ADRng = VCtx.R.fork("vm.antidebug");
+		auto ADRng = R.fork("vm.antidebug");
 		ADPoisonKey = ADRng.u32();
 		if (ADPoisonKey == 0) ADPoisonKey = 0xDEAD07u;
 	}
@@ -4146,7 +5030,7 @@ bool VMImpl::run() {
 
 	// generate per-function callee XOR mask 
 	{
-		auto CMRng = VCtx.R.fork("vm.callee.mask");
+		auto CMRng = R.fork("vm.callee.mask");
 		CalleeMask = ((uint64_t)CMRng.u32() << 32) | CMRng.u32();
 		if (CalleeMask == 0) CalleeMask = 0xCAFEBABE08080808ULL;
 	}
@@ -4163,14 +5047,28 @@ bool VMImpl::run() {
 	buildBytecodeGlobal();
 	buildCalleeGlobal();
 
+	// Nested-VM: each eligible opcode's helper Function* must exist before
+	// buildOpcodeHandlers (inside populateVMEngine, below) can emit a call to
+	// it. See the sequencing note above virtualizeNestedHelpersOnce().
+	if (NestedVM) {
+		for (const auto& H : kNestedHelperOrder)
+			if (opcodeNests(H.Op))
+				getOrCreateNestedHelper(H.Op);
+	}
+
 	// Populate shared vm_engine (first function only)
 	populateVMEngine();
+
+	// Nested-VM: inner-virtualize the helper(s), once per module. Must run
+	// AFTER populateVMEngine() above -- see sequencing note.
+	if (NestedVM)
+		virtualizeNestedHelpersOnce();
 
 	// Extend CALL handler switches if this function introduced new FTys
 	ensureCallFTyCases();
 
 	// Build per-function handler table (uses shared OpcBB with per-function permutation)
-	VMEngine::getSharedState(M); // ensure shared state exists before table build
+	VMEngine::getSharedState(M, EngineId); // ensure shared state exists before table build
 	SharedEngineMode = true;
 	buildHandlerTable();
 	SharedEngineMode = false;

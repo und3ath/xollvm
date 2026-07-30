@@ -279,10 +279,12 @@ namespace llvm {
 		unsigned minBlocks = 1;
 		unsigned maxBlocks = 400;     // 0 = no limit
 		bool     useAES = true;       // AES-CTR replaces LCG (Layer 2)
+		bool     lazyDecrypt = false; // AES layer removed per-instruction at fetch instead of whole-buffer in ctor (requires useAES + encBytecode)
 		bool     obfRegIdx = true;    // XOR register indices with compile-time salt
 		bool     encDispatch = true;   // P2: encrypted per-opcode->handler index indirection (on)
 		unsigned handlerVariants = 3;  // K handler-body variants per opcode (P1 polymorphism on; 1 = off)
 		bool     encBytecode = true;  // LCG-encrypt bytecode stream at load time
+		bool     constInStream = false;  // move int/i64/fp constants into the encrypted bytecode stream instead of plaintext wrapper stores (requires encBytecode)
 		bool     strongBytecode = true;   // P3: per-position PRF Layer-1 keystream (on; 0 = weak salt^index)
 		bool     blindTargets = true;   // P3: XOR-blind bytecode branch targets (on)
 		bool     hardened = false;    // MBA + opaque predicates on handler blocks
@@ -294,6 +296,25 @@ namespace llvm {
 		unsigned adHandlerThreshold = 500;   // rdtsc delta for handler spot-checks (cycles)
 		unsigned adDispatchInterval = 64;    // check every N fetch iterations (power of 2)
 		unsigned adHandlerProb = 10;    // % of handlers to trap (0-100)
+
+		bool     nestedVM = false;         // virtualize eligible opcode handlers with a second VM layer
+		// 0 = all eligible opcodes nest; N>0 = only the first N, in the fixed
+		// order BINOP, BINOP64, ICMP, ICMP64, FCMP, CAST (see kNestedHelperOrder).
+		unsigned nestedVMOpcodes = 0;
+		bool     nestedVMHardened = false; // reserved: harden the inner VM layer (unused)
+
+		// threadedDispatch: inline the fetch/decode/indirectbr sequence into
+		// every handler's back-edge instead of routing through one shared
+		// vm.dispatch/vm.fetch pair. Removes the single central dispatch loop
+		// a lifter would otherwise fingerprint (one urem, one GEP, one
+		// indirectbr). Off = byte-identical to the central-dispatch build.
+		bool     threadedDispatch = false;
+
+		// keyedDispatch: XOR each written opcode byte with a per-IP compile-time
+		// key at emit time; un-XOR at fetch time. The same physical byte read
+		// from two different IPs decodes to different logical opcodes, so a
+		// static byte->handler map no longer holds. Off = byte-identical.
+		bool     keyedDispatch = false;
 
 		static VMPassConfig fromPassConfig(const PassConfig& PC);
 		bool validate() const;

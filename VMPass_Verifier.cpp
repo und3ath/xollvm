@@ -15,8 +15,16 @@ namespace llvm {
 
 	bool verifyBytecode(const BytecodeEmitter& E, uint8_t CTSalt, const VMOpcodeMap& OpMap,
 		std::string& OutErr, uint32_t& OutBadIP,
-		uint32_t SaltFull, bool BlindTargets) {
+		uint32_t SaltFull, bool BlindTargets, bool KeyedDispatch) {
 		const auto& BC = E.BC;
+
+		// keyedDispatch: mirrors BytecodeEmitter::opKeyByteCT / VMImpl::opKeyByteIR
+		// op-for-op so the opcode byte at each IP is un-XOR'd the same way the
+		// runtime fetch path does before it is looked up in OpMap.P2L.
+		auto opKeyByteCT = [](uint32_t salt, uint32_t ip) -> uint8_t {
+			uint32_t k = (salt * (ip + 1u)) ^ (salt >> 8);
+			return (uint8_t)(k & 0xFFu);
+			};
 
 		// P3-B: branch targets are stored XOR-blinded with tgtKey(SaltFull).
 		// Mirror BytecodeEmitter::tgtKeyCT / VMImpl::tgtKeyIR so chkTarget can
@@ -131,6 +139,7 @@ namespace llvm {
 		uint32_t IP = 0;
 		while (IP < BC.size()) {
 			uint8_t Phys = BC[IP];
+			if (KeyedDispatch) Phys ^= opKeyByteCT(SaltFull, IP);
 			if (Phys >= OP_COUNT)
 				return fail(IP, Twine("invalid opcode byte ") + Twine((unsigned)Phys));
 
@@ -140,6 +149,11 @@ namespace llvm {
 				if (IP + 6 > BC.size()) return fail(IP, "OP_LOADI truncated");
 				if (!chk(IP, "vreg", decIdx(BC[IP + 1]), E.NVR)) return false;
 				IP += 6; break;
+			}
+			case OP_LOADI64: {
+				if (IP + 10 > BC.size()) return fail(IP, "OP_LOADI64 truncated");
+				if (!chk(IP, "vreg64", decIdx(BC[IP + 1]), E.NVR64)) return false;
+				IP += 10; break;
 			}
 			case OP_MOVR: {
 				if (IP + 3 > BC.size()) return fail(IP, "OP_MOVR truncated");

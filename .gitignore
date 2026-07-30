@@ -9,6 +9,10 @@ CMakeCache.txt
 CMakeFiles/
 cmake_install.cmake
 
+# run tests dirs 
+obf_reports/
+obf_rt_work/
+
 # Compiled objects / libs / plugins
 *.o
 *.obj
@@ -34,3 +38,6 @@ CLAUDE.md
 .idea/
 .vscode/
 *.user
+
+# Private planning docs (never commit)
+docs/VM_HARDENING_PLAN.md

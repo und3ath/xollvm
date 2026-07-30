@@ -1,5 +1,6 @@
 #pragma once
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/BasicBlock.h"
@@ -144,28 +145,65 @@ namespace llvm {
 		static constexpr unsigned kParamFRegKeys = 16;
 		static constexpr unsigned kParamCalleeMask = 17;
 		static constexpr unsigned kNumParams = 18;
+		// Present only when the engine was built with lazyDecrypt=1 (one extra
+		// trailing ptr param). kNumParams above is unchanged so the non-lazy
+		// signature — and therefore all output when the feature is off — is
+		// byte-identical to before this param was added.
+		static constexpr unsigned kParamLazyCtx = kNumParams;
+
+		// Layout of the per-call lazy-decrypt context block (a flat byte buffer
+		// allocated by buildWrapper() and threaded through as kParamLazyCtx):
+		//   [0..175]   rk      — unmasked 176-byte AES round-key schedule
+		//   [176..183] nonce   — 8-byte AES-CTR nonce
+		//   [184..199] window  — last-fetched 16-byte AES keystream block
+		//   [200..203] cachedBlk (i32) — block index currently held in `window`
+		static constexpr unsigned kLazyCtxRKOff = 0;
+		static constexpr unsigned kLazyCtxNonceOff = 176;
+		static constexpr unsigned kLazyCtxWindowOff = 184;
+		static constexpr unsigned kLazyCtxCachedBlkOff = 200;
+		static constexpr unsigned kLazyCtxSize = 204;
 
 		/// The well-known symbol name for the shared engine function.
 		static constexpr const char* kVMEngineName = "__vm_engine";
 
-		/// Return the canonical FunctionType for vm_engine.
-		inline FunctionType* getVMEngineFunctionType(LLVMContext& Ctx) {
+		/// Nested-VM: a second, distinct engine function for builds whose
+		/// OP_BINOP calls into the inner-virtualized helper. Keeping it a
+		/// SEPARATE function (not a runtime flag on the same engine) is what
+		/// breaks the recursion: the helper is itself virtualized against
+		/// EngineId 0 (the plain engine, computes OP_BINOP inline), so its
+		/// bytecode's own binops never call back into the helper.
+		static constexpr const char* kVMEngineNestName = "__vm_engine.nest";
+
+		/// EngineId 0 -> plain engine ("__vm_engine"), 1 -> nesting engine
+		/// ("__vm_engine.nest"). Selects both the SharedState instance and the
+		/// emitted Function's symbol name.
+		inline const char* vmEngineName(unsigned EngineId) {
+			return EngineId ? kVMEngineNestName : kVMEngineName;
+		}
+
+		/// Return the canonical FunctionType for vm_engine. `lazy` appends the
+		/// trailing lazyctx ptr param; false (default) reproduces the exact
+		/// pre-existing signature.
+		inline FunctionType* getVMEngineFunctionType(LLVMContext& Ctx, bool lazy = false) {
 			Type* PtrTy = PointerType::getUnqual(Ctx);
 			Type* I32Ty = Type::getInt32Ty(Ctx);
 			Type* VoidTy = Type::getVoidTy(Ctx);
 			Type* I64Ty = Type::getInt64Ty(Ctx);
-			Type* Params[kNumParams] = {
+			Type* Params[kNumParams + 1] = {
 				PtrTy, I32Ty, PtrTy, PtrTy, PtrTy, PtrTy,
 				PtrTy, I32Ty, I32Ty, I32Ty, I32Ty, I32Ty,
 				PtrTy, PtrTy,
 				PtrTy, PtrTy, PtrTy,   // regkeys, reg64keys, fregkeys
 				I64Ty,                 // callee_mask
+				PtrTy,                 // lazyctx (only present when lazy)
 			};
-			return FunctionType::get(VoidTy, Params, /*isVarArg=*/false);
+			unsigned N = lazy ? (kNumParams + 1) : kNumParams;
+			return FunctionType::get(VoidTy, ArrayRef<Type*>(Params, N), /*isVarArg=*/false);
 		}
 
-		/// Get or create the module-level @__vm_engine function.
-		Function* getOrBuildVMEngine(Module& M);
+		/// Get or create the module-level @__vm_engine (EngineId 0) or
+		/// @__vm_engine.nest (EngineId 1) function.
+		Function* getOrBuildVMEngine(Module& M, unsigned EngineId = 0);
 
 		/// Check whether the vm_engine body has been populated with handlers.
 		bool isEnginePopulated(Function* VMEngineFunc);
@@ -183,6 +221,7 @@ namespace llvm {
 			BasicBlock* OpcBB[OP_COUNT][kMaxHandlerVariants] = {};
 			unsigned    NumVariants = 1;   // active variant count for this engine
 			bool        EncDispatch = false;   // engine-wide: dispatch uses encrypted index map
+			bool        LazyMode = false;      // engine-wide: fetch removes AES per-block instead of ctor whole-buffer
 			BasicBlock* Dispatch = nullptr;
 			BasicBlock* ExitBB = nullptr;
 			BasicBlock* Entry = nullptr;
@@ -204,10 +243,19 @@ namespace llvm {
 
 			bool Populated = false;
 			unsigned FTyCountAtLastBuild = 0;
+
+			// nested-VM: set once the module-level pure opcode helper(s) have been
+			// inner-virtualized, so later functions' VMImpl::run() don't repeat it.
+			bool NestedHelpersBuilt = false;
 		};
 
-		SharedState* getSharedState(Module& M);
-		void releaseSharedState(Module& M);
+		// EngineId selects which of the (at most two) shared engines' state to
+		// return: 0 = plain engine, 1 = nesting engine. Each is built/populated
+		// independently (independent "first function" guard), so a nesting-
+		// engine build never observes or perturbs the plain engine's state
+		// and vice versa. Default (0) reproduces pre-nestedVM behavior exactly.
+		SharedState* getSharedState(Module& M, unsigned EngineId = 0);
+		void releaseSharedState(Module& M);  // clears state for every EngineId of M
 
 	} // namespace VMEngine
 
@@ -217,16 +265,36 @@ namespace llvm {
 		Module& M;
 		LLVMContext& Ctx;
 		Type* I8Ty, * I16Ty, * I32Ty, * I64Ty, * PtrTy;
-		Type* DoubleTy;  // f64 type — used by float handler builders 
-		VMCtx& VCtx;
+		Type* DoubleTy;  // f64 type — used by float handler builders
+
+		// Config + RNG are owned/referenced directly (not via VMCtx) so VMImpl
+		// can be constructed either from the annotation-driven VMCtx (normal
+		// per-function path) or from an explicit config+RNG (synthetic helper
+		// functions authored by the pass itself, e.g. nested-VM helpers, which
+		// have no FunctionObfContext / annotation of their own).
+		VMPassConfig Cfg;
+		obf::Rng&    R;
 
 		const bool     ObfRegIdx;
 		const bool     EncBytecode;
 		const bool     StrongBC;     // P3: per-position PRF Layer-1 keystream
 		const bool     BlindTargets; // P3-B: XOR-blind bytecode branch targets
 		const bool     UseAES;       // AES-CTR replaces LCG
+		const bool     LazyDecrypt;  // AES layer removed per-instruction at fetch instead of whole-buffer in ctor
 		const bool     RegEncrypt;   // XOR-encrypt register values at rest
 		const bool     RollingRegKey; // P4-C: evolve per-slot reg XOR key on each store
+		const bool     ConstInStream; // move int/i64/fp constants into the encrypted bytecode stream instead of plaintext wrapper stores
+		const bool     NestedVM;         // eligible opcode handlers call a second VM-interpreted layer instead of computing inline
+		const unsigned NestedVMOpcodes;  // 0 = all eligible opcodes nest; N>0 = first N in the fixed order (see opcodeNests)
+		const bool     NestedVMHardened; // reserved: harden the inner VM layer
+		const bool     ThreadedDispatch; // inline fetch/decode/indirectbr into every handler's back-edge; no central vm.dispatch/vm.fetch
+		const bool     KeyedDispatch;    // XOR each opcode byte with a per-IP compile-time key at emit/fetch time
+		// Which shared engine this build targets: 0 = plain ("__vm_engine"),
+		// 1 = nesting ("__vm_engine.nest"). Derived from NestedVM, not an
+		// independent knob -- a nestedVM=true build always wants the engine
+		// whose OP_BINOP calls the helper; nestedVM=false (including the
+		// helper's own inner-virtualization) always wants the plain one.
+		const unsigned EngineId;
 		const uint32_t SaltConst;    // full 32-bit salt stored in vm.salt
 		const uint8_t  CTSalt;       // low byte of SaltConst must match deobf() key
 		const uint64_t EncSeed;      // seed for bytecode LCG encryption
@@ -288,6 +356,12 @@ namespace llvm {
 		// Globals for AES runtime decryption
 		GlobalVariable* GVAESExpandedKey = nullptr;  // @fn.vm.aes.rk (masked)
 		GlobalVariable* GVAESNonce = nullptr;  // @fn.vm.aes.nonce
+		GlobalVariable* GVAESRKMask = nullptr;  // @fn.vm.aes.rkmask (unmask key for GVAESExpandedKey)
+
+		// lazyDecrypt: forward-declared/looked-up once per module (during the
+		// founding function's populateVMEngine call) so the shared engine's
+		// fetch path can call it before buildEncryptCtorAES() links the stub.
+		Function* KeystreamFn = nullptr;
 
 		// Handler indirection layer
 		Function* HFn = nullptr;       // target for BasicBlock creation
@@ -302,6 +376,7 @@ namespace llvm {
 		Value* EffFTyIndices = nullptr;// FTy index table base
 		Value* EffHandlers = nullptr;  // handler table base
 		Value* EffCalleeMask = nullptr;// callee XOR mask (i64, null when off)
+		Value* EffLazyCtx = nullptr;   // lazy-decrypt context block ptr (null unless LazyDecrypt)
 		Value* MaskVR = nullptr;       // i32 mask values
 		Value* MaskVR64 = nullptr;
 		Value* MaskFR = nullptr;
@@ -335,42 +410,57 @@ namespace llvm {
 			unsigned P = 1; while (P < N) P <<= 1; return P;
 		}
 
-		explicit VMImpl(VMCtx& VCtx)
-			: F(VCtx.F), M(*VCtx.F.getParent()), Ctx(VCtx.F.getContext()),
+		// Normal per-function path: config + RNG come from the annotation-driven
+		// VMCtx (FunctionObfContextAnalysis-backed).
+		explicit VMImpl(VMCtx& VCtx) : VMImpl(VCtx.F, VCtx.Cfg, VCtx.R) {}
+
+		// Synthetic-function path: explicit config + RNG, no VMCtx/annotation.
+		// Used to virtualize compiler-authored helper functions (e.g. nested-VM
+		// opcode helpers) that have no FunctionObfContext of their own.
+		VMImpl(Function& Fn, const VMPassConfig& CfgIn, obf::Rng& RIn)
+			: F(Fn), M(*Fn.getParent()), Ctx(Fn.getContext()),
 			I8Ty(Type::getInt8Ty(Ctx)),
 			I16Ty(Type::getInt16Ty(Ctx)),
 			I32Ty(Type::getInt32Ty(Ctx)),
 			I64Ty(Type::getInt64Ty(Ctx)),
 			PtrTy(PointerType::getUnqual(Ctx)),
 			DoubleTy(Type::getDoubleTy(Ctx)),
-			VCtx(VCtx),
-			ObfRegIdx(VCtx.Cfg.obfRegIdx),
-			EncBytecode(VCtx.Cfg.encBytecode),
-			StrongBC(VCtx.Cfg.strongBytecode),
-			BlindTargets(VCtx.Cfg.blindTargets),
-			UseAES(VCtx.Cfg.useAES),
-			RegEncrypt(VCtx.Cfg.regEncrypt),
-			RollingRegKey(VCtx.Cfg.rollingRegKey),
-			SaltConst(VCtx.R.u32()),
+			Cfg(CfgIn), R(RIn),
+			ObfRegIdx(Cfg.obfRegIdx),
+			EncBytecode(Cfg.encBytecode),
+			StrongBC(Cfg.strongBytecode),
+			BlindTargets(Cfg.blindTargets),
+			UseAES(Cfg.useAES),
+			LazyDecrypt(Cfg.lazyDecrypt),
+			RegEncrypt(Cfg.regEncrypt),
+			RollingRegKey(Cfg.rollingRegKey),
+			ConstInStream(Cfg.constInStream),
+			NestedVM(Cfg.nestedVM),
+			NestedVMOpcodes(Cfg.nestedVMOpcodes),
+			NestedVMHardened(Cfg.nestedVMHardened),
+			ThreadedDispatch(Cfg.threadedDispatch),
+			KeyedDispatch(Cfg.keyedDispatch),
+			EngineId(NestedVM ? 1u : 0u),
+			SaltConst(R.u32()),
 			// IMPORTANT: indices are only XOR-salted when obfRegIdx=1.
 			// When obfRegIdx=0, emitter must write raw indices (CTSalt=0).
 			CTSalt(ObfRegIdx ? (uint8_t)(SaltConst & 0xFF) : 0),
-			EncSeed(((uint64_t)VCtx.R.u32() << 32) | VCtx.R.u32()) {
+			EncSeed(((uint64_t)R.u32() << 32) | R.u32()) {
 			// per-function opcode permutation for handler-table/bytecode diversity.
-			OpMap.initPermuted(VCtx.R);
+			OpMap.initPermuted(R);
 
 			//  generate per-function AES key material from RNG
 			if (UseAES) {
 				for (int i = 0; i < 4; i++) {
-					uint32_t W = VCtx.R.u32();
+					uint32_t W = R.u32();
 					AESKey[i * 4 + 0] = (W >> 0) & 0xFF;
 					AESKey[i * 4 + 1] = (W >> 8) & 0xFF;
 					AESKey[i * 4 + 2] = (W >> 16) & 0xFF;
 					AESKey[i * 4 + 3] = (W >> 24) & 0xFF;
 				}
 				vm_aes::keyExpand(AESKey, AESExpandedKey);
-				for (auto& b : AESRKMask) b = (uint8_t)(VCtx.R.u32() & 0xFF);
-				AESNonce = ((uint64_t)VCtx.R.u32() << 32) | VCtx.R.u32();
+				for (auto& b : AESRKMask) b = (uint8_t)(R.u32() & 0xFF);
+				AESNonce = ((uint64_t)R.u32() << 32) | R.u32();
 			}
 		}
 
@@ -416,12 +506,51 @@ namespace llvm {
 			return k;
 		}
 
+		// keyedDispatch: runtime (IR) mix — mirrors BytecodeEmitter::opKeyByteCT
+		// op-for-op. Computes the per-IP opcode-byte XOR key from the runtime
+		// salt (caller loads it, volatile, before calling this) and the
+		// fetch-time IP. Applied to the raw fetched opcode byte before the
+		// OP_COUNT urem in emitThreadedTail/buildDispatch.
+		Value* opKeyByteIR(IRBuilder<>& B, Value* Salt, Value* Idx32, const Twine& N) {
+			Value* IPp1 = B.CreateAdd(Idx32, B.getInt32(1), N + ".ok0");
+			Value* Mul = B.CreateMul(Salt, IPp1, N + ".ok1");
+			Value* Shr = B.CreateLShr(Salt, B.getInt32(8), N + ".ok2");
+			Value* K = B.CreateXor(Mul, Shr, N + ".ok3");
+			Value* Key32 = B.CreateAnd(K, B.getInt32(0xFF), N + ".okm");
+			return B.CreateTrunc(Key32, I8Ty, N + ".ok8");
+		}
+
+		// Lazy AES fetch: remove the AES-CTR layer for the byte at Idx32.
+		// Recomputes the 16-byte keystream block covering Idx32 via KeystreamFn
+		// into the per-call scratch window (EffLazyCtx), then reads the covering
+		// byte. Emitted straight-line (no control flow) so callers that assume
+		// linear emission across loadBC/loadBCDyn stay valid.
+		// Only called when LazyDecrypt (implies EncBytecode + UseAES).
+		Value* lazyAESByte(IRBuilder<>& B, Value* Idx32, const Twine& N) {
+			Value* RKPtr = B.CreateGEP(I8Ty, EffLazyCtx,
+				B.getInt64(VMEngine::kLazyCtxRKOff), N + ".lz.rk");
+			Value* NoncePtr = B.CreateGEP(I8Ty, EffLazyCtx,
+				B.getInt64(VMEngine::kLazyCtxNonceOff), N + ".lz.nc");
+			Value* WindowPtr = B.CreateGEP(I8Ty, EffLazyCtx,
+				B.getInt64(VMEngine::kLazyCtxWindowOff), N + ".lz.win");
+
+			Value* Blk = B.CreateLShr(Idx32, B.getInt32(4), N + ".lz.blk");
+			B.CreateCall(KeystreamFn, { RKPtr, NoncePtr, Blk, WindowPtr });
+			Value* ByteOff = B.CreateAnd(Idx32, B.getInt32(0xF), N + ".lz.boff");
+			Value* BytePtr = B.CreateGEP(I8Ty, WindowPtr,
+				B.CreateZExt(ByteOff, I64Ty, N + ".lz.boff64"), N + ".lz.bytep");
+			return B.CreateLoad(I8Ty, BytePtr, N + ".lz.byte");
+		}
+
 		Value* loadBC(IRBuilder<>& B, Value* IP, uint32_t Off, const Twine& N = "vm.bc") {
 			Value* Idx32 = Off ? B.CreateAdd(IP, B.getInt32(Off), N + ".i32") : IP;
 			Value* Idx64 = B.CreateSExt(Idx32, I64Ty, N + ".ip64");
 			Value* Ptr = B.CreateGEP(I8Ty, EffBC, Idx64, N + ".p");
 			Value* Raw = B.CreateLoad(I8Ty, Ptr, N);
 			if (!EncBytecode) return Raw;
+
+			if (LazyDecrypt && EffLazyCtx)
+				Raw = B.CreateXor(Raw, lazyAESByte(B, Idx32, N), N + ".aesx");
 
 			auto* SL = B.CreateLoad(I32Ty, EffSalt, N + ".s");
 			SL->setVolatile(true);
@@ -441,6 +570,9 @@ namespace llvm {
 			Value* Ptr = B.CreateGEP(I8Ty, EffBC, Idx64, N + ".p");
 			Value* Raw = B.CreateLoad(I8Ty, Ptr, N);
 			if (!EncBytecode) return Raw;
+
+			if (LazyDecrypt && EffLazyCtx)
+				Raw = B.CreateXor(Raw, lazyAESByte(B, Idx32, N), N + ".aesx");
 
 			auto* SL = B.CreateLoad(I32Ty, EffSalt, N + ".s");
 			SL->setVolatile(true);
@@ -605,8 +737,17 @@ namespace llvm {
 			St->setVolatile(true); return Cur;
 		}
 
-		// Build one opcode handler block and return an IRBuilder positioned in it
+		// Build one opcode handler block and return an IRBuilder positioned in it.
+		// threadedDispatch pre-creates every OpcBB[Opc][variant] placeholder
+		// before any handler body is built (each handler's inlined dispatch
+		// tail needs the full successor set up front) -- reuse and rename that
+		// block instead of allocating a fresh one. Off path unchanged.
 		IRBuilder<> mkOpc(VMOp Opc, const Twine& Name) {
+			if (ThreadedDispatch && OpcBB[Opc][CurVariant]) {
+				BasicBlock* BB = OpcBB[Opc][CurVariant];
+				BB->setName("vm.opc." + Name + ".v" + Twine(CurVariant));
+				return IRBuilder<>(BB);
+			}
 			BasicBlock* BB = BasicBlock::Create(Ctx,
 				"vm.opc." + Name + ".v" + Twine(CurVariant), HFn);
 			OpcBB[Opc][CurVariant] = BB; return IRBuilder<>(BB);
@@ -640,8 +781,37 @@ namespace llvm {
 		void buildHandlersCall();      // CALL_VOID CALL_INT CALL_PTR CALL_INT64 CALL_F
 		void buildCall2(VMOp Opc, const Twine& Name, llvm::VMEngine::RetKind2 RK);
 
+		// Nested-VM: pure per-opcode helpers authored fresh + virtualized via a
+		// second VMImpl over the shared engine. See VMPass_Impl.cpp for the
+		// sequencing rationale.
+		Function* getOrCreateNestedBinopHelper();   // idempotent per module
+		Function* getOrCreateNestedBinop64Helper(); // idempotent per module
+		Function* getOrCreateNestedIcmpHelper();    // idempotent per module
+		Function* getOrCreateNestedIcmp64Helper();  // idempotent per module
+		Function* getOrCreateNestedFcmpHelper();    // idempotent per module
+		Function* getOrCreateNestedCastHelper();    // idempotent per module
+		Function* getOrCreateNestedBinopFHelper();  // idempotent per module
+		Function* getOrCreateNestedHelper(VMOp Op); // dispatches to the per-opcode authors above
+		void virtualizeNestedHelpersOnce();         // idempotent per module
+
+		// Whether Op is nested for this build: NestedVM is on, and (Op is
+		// within the first NestedVMOpcodes entries of the fixed nesting order,
+		// or NestedVMOpcodes==0, meaning "all eligible opcodes nest").
+		bool opcodeNests(VMOp Op) const;
+
 		void buildHandlerTable();   // must come AFTER buildOpcodeHandlers
 		void buildDispatch();       // must come AFTER buildHandlerTable
+
+		// threadedDispatch: emits the fetch/decode/indirectbr sequence inline
+		// at B's current insertion point (bounds check -> ExitBB; otherwise
+		// load+advance IP, decode opcode, indirectbr to the target handler).
+		// Terminates B's current block; callers must not emit after calling
+		// this. Mirrors buildDispatch()'s vm.fetch logic exactly.
+		void emitThreadedTail(IRBuilder<>& B);
+
+		// Handler back-edge dispatch: central Dispatch branch when
+		// !ThreadedDispatch, inlined threaded tail otherwise.
+		void nextInsn(IRBuilder<>& B);
 		void buildEncryptCtor();    // optional encryption constructor
 		void buildEncryptCtorAES(); // Step 03: AES-CTR constructor
 		void buildEncryptCtorLCG(); // Legacy LCG constructor (useAES=0)

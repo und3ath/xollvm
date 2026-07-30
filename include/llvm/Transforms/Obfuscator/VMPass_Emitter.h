@@ -108,6 +108,15 @@ namespace llvm {
 		/// per-function salt (SaltConst); on is the blindTargets knob.
 		void setTargetBlind(uint32_t saltFull, bool on) { SaltFull = saltFull; BlindTargets = on; }
 
+		/// Move int/i64/fp constant slot seeding into the encrypted bytecode
+		/// stream (as an OP_LOADI*/OP_LOADI64/OP_LOADI_F prologue) instead of
+		/// leaving it for the wrapper's plaintext preload stores.
+		void setConstInStream(bool on) { ConstInStream = on; }
+
+		/// keyedDispatch: XOR each written opcode byte with a per-IP compile-time
+		/// key derived from saltFull (see opKeyByteCT); on is the knob.
+		void setKeyedDispatch(uint32_t saltFull, bool on) { KeyedSalt = saltFull; KeyedDispatch = on; }
+
 		/// Compile F into bytecode.  Salt is the CTSalt byte used to XOR register
 		/// index bytes (0 when obfRegIdx is disabled).
 		/// Returns false on failure; FailReason is populated.
@@ -119,6 +128,22 @@ namespace llvm {
 		const VMOpcodeMap* OpMap = nullptr;
 		uint32_t           SaltFull = 0;
 		bool               BlindTargets = false;
+		bool               ConstInStream = false;
+		uint32_t           KeyedSalt = 0;
+		bool               KeyedDispatch = false;
+		// keyedDispatch: pre-splice IP of every opcode byte written by bop(), in
+		// emission order. Consumed by the constInStream prologue-splice step in
+		// run() to re-key body opcode bytes once their final (post-splice) IP is
+		// known; unused (and left empty) otherwise.
+		SmallVector<uint32_t, 64> KeyedOpIPs;
+
+		// keyedDispatch: per-IP opcode-byte XOR key mix. Mirrors VMImpl::opKeyByteIR
+		// op-for-op and is duplicated verbatim in verifyBytecode() (VMPass_Verifier.cpp)
+		// so all three sites decode the same physical byte the same way.
+		static uint8_t opKeyByteCT(uint32_t salt, uint32_t ip) {
+			uint32_t k = (salt * (ip + 1u)) ^ (salt >> 8);
+			return (uint8_t)(k & 0xFFu);
+		}
 
 		// P3-B: compile-time branch-target blinding key mix. Mirrors VMImpl::tgtKeyIR
 		// op-for-op; distinct constants from ksByteCT (Layer-1 keystream) so the two
@@ -311,11 +336,28 @@ namespace llvm {
 		// ── Bytecode emission primitives ──────────────────────────────────────
 
 		uint8_t encOp(VMOp Op) const { return OpMap ? OpMap->encode(Op) : (uint8_t)Op; }
-		void bop(VMOp Op) { b8(encOp(Op)); }
+		void bop(VMOp Op) {
+			uint8_t v = encOp(Op);
+			// keyedDispatch: K(IP) is baked in using ip() as it stands right now.
+			// When constInStream later splices a prologue in front of the
+			// already-emitted body, every body opcode byte's final position moves
+			// by PrologueLen -- the baked-in mask no longer matches. Record this
+			// byte's pre-splice IP so run()'s constInStream block can re-key it
+			// once the real final position is known (see the KeyedOpIPs walk
+			// there). Prologue opcodes are written after the splice point is
+			// decided, so their ip() is already final and never need correcting.
+			if (KeyedDispatch) {
+				uint32_t IP = ip();
+				v ^= opKeyByteCT(KeyedSalt, IP);
+				KeyedOpIPs.push_back(IP);
+			}
+			b8(v);
+		}
 
 		void     b8(uint8_t v) { BC.push_back(v); }
 		void     u16(uint16_t v) { b8(v & 0xFF); b8(v >> 8); }
 		void     u32(uint32_t v) { b8(v); b8(v >> 8); b8(v >> 16); b8(v >> 24); }
+		void     u64(uint64_t v) { u32((uint32_t)v); u32((uint32_t)(v >> 32)); }
 		uint32_t ip() const { return (uint32_t)BC.size(); }
 
 		/// [Step 01.1] Emit an f64 value as 8 bytes, little-endian IEEE-754.

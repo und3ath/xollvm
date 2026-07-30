@@ -123,6 +123,48 @@ EXTRA_ANN: Dict[str, str] = {
     "vm_v7_rolling":        "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,regEncrypt=1,rollingRegKey=1)",
     # Full P2+P3 stack: variants + keyed dispatch + strong keystream + target blinding + hardened.
     "vm_v7_p3_full":        "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,strongBytecode=1,blindTargets=1,encDispatch=1,hardened=1,handlerVariants=3)",
+    # lazyDecrypt (P5): AES layer removed per-instruction at fetch (block-cached
+    # in a per-call context) instead of by the ctor decrypting the whole
+    # runtime buffer up front. Requires useAES + encBytecode.
+    "vm_v7_lazydecrypt":          "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,useAES=1,lazyDecrypt=1)",
+    "vm_v7_lazydecrypt_hardened": "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,useAES=1,lazyDecrypt=1,hardened=1,encDispatch=1,handlerVariants=3)",
+    "vm_v7_lazydecrypt_multi_fn": "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,useAES=1,lazyDecrypt=1)",
+    # constInStream: int/i64/fp constants move from plaintext wrapper preload
+    # stores into the encrypted bytecode stream as an OP_LOADI*/OP_LOADI_F
+    # prologue. Requires encBytecode (default on here).
+    "vm_v7_constinstream":          "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,constInStream=1)",
+    "vm_v7_constinstream_lazy":     "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,useAES=1,constInStream=1,lazyDecrypt=1)",
+    "vm_v7_constinstream_hardened": "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,constInStream=1,hardened=1)",
+    # nestedVM: BINOP/BINOP64/ICMP/ICMP64/FCMP/CAST handlers call a pure
+    # helper that is itself virtualized against a second shared engine
+    # (@__vm_engine.nest), depth-2 interpretation for those opcodes.
+    "vm_v7_nestedvm":          "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,nestedVM=1)",
+    "vm_v7_nestedvm_multi_fn": "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,nestedVM=1)",
+    "vm_v7_nestedvm_hardened": "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,nestedVM=1,hardened=1)",
+    # threadedDispatch: inline the fetch/decode/indirectbr sequence into
+    # every handler's own back-edge instead of routing through one shared
+    # vm.dispatch/vm.fetch pair -- kills the single central-loop signature
+    # (one urem/GEP/indirectbr) a lifter would otherwise fingerprint.
+    "vm_v7_threaded":          "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,threadedDispatch=1)",
+    "vm_v7_threaded_multi_fn": "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,threadedDispatch=1)",
+    "vm_v7_threaded_hardened": "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,threadedDispatch=1,hardened=1)",
+    # Full composition proof: threadedDispatch + lazyDecrypt + constInStream +
+    # nestedVM all together (nestedVM's inner engine inherits threadedDispatch
+    # from the outer Cfg via virtualizeNestedHelpersOnce()'s InnerCfg copy).
+    "vm_v7_threaded_stack":    "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,useAES=1,"
+                               "threadedDispatch=1,lazyDecrypt=1,constInStream=1,nestedVM=1)",
+    # keyedDispatch: each opcode byte is XOR'd with a per-IP compile-time key
+    # at emit time (BytecodeEmitter::bop) and un-XOR'd at fetch time
+    # (emitThreadedTail/buildDispatch); same physical byte decodes to a
+    # different logical opcode depending on where it's read from.
+    "vm_v7_keyeddisp":          "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,keyedDispatch=1)",
+    "vm_v7_keyeddisp_multi_fn": "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,keyedDispatch=1)",
+    "vm_v7_keyeddisp_hardened": "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,keyedDispatch=1,hardened=1)",
+    # Full composition proof: keyedDispatch + threadedDispatch + encDispatch +
+    # lazyDecrypt + constInStream + nestedVM all together.
+    "vm_v7_keyeddisp_stack":    "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,useAES=1,"
+                               "keyedDispatch=1,threadedDispatch=1,encDispatch=1,"
+                               "lazyDecrypt=1,constInStream=1,nestedVM=1)",
 }
 
 

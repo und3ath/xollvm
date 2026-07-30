@@ -942,6 +942,80 @@ bool BytecodeEmitter::run(Function& F, uint8_t S, const DataLayout& D) {
 	// Forward branch targets are recorded as Fixups with a 0x00000000 placeholder.
 	for (BasicBlock& BB : F) emit(&BB);
 
+	// constInStream: move int/i64/fp constant slot seeding out of the plaintext
+	// wrapper preload stores and into the encrypted bytecode stream as a
+	// prologue. ImmLoads/ImmLoads64/ImmLoadsF are only fully populated once the
+	// block-emission loop above has walked every instruction operand (vr()/
+	// vr64()/fr() append to them lazily on first use), so the prologue can only
+	// be built afterwards. It is then spliced in front of the already-emitted
+	// block bytes; every recorded offset (BlockIP entries, Fixup placeholders)
+	// is shifted by the prologue length so branch targets and the fixup patch
+	// loop below still resolve correctly.
+	if (ConstInStream && !Unsupported) {
+		SmallVector<uint8_t, 1024> Body;
+		Body.swap(BC);
+
+		// keyedDispatch: every position recorded in KeyedOpIPs so far belongs to
+		// the body (the prologue hasn't been written yet) and was baked with a
+		// key computed against its pre-splice IP -- see the re-key loop below.
+		size_t BodyOpCount = KeyedOpIPs.size();
+
+		for (auto& KV : ImmLoads) {
+			bop(OP_LOADI);
+			b8(xorSalt(KV.first));
+			u32((uint32_t)KV.second->getZExtValue());
+		}
+		for (auto& KV : ImmLoads64) {
+			bop(OP_LOADI64);
+			b8(xorSalt(KV.first));
+			u64(KV.second->getZExtValue());
+		}
+		for (auto& KV : ImmLoadsF) {
+			bop(OP_LOADI_F);
+			b8(xorSalt(KV.first));
+			double DV = KV.second->getType()->isDoubleTy()
+				? KV.second->getValueAPF().convertToDouble()
+				: (double)KV.second->getValueAPF().convertToFloat();
+			f64(DV);
+		}
+
+		uint32_t PrologueLen = ip();
+		BC.append(Body.begin(), Body.end());
+
+		// keyedDispatch: re-key every body opcode byte now that its final
+		// (post-splice) IP is known -- strip the stale pre-splice mask and apply
+		// the correct one. Prologue opcode bytes (recorded after BodyOpCount)
+		// were already written at their final IP and are left untouched.
+		if (KeyedDispatch) {
+			for (size_t i = 0; i < BodyOpCount; ++i) {
+				uint32_t OldIP = KeyedOpIPs[i];
+				uint32_t NewIP = OldIP + PrologueLen;
+				BC[NewIP] ^= opKeyByteCT(KeyedSalt, OldIP) ^ opKeyByteCT(KeyedSalt, NewIP);
+				KeyedOpIPs[i] = NewIP;
+			}
+		}
+
+		for (auto& KV : BlockIP) KV.second += PrologueLen;
+		for (Fixup& FX : Fixups) FX.Offset += PrologueLen;
+
+		// Nothing branches to IP=0 directly (the prologue falls through into
+		// the now-shifted entry block), but the verifier requires IP=0 itself
+		// to be a recognised block start since that is where the interpreter
+		// begins fetching. Record it under a null key -- BlockIP is only ever
+		// read for its values (verifier) or looked up by real BasicBlock*
+		// fixup targets (patch loop below), never iterated by key, so a
+		// null-keyed marker entry is safe.
+		BlockIP[nullptr] = 0;
+
+		// These three constant kinds are now seeded by the prologue above, not
+		// by the wrapper's plaintext preload stores. Pointer constants
+		// (PtrLoads) are left untouched — they are relocations, not secrets,
+		// and stay in the wrapper.
+		ImmLoads.clear();
+		ImmLoads64.clear();
+		ImmLoadsF.clear();
+	}
+
 	// Patch all forward-branch placeholders now that every BlockIP is known.
 	for (const Fixup& FX : Fixups) {
 		uint32_t V = BlockIP.lookup(FX.Target);

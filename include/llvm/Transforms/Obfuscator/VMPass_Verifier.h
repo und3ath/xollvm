@@ -39,6 +39,7 @@ namespace llvm {
 		std::string& OutErr,
 		uint32_t& OutBadIP,
 		uint32_t              SaltFull = 0,       // P3-B: full 32-bit salt for target un-blind
-		bool                  BlindTargets = false); // P3-B: branch targets are XOR-blinded
+		bool                  BlindTargets = false, // P3-B: branch targets are XOR-blinded
+		bool                  KeyedDispatch = false); // keyedDispatch: opcode bytes are per-IP XOR-keyed
 
 } // namespace llvm
