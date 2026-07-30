@@ -993,7 +993,7 @@ void VMImpl::buildHandlersIntArith() {
 		auto B = mkOpc(OP_LOADI, "loadi");
 		Value* IP = advIP(B, 5);
 		stVR(B, rdVR(B, IP, 0, "vm.li.d"), rdU32(B, IP, 1, "vm.li.i"));
-		B.CreateBr(Dispatch);
+		nextInsn(B);
 	}
 
 	//  OP_LOADI64  [dst64:u8 imm:i64le] -- vreg64[dst] = imm
@@ -1005,7 +1005,7 @@ void VMImpl::buildHandlersIntArith() {
 		Value* Hi = B.CreateZExt(rdU32(B, IP, 5, "vm.li64.hi"), I64Ty, "vm.li64.hiz");
 		Value* Imm = B.CreateOr(Lo, B.CreateShl(Hi, B.getInt64(32), "vm.li64.hs"), "vm.li64.v");
 		stVR64(B, Dst, Imm);
-		B.CreateBr(Dispatch);
+		nextInsn(B);
 	}
 
 	//  OP_MOVR  [dst:u8 src:u8] -- vreg[dst] = vreg[src]
@@ -1013,7 +1013,7 @@ void VMImpl::buildHandlersIntArith() {
 		auto B = mkOpc(OP_MOVR, "movr");
 		Value* IP = advIP(B, 2);
 		stVR(B, rdVR(B, IP, 0, "vm.mr.d"), ldVR(B, rdVR(B, IP, 1, "vm.mr.s")));
-		B.CreateBr(Dispatch);
+		nextInsn(B);
 	}
 
 	//  OP_BINOP  -- [dst:u8 a:u8 b:u8 subop:u8] 
@@ -1037,7 +1037,7 @@ void VMImpl::buildHandlersIntArith() {
 			Value* Sub8 = B.CreateTrunc(Sub, I8Ty, "vm.bo.sub8");
 			Value* Rv = B.CreateCall(HelperFn, { AV, BV, Sub8 }, "vm.bo.nested");
 			stVR(B, Dst, Rv);
-			B.CreateBr(Dispatch);
+			nextInsn(B);
 		} else {
 			BasicBlock* MergeBB = BasicBlock::Create(Ctx, "vm.bo.merge", HFn);
 			BasicBlock* DefBB = BasicBlock::Create(Ctx, "vm.bo.def", HFn);
@@ -1049,7 +1049,7 @@ void VMImpl::buildHandlersIntArith() {
 			IRBuilder<> BM(MergeBB);
 			auto* Phi = BM.CreatePHI(I32Ty, 13, "vm.bo.r");
 			stVR(BM, Dst, Phi);
-			BM.CreateBr(Dispatch);
+			nextInsn(BM);
 
 			{
 				IRBuilder<> BD(DefBB);
@@ -1102,7 +1102,7 @@ void VMImpl::buildHandlersIntArith() {
 			Value* Sub8 = B.CreateTrunc(Sub, I8Ty, "vm.bo64.sub8");
 			Value* Rv = B.CreateCall(HelperFn, { AV, BV, Sub8 }, "vm.bo64.nested");
 			stVR64(B, Dst, Rv);
-			B.CreateBr(Dispatch);
+			nextInsn(B);
 		} else {
 			BasicBlock* MergeBB = BasicBlock::Create(Ctx, "vm.bo64.merge", HFn);
 			BasicBlock* DefBB = BasicBlock::Create(Ctx, "vm.bo64.def", HFn);
@@ -1113,7 +1113,7 @@ void VMImpl::buildHandlersIntArith() {
 			IRBuilder<> BM(MergeBB);
 			auto* Phi = BM.CreatePHI(I64Ty, 13, "vm.bo64.r");
 			stVR64(BM, Dst, Phi);
-			BM.CreateBr(Dispatch);
+			nextInsn(BM);
 
 			{
 				IRBuilder<> BD(DefBB);
@@ -1158,7 +1158,7 @@ void VMImpl::buildHandlersIntArith() {
 			Value* Pred8 = B.CreateTrunc(Pred, I8Ty, "vm.ic.pred8");
 			Value* Rv = B.CreateCall(HelperFn, { AV, BV, Pred8 }, "vm.ic.nested");
 			stVR(B, Dst, Rv);
-			B.CreateBr(Dispatch);
+			nextInsn(B);
 		} else {
 			using P = CmpInst::Predicate;
 			Value* Cs[] = {
@@ -1173,7 +1173,7 @@ void VMImpl::buildHandlersIntArith() {
 			Value* R = B.getInt1(false);
 			for (unsigned i = 0; i < 10; i++)
 				R = B.CreateSelect(B.CreateICmpEQ(Pred, B.getInt32((uint32_t)Ps[i])), Cs[i], R);
-			stVR(B, Dst, B.CreateZExt(R, I32Ty, "vm.ic.r")); B.CreateBr(Dispatch);
+			stVR(B, Dst, B.CreateZExt(R, I32Ty, "vm.ic.r")); nextInsn(B);
 		}
 	}
 
@@ -1197,7 +1197,7 @@ void VMImpl::buildHandlersIntArith() {
 			Value* Pred8 = B.CreateTrunc(Pred, I8Ty, "vm.ic64.pred8");
 			Value* Rv = B.CreateCall(HelperFn, { AV, BV, Pred8 }, "vm.ic64.nested");
 			stVR(B, Dst, Rv);
-			B.CreateBr(Dispatch);
+			nextInsn(B);
 		} else {
 			using P = CmpInst::Predicate;
 			Value* Cs[] = {
@@ -1215,7 +1215,7 @@ void VMImpl::buildHandlersIntArith() {
 				R = B.CreateSelect(B.CreateICmpEQ(Pred, B.getInt32((uint32_t)Ps[i])), Cs[i], R);
 
 			stVR(B, Dst, B.CreateZExt(R, I32Ty, "vm.ic64.r"));
-			B.CreateBr(Dispatch);
+			nextInsn(B);
 		}
 	}
 
@@ -1232,7 +1232,7 @@ void VMImpl::buildHandlersIntArith() {
 			Value* Kind8 = B.CreateTrunc(Kind, I8Ty, "vm.ca.kind8");
 			Value* Rv = B.CreateCall(HelperFn, { SV, Kind8 }, "vm.ca.nested");
 			stVR(B, Dst, Rv);
-			B.CreateBr(Dispatch);
+			nextInsn(B);
 		} else {
 			auto ze = [&](uint32_t M) {return B.CreateAnd(SV, B.getInt32(M), "vm.ze"); };
 			auto se = [&](uint32_t W)->Value* {
@@ -1241,7 +1241,7 @@ void VMImpl::buildHandlersIntArith() {
 			Value* R = SV;
 			for (unsigned i = 0; i < 8; i++)
 				R = B.CreateSelect(B.CreateICmpEQ(Kind, B.getInt32(i)), Cvs[i], R, "vm.ca.r");
-			stVR(B, Dst, R); B.CreateBr(Dispatch);
+			stVR(B, Dst, R); nextInsn(B);
 		}
 	}
 }
@@ -1277,7 +1277,7 @@ void VMImpl::buildHandlersConv() {
 			Value* FP = ldPR(BP, rdPR(BP, IP, 4, "vm.sl.pf"));
 			Value* Bool = BP.CreateICmpNE(ldVR(BP, Cond), BP.getInt32(0), "vm.sl.pb");
 			stPR(BP, DstP, BP.CreateSelect(Bool, TP, FP, "vm.sl.pr"));
-			BP.CreateBr(Dispatch);
+			nextInsn(BP);
 		}
 
 		//  int path 
@@ -1289,7 +1289,7 @@ void VMImpl::buildHandlersConv() {
 			Value* FV = ldVR(BI, rdVR(BI, IP, 4, "vm.sl.if"));
 			Value* Bool = BI.CreateICmpNE(ldVR(BI, Cond), BI.getInt32(0), "vm.sl.ib");
 			stVR(BI, Dst, BI.CreateSelect(Bool, TV, FV, "vm.sl.ir"));
-			BI.CreateBr(Dispatch);
+			nextInsn(BI);
 		}
 
 		//  i64 path 
@@ -1301,7 +1301,7 @@ void VMImpl::buildHandlersConv() {
 			Value* FV = ldVR64(B64, rdVR64(B64, IP, 4, "vm.sl.64f"));
 			Value* Bool = B64.CreateICmpNE(ldVR(B64, Cond), B64.getInt32(0), "vm.sl.64b");
 			stVR64(B64, Dst, B64.CreateSelect(Bool, TV, FV, "vm.sl.64r"));
-			B64.CreateBr(Dispatch);
+			nextInsn(B64);
 		}
 	}
 	//  OP_PTRTOINT -- [dst:u8 srcp:u8] 
@@ -1309,7 +1309,7 @@ void VMImpl::buildHandlersConv() {
 		auto B = mkOpc(OP_PTRTOINT, "ptrtoint");
 		Value* IP = advIP(B, 2);
 		Value* Dst = rdVR(B, IP, 0, "vm.pi.d"), * SP = rdPR(B, IP, 1, "vm.pi.s");
-		stVR(B, Dst, B.CreatePtrToInt(ldPR(B, SP), I32Ty, "vm.pi.v")); B.CreateBr(Dispatch);
+		stVR(B, Dst, B.CreatePtrToInt(ldPR(B, SP), I32Ty, "vm.pi.v")); nextInsn(B);
 	}
 
 
@@ -1358,7 +1358,7 @@ void VMImpl::buildHandlersConv() {
 			R = BE.CreateSelect(BE.CreateICmpEQ(Kind, BE.getInt32((uint32_t)C64_SEXT32)), S32, R, "vm.c64.r");
 
 			stVR64(BE, Dst, R);
-			BE.CreateBr(Dispatch);
+			nextInsn(BE);
 		}
 
 		//  trunc path: VR64(i64) -> VR(i32) 
@@ -1381,7 +1381,7 @@ void VMImpl::buildHandlersConv() {
 			R = BT.CreateSelect(BT.CreateICmpEQ(Kind, BT.getInt32((uint32_t)C64_TRUNC32)), T32, R, "vm.c64.tr");
 
 			stVR(BT, Dst, R);
-			BT.CreateBr(Dispatch);
+			nextInsn(BT);
 		}
 	}
 
@@ -1391,7 +1391,7 @@ void VMImpl::buildHandlersConv() {
 		auto B = mkOpc(OP_PTRTOINT64, "ptrtoint64");
 		Value* IP = advIP(B, 2);
 		Value* Dst = rdVR64(B, IP, 0, "vm.pi64.d"), * SP = rdPR(B, IP, 1, "vm.pi64.s");
-		stVR64(B, Dst, B.CreatePtrToInt(ldPR(B, SP), I64Ty, "vm.pi64.v")); B.CreateBr(Dispatch);
+		stVR64(B, Dst, B.CreatePtrToInt(ldPR(B, SP), I64Ty, "vm.pi64.v")); nextInsn(B);
 	}
 
 
@@ -1400,7 +1400,7 @@ void VMImpl::buildHandlersConv() {
 		auto B = mkOpc(OP_INTTOPTR, "inttoptr");
 		Value* IP = advIP(B, 2);
 		Value* DP = rdPR(B, IP, 0, "vm.pp.d"), * Src = rdVR(B, IP, 1, "vm.pp.s");
-		stPR(B, DP, B.CreateIntToPtr(ldVR(B, Src), PtrTy, "vm.pp.v")); B.CreateBr(Dispatch);
+		stPR(B, DP, B.CreateIntToPtr(ldVR(B, Src), PtrTy, "vm.pp.v")); nextInsn(B);
 	}
 
 }
@@ -1411,7 +1411,7 @@ void VMImpl::buildHandlersMem() {
 		auto B = mkOpc(OP_LOAD32, "load32");
 		Value* IP = advIP(B, 2);
 		Value* Dst = rdVR(B, IP, 0, "vm.ld.d"), * PP = rdPR(B, IP, 1, "vm.ld.p");
-		stVR(B, Dst, B.CreateLoad(I32Ty, ldPR(B, PP), "vm.ld.v")); B.CreateBr(Dispatch);
+		stVR(B, Dst, B.CreateLoad(I32Ty, ldPR(B, PP), "vm.ld.v")); nextInsn(B);
 	}
 
 	//  OP_LOAD64 -- [dst64:u8 ptrreg:u8] 
@@ -1419,7 +1419,7 @@ void VMImpl::buildHandlersMem() {
 		auto B = mkOpc(OP_LOAD64, "load64");
 		Value* IP = advIP(B, 2);
 		Value* Dst = rdVR64(B, IP, 0, "vm.ld64.d"), * PP = rdPR(B, IP, 1, "vm.ld64.p");
-		stVR64(B, Dst, B.CreateLoad(I64Ty, ldPR(B, PP), "vm.ld64.v")); B.CreateBr(Dispatch);
+		stVR64(B, Dst, B.CreateLoad(I64Ty, ldPR(B, PP), "vm.ld64.v")); nextInsn(B);
 	}
 
 	//  OP_STORE32 -- [val:u8 ptrreg:u8] 
@@ -1427,7 +1427,7 @@ void VMImpl::buildHandlersMem() {
 		auto B = mkOpc(OP_STORE32, "store32");
 		Value* IP = advIP(B, 2);
 		Value* VR = rdVR(B, IP, 0, "vm.st.v"), * PP = rdPR(B, IP, 1, "vm.st.p");
-		B.CreateStore(ldVR(B, VR), ldPR(B, PP)); B.CreateBr(Dispatch);
+		B.CreateStore(ldVR(B, VR), ldPR(B, PP)); nextInsn(B);
 	}
 
 	//  OP_STORE64 -- [val64:u8 ptrreg:u8] 
@@ -1435,7 +1435,7 @@ void VMImpl::buildHandlersMem() {
 		auto B = mkOpc(OP_STORE64, "store64");
 		Value* IP = advIP(B, 2);
 		Value* VIdx = rdVR64(B, IP, 0, "vm.st64.v"), * PP = rdPR(B, IP, 1, "vm.st64.p");
-		B.CreateStore(ldVR64(B, VIdx), ldPR(B, PP)); B.CreateBr(Dispatch);
+		B.CreateStore(ldVR64(B, VIdx), ldPR(B, PP)); nextInsn(B);
 	}
 
 	//  OP_GEP -- [dstp:u8 basep:u8 idx:u8 elemsz:u16le] 
@@ -1451,7 +1451,7 @@ void VMImpl::buildHandlersMem() {
 		// Byte offset = (i64)idx_value * elemsz
 		Value* IdxVal = B.CreateSExt(ldVR(B, Idx), I64Ty, "vm.gp.iv");
 		Value* ByteOff = B.CreateMul(IdxVal, ESz, "vm.gp.bo");
-		stPR(B, DP, B.CreateGEP(I8Ty, ldPR(B, BP), ByteOff, "vm.gp.v")); B.CreateBr(Dispatch);
+		stPR(B, DP, B.CreateGEP(I8Ty, ldPR(B, BP), ByteOff, "vm.gp.v")); nextInsn(B);
 	}
 
 	//  OP_GEP64 -- [dstp:u8 basep:u8 idx64:u8 elemsz:u16le] 
@@ -1465,7 +1465,7 @@ void VMImpl::buildHandlersMem() {
 		Value* ESz = B.CreateOr(ELo, B.CreateShl(EHi, B.getInt64(8), "vm.gp64.es"), "vm.gp64.esz");
 		Value* IdxVal = ldVR64(B, Idx);
 		Value* ByteOff = B.CreateMul(IdxVal, ESz, "vm.gp64.bo");
-		stPR(B, DP, B.CreateGEP(I8Ty, ldPR(B, BP), ByteOff, "vm.gp64.v")); B.CreateBr(Dispatch);
+		stPR(B, DP, B.CreateGEP(I8Ty, ldPR(B, BP), ByteOff, "vm.gp64.v")); nextInsn(B);
 	}
 
 
@@ -1478,7 +1478,7 @@ void VMImpl::buildHandlersMem() {
 		Value* PP = rdPR(B, IP, 1, "vm.ld8.p");
 		Value* V8 = B.CreateLoad(I8Ty, ldPR(B, PP), "vm.ld8.v");
 		stVR(B, Dst, B.CreateZExt(V8, I32Ty, "vm.ld8.z"));
-		B.CreateBr(Dispatch);
+		nextInsn(B);
 	}
 	{
 		auto B = mkOpc(OP_STORE8, "store8");
@@ -1487,7 +1487,7 @@ void VMImpl::buildHandlersMem() {
 		Value* PP = rdPR(B, IP, 1, "vm.st8.p");
 		Value* V8 = B.CreateTrunc(ldVR(B, VIdx), I8Ty, "vm.st8.t");
 		B.CreateStore(V8, ldPR(B, PP));
-		B.CreateBr(Dispatch);
+		nextInsn(B);
 	}
 	{
 		auto B = mkOpc(OP_LOAD16, "load16");
@@ -1496,7 +1496,7 @@ void VMImpl::buildHandlersMem() {
 		Value* PP = rdPR(B, IP, 1, "vm.ld16.p");
 		Value* V16 = B.CreateLoad(I16Ty, ldPR(B, PP), "vm.ld16.v");
 		stVR(B, Dst, B.CreateZExt(V16, I32Ty, "vm.ld16.z"));
-		B.CreateBr(Dispatch);
+		nextInsn(B);
 	}
 	{
 		auto B = mkOpc(OP_STORE16, "store16");
@@ -1505,7 +1505,7 @@ void VMImpl::buildHandlersMem() {
 		Value* PP = rdPR(B, IP, 1, "vm.st16.p");
 		Value* V16 = B.CreateTrunc(ldVR(B, VIdx), I16Ty, "vm.st16.t");
 		B.CreateStore(V16, ldPR(B, PP));
-		B.CreateBr(Dispatch);
+		nextInsn(B);
 	}
 
 
@@ -1517,7 +1517,7 @@ void VMImpl::buildHandlersMem() {
 		Value* PP = rdPR(B, IP, 1, "vm.lp.p");
 		Value* V = B.CreateLoad(PtrTy, ldPR(B, PP), "vm.lp.v");
 		stPR(B, Dst, V);
-		B.CreateBr(Dispatch);
+		nextInsn(B);
 	}
 	{
 		auto B = mkOpc(OP_STOREPTR, "storeptr");
@@ -1525,7 +1525,7 @@ void VMImpl::buildHandlersMem() {
 		Value* VIdx = rdPR(B, IP, 0, "vm.sp.v");
 		Value* PP = rdPR(B, IP, 1, "vm.sp.p");
 		B.CreateStore(ldPR(B, VIdx), ldPR(B, PP));
-		B.CreateBr(Dispatch);
+		nextInsn(B);
 	}
 
 
@@ -1539,7 +1539,7 @@ void VMImpl::buildHandlersControl() {
 		Value* JT = rdU32(B, IP, 0, "vm.jm.t");
 		if (BlindTargets) JT = B.CreateXor(JT, tgtKeyIR(B, "vm.jm"), "vm.jm.ub");
 		B.CreateStore(JT, VMIP)->setVolatile(true);
-		B.CreateBr(Dispatch);
+		nextInsn(B);
 	}
 
 	//  OP_JMPC -- [cond:u8 tgt_t:u32 tgt_f:u32] 
@@ -1551,7 +1551,7 @@ void VMImpl::buildHandlersControl() {
 		Value* Sel = B.CreateSelect(Bool, Tt, Tf, "vm.jc.s");
 		if (BlindTargets) Sel = B.CreateXor(Sel, tgtKeyIR(B, "vm.jc"), "vm.jc.ub");
 		B.CreateStore(Sel, VMIP)->setVolatile(true);
-		B.CreateBr(Dispatch);
+		nextInsn(B);
 	}
 
 
@@ -1616,7 +1616,7 @@ void VMImpl::buildHandlersControl() {
 		Value* SR = R;
 		if (BlindTargets) SR = DB.CreateXor(R, tgtKeyIR(DB, "vm.sw"), "vm.sw.ub");
 		DB.CreateStore(SR, VMIP)->setVolatile(true);
-		DB.CreateBr(Dispatch);
+		nextInsn(DB);
 	}
 
 
@@ -1707,7 +1707,7 @@ void VMImpl::buildHandlersFloat() {
 		}
 		Value* FV = B.CreateBitCast(Bits, DoubleTy, "vm.lif.v");
 		stFR(B, Dst, FV);
-		B.CreateBr(Dispatch);
+		nextInsn(B);
 	}
 
 	// OP_MOVR_F -- [dst_fr:u8 src_fr:u8]  freg[dst] = freg[src] 
@@ -1715,7 +1715,7 @@ void VMImpl::buildHandlersFloat() {
 		auto B = mkOpc(OP_MOVR_F, "movr_f");
 		Value* IP = advIP(B, 2);
 		stFR(B, rdFR(B, IP, 0, "vm.mrf.d"), ldFR(B, rdFR(B, IP, 1, "vm.mrf.s")));
-		B.CreateBr(Dispatch);
+		nextInsn(B);
 	}
 
 	// OP_BINOP_F -- [dst_fr:u8 a_fr:u8 b_fr:u8 subop:u8] 
@@ -1740,7 +1740,7 @@ void VMImpl::buildHandlersFloat() {
 			Value* Sub8b = B.CreateTrunc(Sub8, I8Ty, "vm.bof.sub8");
 			Value* Rv = B.CreateCall(HelperFn, { AV, BV, Sub8b }, "vm.bof.nested");
 			stFR(B, Dst, Rv);
-			B.CreateBr(Dispatch);
+			nextInsn(B);
 		} else {
 		Value* Sub = B.CreateAnd(Sub8, B.getInt32(0x7F), "vm.bof.sub"); // op only
 		Value* IsF32 = B.CreateICmpNE(
@@ -1765,7 +1765,7 @@ void VMImpl::buildHandlersFloat() {
 			DoubleTy, "vm.bof.ne");
 		Value* Final = FBM.CreateSelect(IsF32M, Narrow, FPhi, "vm.bof.fin");
 		stFR(FBM, Dst, Final);
-		FBM.CreateBr(Dispatch);
+		nextInsn(FBM);
 
 		{
 			IRBuilder<> BD(FDefBB); Value* R = BD.CreateFAdd(AV, BV, "vm.fadd");
@@ -1805,7 +1805,7 @@ void VMImpl::buildHandlersFloat() {
 			Value* Pred8 = B.CreateTrunc(Pred, I8Ty, "vm.fcp.pred8");
 			Value* Rv = B.CreateCall(HelperFn, { AV, BV, Pred8 }, "vm.fcp.nested");
 			stVR(B, Dst, Rv);
-			B.CreateBr(Dispatch);
+			nextInsn(B);
 		} else {
 			using FP = CmpInst::Predicate;
 
@@ -1819,7 +1819,7 @@ void VMImpl::buildHandlersFloat() {
 			IRBuilder<> BM(MergeBB);
 			auto* Phi = BM.CreatePHI(I32Ty, 15, "vm.fcp.r");
 			stVR(BM, Dst, Phi);
-			BM.CreateBr(Dispatch);
+			nextInsn(BM);
 
 			// Default block handles FCMP_FALSE (pred==0): result is always 0.
 			{
@@ -1869,7 +1869,7 @@ void VMImpl::buildHandlersFloat() {
 			B.CreateFPTrunc(SV, Type::getFloatTy(Ctx), "vm.cff.nt"), DoubleTy, "vm.cff.ne");
 		Value* IsExt = B.CreateICmpEQ(Kind, B.getInt32(FK_FPEXT), "vm.cff.ie");
 		stFR(B, Dst, B.CreateSelect(IsExt, SV, Narrow, "vm.cff.r"));
-		B.CreateBr(Dispatch);
+		nextInsn(B);
 	}
 
 	//  OP_FCAST_FV --  [dst_vr:u8 src_fr:u8 kind:u8]  freg→vreg i32  (fptosi / fptoui) 
@@ -1883,7 +1883,7 @@ void VMImpl::buildHandlersFloat() {
 		Value* UI = B.CreateFPToUI(SV, I32Ty, "vm.cfv.ui");
 		Value* IsS = B.CreateICmpEQ(Kind, B.getInt32(FK_FPTOSI), "vm.cfv.is");
 		stVR(B, Dst, B.CreateSelect(IsS, SI, UI, "vm.cfv.r"));
-		B.CreateBr(Dispatch);
+		nextInsn(B);
 	}
 
 	// OP_FCAST_FV64 -- [dst_vr64:u8 src_fr:u8 kind:u8]  freg→vreg64 i64 
@@ -1897,7 +1897,7 @@ void VMImpl::buildHandlersFloat() {
 		Value* UI = B.CreateFPToUI(SV, I64Ty, "vm.cfv64.ui");
 		Value* IsS = B.CreateICmpEQ(Kind, B.getInt32(FK_FPTOSI64), "vm.cfv64.is");
 		stVR64(B, Dst, B.CreateSelect(IsS, SI, UI, "vm.cfv64.r"));
-		B.CreateBr(Dispatch);
+		nextInsn(B);
 	}
 
 	//  OP_FCAST_VF -- [dst_fr:u8 src_vr:u8 kind:u8]  vreg i32→freg  (sitofp / uitofp)
@@ -1919,7 +1919,7 @@ void VMImpl::buildHandlersFloat() {
 			B.CreateFPTrunc(Result, Type::getFloatTy(Ctx), "vm.cvf.nt"),
 			DoubleTy, "vm.cvf.ne");
 		stFR(B, Dst, B.CreateSelect(IsF32, Narrow, Result, "vm.cvf.fin"));
-		B.CreateBr(Dispatch);
+		nextInsn(B);
 	}
 
 	//  OP_FCAST_V64F -- [dst_fr:u8 src_vr64:u8 kind:u8]  vreg64 i64→freg
@@ -1941,7 +1941,7 @@ void VMImpl::buildHandlersFloat() {
 			B.CreateFPTrunc(Result, Type::getFloatTy(Ctx), "vm.cv64f.nt"),
 			DoubleTy, "vm.cv64f.ne");
 		stFR(B, Dst, B.CreateSelect(IsF32, Narrow, Result, "vm.cv64f.fin"));
-		B.CreateBr(Dispatch);
+		nextInsn(B);
 	}
 
 
@@ -1955,7 +1955,7 @@ void VMImpl::buildHandlersFloat() {
 		Value* Dst = rdFR(B, IP, 0, "vm.ldf.d");
 		Value* PP = rdPR(B, IP, 1, "vm.ldf.p");
 		stFR(B, Dst, B.CreateLoad(DoubleTy, ldPR(B, PP), "vm.ldf.v"));
-		B.CreateBr(Dispatch);
+		nextInsn(B);
 	}
 
 	//  OP_STORE_F  [src_fr:u8 ptrreg:u8]    *ptr = freg[src] (f64) 
@@ -1965,7 +1965,7 @@ void VMImpl::buildHandlersFloat() {
 		Value* Src = rdFR(B, IP, 0, "vm.stf.s");
 		Value* PP = rdPR(B, IP, 1, "vm.stf.p");
 		B.CreateStore(ldFR(B, Src), ldPR(B, PP));
-		B.CreateBr(Dispatch);
+		nextInsn(B);
 	}
 
 
@@ -1979,7 +1979,7 @@ void VMImpl::buildHandlersFloat() {
 		Value* PP = rdPR(B, IP, 1, "vm.ldf32.p");
 		Value* F32V = B.CreateLoad(Type::getFloatTy(Ctx), ldPR(B, PP), "vm.ldf32.v");
 		stFR(B, Dst, B.CreateFPExt(F32V, DoubleTy, "vm.ldf32.ext"));
-		B.CreateBr(Dispatch);
+		nextInsn(B);
 	}
 
 	// OP_STORE_F32  [val_fr:u8 ptrreg:u8]  →  *ptr (float*) = fptrunc(freg[val]) 
@@ -1992,7 +1992,7 @@ void VMImpl::buildHandlersFloat() {
 		Value* PP = rdPR(B, IP, 1, "vm.stf32.p");
 		Value* F32V = B.CreateFPTrunc(ldFR(B, Src), Type::getFloatTy(Ctx), "vm.stf32.tr");
 		B.CreateStore(F32V, ldPR(B, PP));
-		B.CreateBr(Dispatch);
+		nextInsn(B);
 	}
 
 	//  OP_RET_F  [src_fr:u8]    return freg[src] 
@@ -2030,7 +2030,7 @@ void VMImpl::buildHandlersFloat() {
 		Value* FV = ldFR(B, rdFR(B, IP, 3, "vm.slf.f"));
 		Value* Bool = B.CreateICmpNE(ldVR(B, Cond), B.getInt32(0), "vm.slf.b");
 		stFR(B, Dst, B.CreateSelect(Bool, TV, FV, "vm.slf.r"));
-		B.CreateBr(Dispatch);
+		nextInsn(B);
 	}
 
 
@@ -2042,7 +2042,7 @@ void VMImpl::buildHandlersFloat() {
 		Value* Dst = rdFR(B, IP, 0, "vm.neg.d");
 		Value* SV = ldFR(B, rdFR(B, IP, 1, "vm.neg.s"));
 		stFR(B, Dst, B.CreateFNeg(SV, "vm.neg.r"));
-		B.CreateBr(Dispatch);
+		nextInsn(B);
 	}
 
 
@@ -2220,7 +2220,7 @@ void VMImpl::buildCall2(VMOp Opc, const Twine& Name, llvm::VMEngine::RetKind2 RK
 		default:      stVR(MB, DstSlot, RetPHI);  break;
 		}
 	}
-	MB.CreateBr(Dispatch);
+	nextInsn(MB);
 }
 
 
@@ -2322,6 +2322,20 @@ void VMImpl::buildHandlerTable() {
 // vm.dispatch: bounds-check IP  vm.fetch: fetch opcode  decrypt  indirectbr
 
 void VMImpl::buildDispatch() {
+	if (ThreadedDispatch) {
+		// No central vm.dispatch/vm.fetch pair: ExitBB and every OpcBB
+		// placeholder were already created before buildOpcodeHandlers() ran
+		// (see populateVMEngine), so every handler's own inlined tail
+		// (nextInsn -> emitThreadedTail) could reference the full successor
+		// set as it was built. All that remains is wiring vm.entry to fetch
+		// the first instruction, same as any other handler's back-edge.
+		if (Entry && !Entry->getTerminator()) {
+			IRBuilder<> EB(Entry);
+			nextInsn(EB);
+		}
+		return;
+	}
+
 	// ExitBB is new; Dispatch is the shell already created in run()
 	ExitBB = BasicBlock::Create(Ctx, "vm.exit", HFn);
 	auto* FetchBB = BasicBlock::Create(Ctx, "vm.fetch", HFn);
@@ -2386,8 +2400,78 @@ void VMImpl::buildDispatch() {
 	}
 
 	// Terminate vm.entry with branch to vm.dispatch
-	if (Entry && !Entry->getTerminator())
-		IRBuilder<>(Entry).CreateBr(Dispatch);
+	if (Entry && !Entry->getTerminator()) {
+		IRBuilder<> EB(Entry);
+		nextInsn(EB);
+	}
+}
+
+// emitThreadedTail / nextInsn
+// threadedDispatch: inline the fetch/decode/indirectbr sequence into every
+// handler's own back-edge instead of routing through one shared vm.dispatch/
+// vm.fetch pair. Mirrors buildDispatch()'s central logic exactly, just
+// emitted per call-site: a bounds check in the caller's current block,
+// followed by a private continuation block holding the fetch/decode/
+// indirectbr. Requires ExitBB and every OpcBB[i][v] to already exist (see
+// populateVMEngine's pre-creation pass) since the first handler built may
+// dispatch to the last one.
+
+void VMImpl::emitThreadedTail(IRBuilder<>& B) {
+	auto* IP = B.CreateLoad(I32Ty, VMIP, "vm.ip.d"); IP->setVolatile(true);
+	Value* BCLen = EffBCLen ? EffBCLen
+		: (Value*)B.getInt32((uint32_t)E.BC.size());
+	Value* OOB = B.CreateICmpUGE(IP, BCLen, "vm.oob");
+
+	BasicBlock* ContBB = BasicBlock::Create(Ctx, "vm.next", HFn);
+	B.CreateCondBr(OOB, ExitBB, ContBB);
+
+	IRBuilder<> FB(ContBB);
+	auto* IP2 = FB.CreateLoad(I32Ty, VMIP, "vm.ip.f"); IP2->setVolatile(true);
+	Value* Raw = loadBC(FB, IP2, 0, "vm.raw");
+
+	// loadBC() already decrypts when EncBytecode=1
+	Value* OpB = Raw;
+
+	// Advance IP past opcode byte
+	FB.CreateStore(FB.CreateAdd(IP2, FB.getInt32(1), "vm.ip1"), VMIP)->setVolatile(true);
+
+	// Clamp opcode index (prevents out-of-bounds GEP on corrupted bytecode)
+	Value* OIdx = FB.CreateZExt(OpB, I32Ty, "vm.oidx");
+	Value* P = FB.CreateURem(OIdx, FB.getInt32(OP_COUNT), "vm.safe");
+
+	// P2: route through the encrypted dispatch map (dmap) when encDispatch
+	// is on -- mirrors buildDispatch()'s vm.fetch logic exactly.
+	Value* FinalSlot;
+	if (EncDispatch) {
+		Value* DmIdx = FB.CreateAdd(P, FB.getInt32(OP_COUNT + 1), "vm.dm.i");
+		Value* DmPtr = FB.CreateGEP(PtrTy, EffHandlers, DmIdx, "vm.dm.p");
+		Value* DmRaw = FB.CreateLoad(PtrTy, DmPtr, "vm.dm.raw");
+		Value* DmInt = FB.CreateTrunc(
+							FB.CreatePtrToInt(DmRaw, I64Ty, "vm.dm.i64"),
+							I32Ty, "vm.dm.i32");
+		auto*  SaltL = FB.CreateLoad(I32Ty, EffSalt, "vm.dm.salt");
+		SaltL->setVolatile(true);
+		Value* Dec   = FB.CreateXor(DmInt, SaltL, "vm.dm.dec");
+		FinalSlot    = FB.CreateURem(Dec, FB.getInt32(OP_COUNT), "vm.dm.slot");
+	} else {
+		FinalSlot = P;
+	}
+
+	// GEP into handler table[final_slot]
+	Value* Slot = FB.CreateGEP(PtrTy, EffHandlers, FinalSlot, "vm.ohsl");
+	Value* Hndl = FB.CreateLoad(PtrTy, Slot, "vm.hndl");
+
+	// indirectbr with all opcode blocks (all variants) declared as successors
+	IndirectBrInst* IBR = FB.CreateIndirectBr(Hndl, OP_COUNT * NumVariants + 1);
+	for (unsigned i = 0; i < OP_COUNT; ++i)
+		for (unsigned v = 0; v < NumVariants; ++v)
+			IBR->addDestination(OpcBB[i][v]);
+	IBR->addDestination(ExitBB);
+}
+
+void VMImpl::nextInsn(IRBuilder<>& B) {
+	if (ThreadedDispatch) emitThreadedTail(B);
+	else B.CreateBr(Dispatch);
 }
 
 
@@ -2847,15 +2931,36 @@ void VMImpl::populateVMEngine() {
 	SS->EngineSalt = SaltAlloca;
 	SS->Entry = Entry;
 
-	// Create Dispatch shell
-	Dispatch = BasicBlock::Create(Ctx, "vm.dispatch", EF);
-	SS->Dispatch = Dispatch;
+	// Create Dispatch shell (central-dispatch builds only; threadedDispatch
+	// has no shared vm.dispatch/vm.fetch pair -- see buildDispatch()).
+	if (!ThreadedDispatch) {
+		Dispatch = BasicBlock::Create(Ctx, "vm.dispatch", EF);
+		SS->Dispatch = Dispatch;
+	}
 
 	// Build all 51 opcode handlers
 	NumVariants = Cfg.handlerVariants;
 	if (NumVariants < 1) NumVariants = 1;
 	if (NumVariants > kMaxHandlerVariants) NumVariants = kMaxHandlerVariants;
 	EncDispatch = Cfg.encDispatch;
+
+	// threadedDispatch: every handler inlines its own fetch/decode/indirectbr
+	// tail (see emitThreadedTail()), which needs the FULL successor set --
+	// every opcode/variant block plus ExitBB -- before any handler body is
+	// built (the first handler emitted may branch to the last one). Pre-create
+	// empty placeholder blocks for all of them up front; mkOpc() fills each in
+	// (renaming, not reallocating) as buildOpcodeHandlers() reaches it.
+	if (ThreadedDispatch) {
+		ExitBB = BasicBlock::Create(Ctx, "vm.exit", EF);
+		new UnreachableInst(Ctx, ExitBB);
+		for (unsigned i = 0; i < OP_COUNT; ++i)
+			for (unsigned v = 0; v < NumVariants; ++v) {
+				BasicBlock* BB = BasicBlock::Create(Ctx, "vm.opc.pending", EF);
+				OpcBB[i][v] = BB;
+				VariantOf[BB] = (uint8_t)v;
+			}
+	}
+
 	buildOpcodeHandlers();
 
 	// Make the K structurally-identical variants distinct (per-variant MBA).
@@ -3005,54 +3110,61 @@ void VMImpl::hardenVMEngine(Function* EF, VMEngine::SharedState* SS) {
 	// Opaque predicates on dispatch + dead code
 	// ════════════════════════════════════════════════════════════════════
 
-	// Dead code blocks
-	// Create 3–5 dead code blocks with junk instructions that branch
-	// back to vm.dispatch (makes CFG look connected).
-	unsigned NDeadBlocks = 3 + HardenRng.range(3); // 3..5
-	SmallVector<BasicBlock*, 8> DeadBBs;
-	for (unsigned i = 0; i < NDeadBlocks; ++i) {
-		auto* DBB = BasicBlock::Create(Ctx, "vm.dead." + Twine(i), EF);
-		IRBuilder<> DB(DBB);
+	// Dead code blocks + opaque predicate on the dispatch back-edge both
+	// require a single shared SS->Dispatch block to branch to / split.
+	// threadedDispatch has no such block (every handler inlines its own
+	// tail) -- both sections are no-ops there. The handler-level MBA above
+	// and the hard-true handler guards below are unaffected and stay active.
+	if (!ThreadedDispatch && SS->Dispatch) {
+		// Dead code blocks
+		// Create 3–5 dead code blocks with junk instructions that branch
+		// back to vm.dispatch (makes CFG look connected).
+		unsigned NDeadBlocks = 3 + HardenRng.range(3); // 3..5
+		SmallVector<BasicBlock*, 8> DeadBBs;
+		for (unsigned i = 0; i < NDeadBlocks; ++i) {
+			auto* DBB = BasicBlock::Create(Ctx, "vm.dead." + Twine(i), EF);
+			IRBuilder<> DB(DBB);
 
-		// Junk arithmetic using opaque constants.
-		Value* J1 = Opaque.opaqueI32Const(DB, HardenRng.u32());
-		Value* J2 = Opaque.opaqueI32Const(DB, HardenRng.u32());
-		Value* R1 = DB.CreateXor(J1, J2, "vm.dead.xor");
-		Value* R2 = DB.CreateMul(R1, J1, "vm.dead.mul");
-		Value* R3 = DB.CreateAdd(R2, J2, "vm.dead.add");
-		(void)R3; // result unused — this is dead code
+			// Junk arithmetic using opaque constants.
+			Value* J1 = Opaque.opaqueI32Const(DB, HardenRng.u32());
+			Value* J2 = Opaque.opaqueI32Const(DB, HardenRng.u32());
+			Value* R1 = DB.CreateXor(J1, J2, "vm.dead.xor");
+			Value* R2 = DB.CreateMul(R1, J1, "vm.dead.mul");
+			Value* R3 = DB.CreateAdd(R2, J2, "vm.dead.add");
+			(void)R3; // result unused — this is dead code
 
-		// Branch back to dispatch (makes block look connected in CFG).
-		DB.CreateBr(SS->Dispatch);
-		DeadBBs.push_back(DBB);
-		++DeadBlocks;
-	}
-
-	// Opaque predicate on vm.dispatch back-edge 
-	// Split vm.dispatch: insert a pre-dispatch block with hard-false
-	// branch to dead code.
-	if (SS->Dispatch && !DeadBBs.empty()) {
-		BasicBlock* DispBB = SS->Dispatch;
-		// Create a new pre-dispatch block.
-		BasicBlock* PreDisp = BasicBlock::Create(Ctx, "vm.predisp", EF, DispBB);
-
-		// Redirect all predecessors of vm.dispatch to vm.predisp.
-		SmallVector<BasicBlock*, 32> Preds(predecessors(DispBB));
-		for (BasicBlock* Pred : Preds) {
-			if (Pred == PreDisp) continue; // skip self
-			Instruction* Term = Pred->getTerminator();
-			if (!Term) continue;
-			for (unsigned i = 0, e = Term->getNumSuccessors(); i < e; ++i) {
-				if (Term->getSuccessor(i) == DispBB)
-					Term->setSuccessor(i, PreDisp);
-			}
+			// Branch back to dispatch (makes block look connected in CFG).
+			DB.CreateBr(SS->Dispatch);
+			DeadBBs.push_back(DBB);
+			++DeadBlocks;
 		}
 
-		// PreDisp: hard-false → dead code, else → real dispatch.
-		IRBuilder<> PB(PreDisp);
-		Value* Fake = Opaque.hardFalse(PB);
-		unsigned DeadIdx = HardenRng.range((uint32_t)DeadBBs.size());
-		PB.CreateCondBr(Fake, DeadBBs[DeadIdx], DispBB);
+		// Opaque predicate on vm.dispatch back-edge
+		// Split vm.dispatch: insert a pre-dispatch block with hard-false
+		// branch to dead code.
+		if (!DeadBBs.empty()) {
+			BasicBlock* DispBB = SS->Dispatch;
+			// Create a new pre-dispatch block.
+			BasicBlock* PreDisp = BasicBlock::Create(Ctx, "vm.predisp", EF, DispBB);
+
+			// Redirect all predecessors of vm.dispatch to vm.predisp.
+			SmallVector<BasicBlock*, 32> Preds(predecessors(DispBB));
+			for (BasicBlock* Pred : Preds) {
+				if (Pred == PreDisp) continue; // skip self
+				Instruction* Term = Pred->getTerminator();
+				if (!Term) continue;
+				for (unsigned i = 0, e = Term->getNumSuccessors(); i < e; ++i) {
+					if (Term->getSuccessor(i) == DispBB)
+						Term->setSuccessor(i, PreDisp);
+				}
+			}
+
+			// PreDisp: hard-false → dead code, else → real dispatch.
+			IRBuilder<> PB(PreDisp);
+			Value* Fake = Opaque.hardFalse(PB);
+			unsigned DeadIdx = HardenRng.range((uint32_t)DeadBBs.size());
+			PB.CreateCondBr(Fake, DeadBBs[DeadIdx], DispBB);
+		}
 	}
 
 	// Hard-true guards on ~30% of handler entries
@@ -3071,14 +3183,15 @@ void VMImpl::hardenVMEngine(Function* EF, VMEngine::SharedState* SS) {
 		BasicBlock* GuardBB = BasicBlock::Create(Ctx,
 			HBB->getName().str() + ".guard", EF, HBB);
 
-		// Create bogus block (junk + branch to dispatch).
+		// Create bogus block (junk + back to dispatch / next-instruction
+		// tail -- nextInsn() picks whichever this build uses).
 		BasicBlock* BogusBB = BasicBlock::Create(Ctx,
 			HBB->getName().str() + ".bogus", EF);
 		{
 			IRBuilder<> BB(BogusBB);
 			Value* J = Opaque.opaqueI32Const(BB, HardenRng.u32());
 			(void)BB.CreateXor(J, J, "vm.bogus.j");
-			BB.CreateBr(SS->Dispatch);
+			nextInsn(BB);
 		}
 
 		// Redirect predecessors of handler to guard block.
@@ -4114,6 +4227,11 @@ void VMImpl::buildCalleeXorCtor() {
 
 void VMImpl::buildAntiDebugGate(VMEngine::SharedState* SS) {
 	if (!Cfg.hardened || !Cfg.antiDebug) return;
+	// threadedDispatch has no central vm.dispatch/vm.fetch pair to insert
+	// this gate between (SS->Dispatch is null there too, so the next check
+	// would already no-op this -- explicit for clarity). The handler-level
+	// spot-check timing traps in hardenVMEngine() still fire independently.
+	if (ThreadedDispatch) return;
 	if (!SS || !SS->EngineFn || !SS->Dispatch || !SS->EngineSalt) return;
 
 	Function* EF = SS->EngineFn;

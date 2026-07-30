@@ -141,6 +141,18 @@ EXTRA_ANN: Dict[str, str] = {
     "vm_v7_nestedvm":          "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,nestedVM=1)",
     "vm_v7_nestedvm_multi_fn": "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,nestedVM=1)",
     "vm_v7_nestedvm_hardened": "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,nestedVM=1,hardened=1)",
+    # threadedDispatch: inline the fetch/decode/indirectbr sequence into
+    # every handler's own back-edge instead of routing through one shared
+    # vm.dispatch/vm.fetch pair -- kills the single central-loop signature
+    # (one urem/GEP/indirectbr) a lifter would otherwise fingerprint.
+    "vm_v7_threaded":          "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,threadedDispatch=1)",
+    "vm_v7_threaded_multi_fn": "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,threadedDispatch=1)",
+    "vm_v7_threaded_hardened": "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,threadedDispatch=1,hardened=1)",
+    # Full composition proof: threadedDispatch + lazyDecrypt + constInStream +
+    # nestedVM all together (nestedVM's inner engine inherits threadedDispatch
+    # from the outer Cfg via virtualizeNestedHelpersOnce()'s InnerCfg copy).
+    "vm_v7_threaded_stack":    "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,useAES=1,"
+                               "threadedDispatch=1,lazyDecrypt=1,constInStream=1,nestedVM=1)",
 }
 
 

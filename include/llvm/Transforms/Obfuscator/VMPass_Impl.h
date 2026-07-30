@@ -287,6 +287,7 @@ namespace llvm {
 		const bool     NestedVM;         // eligible opcode handlers call a second VM-interpreted layer instead of computing inline
 		const unsigned NestedVMOpcodes;  // 0 = all eligible opcodes nest; N>0 = first N in the fixed order (see opcodeNests)
 		const bool     NestedVMHardened; // reserved: harden the inner VM layer
+		const bool     ThreadedDispatch; // inline fetch/decode/indirectbr into every handler's back-edge; no central vm.dispatch/vm.fetch
 		// Which shared engine this build targets: 0 = plain ("__vm_engine"),
 		// 1 = nesting ("__vm_engine.nest"). Derived from NestedVM, not an
 		// independent knob -- a nestedVM=true build always wants the engine
@@ -436,6 +437,7 @@ namespace llvm {
 			NestedVM(Cfg.nestedVM),
 			NestedVMOpcodes(Cfg.nestedVMOpcodes),
 			NestedVMHardened(Cfg.nestedVMHardened),
+			ThreadedDispatch(Cfg.threadedDispatch),
 			EngineId(NestedVM ? 1u : 0u),
 			SaltConst(R.u32()),
 			// IMPORTANT: indices are only XOR-salted when obfRegIdx=1.
@@ -719,8 +721,17 @@ namespace llvm {
 			St->setVolatile(true); return Cur;
 		}
 
-		// Build one opcode handler block and return an IRBuilder positioned in it
+		// Build one opcode handler block and return an IRBuilder positioned in it.
+		// threadedDispatch pre-creates every OpcBB[Opc][variant] placeholder
+		// before any handler body is built (each handler's inlined dispatch
+		// tail needs the full successor set up front) -- reuse and rename that
+		// block instead of allocating a fresh one. Off path unchanged.
 		IRBuilder<> mkOpc(VMOp Opc, const Twine& Name) {
+			if (ThreadedDispatch && OpcBB[Opc][CurVariant]) {
+				BasicBlock* BB = OpcBB[Opc][CurVariant];
+				BB->setName("vm.opc." + Name + ".v" + Twine(CurVariant));
+				return IRBuilder<>(BB);
+			}
 			BasicBlock* BB = BasicBlock::Create(Ctx,
 				"vm.opc." + Name + ".v" + Twine(CurVariant), HFn);
 			OpcBB[Opc][CurVariant] = BB; return IRBuilder<>(BB);
@@ -774,6 +785,17 @@ namespace llvm {
 
 		void buildHandlerTable();   // must come AFTER buildOpcodeHandlers
 		void buildDispatch();       // must come AFTER buildHandlerTable
+
+		// threadedDispatch: emits the fetch/decode/indirectbr sequence inline
+		// at B's current insertion point (bounds check -> ExitBB; otherwise
+		// load+advance IP, decode opcode, indirectbr to the target handler).
+		// Terminates B's current block; callers must not emit after calling
+		// this. Mirrors buildDispatch()'s vm.fetch logic exactly.
+		void emitThreadedTail(IRBuilder<>& B);
+
+		// Handler back-edge dispatch: central Dispatch branch when
+		// !ThreadedDispatch, inlined threaded tail otherwise.
+		void nextInsn(IRBuilder<>& B);
 		void buildEncryptCtor();    // optional encryption constructor
 		void buildEncryptCtorAES(); // Step 03: AES-CTR constructor
 		void buildEncryptCtorLCG(); // Legacy LCG constructor (useAES=0)

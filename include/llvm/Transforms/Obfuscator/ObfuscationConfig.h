@@ -303,6 +303,13 @@ namespace llvm {
 		unsigned nestedVMOpcodes = 0;
 		bool     nestedVMHardened = false; // reserved: harden the inner VM layer (unused)
 
+		// threadedDispatch: inline the fetch/decode/indirectbr sequence into
+		// every handler's back-edge instead of routing through one shared
+		// vm.dispatch/vm.fetch pair. Removes the single central dispatch loop
+		// a lifter would otherwise fingerprint (one urem, one GEP, one
+		// indirectbr). Off = byte-identical to the central-dispatch build.
+		bool     threadedDispatch = false;
+
 		static VMPassConfig fromPassConfig(const PassConfig& PC);
 		bool validate() const;
 	};

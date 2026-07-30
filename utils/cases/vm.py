@@ -77,6 +77,16 @@ VM_CONSTINSTREAM_GATES = ["vm_constinstream_no_plaintext_magic"]
 # the plain @__vm_engine). Off: neither .nest nor __vm_h_* present.
 VM_NESTEDVM_GATES = ["vm_nestedvm_dual_engine", "vm_nestedvm_helper_virtualized"]
 
+# threadedDispatch: no single central vm.dispatch/vm.fetch pair, so the
+# structural gates that assert one (vm_dispatch_present, vm_engine_dispatch)
+# don't apply -- everything else in VM_CORE_GATES/VM_ENGINE_GATES still holds
+# (each handler still ends in its own indirectbr, opcode blocks are named the
+# same way, the wrapper is still thin, etc).
+VM_THREADED_CORE_GATES = [g for g in VM_CORE_GATES if g != "vm_dispatch_present"]
+VM_THREADED_ENGINE_GATES = [g for g in VM_ENGINE_GATES if g != "vm_engine_dispatch"]
+VM_THREADED_SHARED_GATES = VM_THREADED_CORE_GATES + VM_THREADED_ENGINE_GATES
+VM_THREADED_GATES = ["vm_threaded_no_central_dispatch"]
+
 _DBG = ["--obf-debug", "--obf-verbose"]
 
 
@@ -85,7 +95,7 @@ def register(reg: Registry, **_opts) -> None:
 
     reg.add(name="rt_vm_v7_basic", passes=["vm"],
             ann_override=vm_v7,
-            gates=VM_CORE_GATES + ["vm_enc_ctor"],
+            gates=VM_CORE_GATES + ["vm_enc_ctor", "vm_no_threaded_dispatch"],
             extra_opts=_DBG, category="vm")
     reg.add(name="rt_vm_v7_bare", passes=["vm"],
             ann_override=ann_extra("vm_v7_bare"),
@@ -542,3 +552,71 @@ def register(reg: Registry, **_opts) -> None:
             ann_override=vm_v7_nvm,
             extra_opts=_DBG, gates=["seed_determinism"], category="vm",
             src_override=render_vm_v7_multi_function_program(vm_v7_nvm))
+
+    # ── threadedDispatch (every handler inlines its own fetch/decode/
+    # indirectbr tail instead of routing through one shared vm.dispatch/
+    # vm.fetch pair) ──
+    # Correctness gate: differential output proves the per-handler inlined
+    # tail fetches/decodes/dispatches the exact same bytecode stream as the
+    # central-dispatch build. Feature-active gate (VM_THREADED_GATES) proves
+    # the central dispatch loop signature is actually gone, not silently
+    # falling back to it.
+    vm_v7_thr = ann_extra("vm_v7_threaded")
+    vm_v7_thr_multi = ann_extra("vm_v7_threaded_multi_fn")
+    vm_v7_thr_hard = ann_extra("vm_v7_threaded_hardened")
+    vm_v7_thr_stack = ann_extra("vm_v7_threaded_stack")
+
+    reg.add(name="rt_vm_v7_threaded_multi_fn", passes=["vm"],
+            ann_override=vm_v7_thr_multi,
+            gates=VM_THREADED_SHARED_GATES + VM_THREADED_GATES + [
+                "vm_enc_ctor", "vm_callees_global", "vm_multi_fn_shared",
+            ],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_multi_fn_aes_program(vm_v7_thr_multi))
+    reg.add(name="rt_vm_v7_threaded_i64", passes=["vm"],
+            ann_override=vm_v7_thr,
+            gates=VM_THREADED_CORE_GATES + VM_THREADED_GATES + ["vm_enc_ctor"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_i64_ops_program(vm_v7_thr))
+    reg.add(name="rt_vm_v7_threaded_float", passes=["vm"],
+            ann_override=vm_v7_thr,
+            gates=VM_THREADED_CORE_GATES + VM_THREADED_GATES + [
+                "vm_fregs_alloca", "vm_enc_ctor",
+            ],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_float_basic_program(vm_v7_thr))
+    reg.add(name="rt_vm_v7_threaded_switch", passes=["vm"],
+            ann_override=vm_v7_thr,
+            gates=VM_THREADED_SHARED_GATES + VM_THREADED_GATES + [
+                "vm_enc_ctor", "vm_multi_fn_shared",
+            ],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_switch_dispatch_program(vm_v7_thr))
+    # hardened + threadedDispatch: the dead-block/pre-dispatch-split hardening
+    # (vm_hardened_dead_blocks/vm_hardened_dispatch_guard) is a structural
+    # no-op under threadedDispatch (no SS->Dispatch to split -- see
+    # hardenVMEngine's `if (!ThreadedDispatch && SS->Dispatch)` gate), so
+    # those two gates are intentionally excluded here. MBA and handler-entry
+    # guards stay active and are still checked.
+    reg.add(name="rt_vm_v7_threaded_hardened", passes=["vm"],
+            ann_override=vm_v7_thr_hard,
+            gates=VM_THREADED_CORE_GATES + VM_THREADED_GATES + [
+                "vm_enc_ctor", "vm_hardened_mba", "vm_hardened_handler_guards",
+            ],
+            extra_opts=_DBG, category="vm")
+    # Full-stack composition: threadedDispatch + lazyDecrypt + constInStream +
+    # nestedVM together. Proves nextInsn()/emitThreadedTail() composes with
+    # the lazy-AES fetch path, the encrypted-stream constant prologue, and
+    # the inner nested-VM engine (whose own InnerCfg copies threadedDispatch
+    # from the outer Cfg, so both engines dispatch the same way).
+    reg.add(name="rt_vm_v7_threaded_stack", passes=["vm"],
+            ann_override=vm_v7_thr_stack,
+            gates=VM_THREADED_SHARED_GATES + VM_THREADED_GATES
+                + VM_AES_GATES + VM_LAZYDECRYPT_GATES + VM_CONSTINSTREAM_GATES
+                + VM_NESTEDVM_GATES + ["vm_enc_ctor", "vm_multi_fn_shared"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_switch_dispatch_program(vm_v7_thr_stack))
+    reg.add(name="rt_vm_v7_threaded_determinism", passes=["vm"],
+            ann_override=vm_v7_thr,
+            extra_opts=_DBG, gates=["seed_determinism"], category="vm",
+            src_override=render_vm_v7_multi_function_program(vm_v7_thr))

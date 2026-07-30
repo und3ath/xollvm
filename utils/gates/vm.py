@@ -6,6 +6,7 @@ import re
 from typing import Optional
 
 from . import register
+from ._ir import extract_fn_body
 
 
 @register("vm_dispatch_present")
@@ -236,3 +237,37 @@ def vm_nestedvm_helper_virtualized(ir: str) -> Optional[str]:
         if re.search(r"@__vm_engine(?!\.nest)\b", line):
             return None
     return "nested helper handler table(s) do not reference the plain @__vm_engine"
+
+
+@register("vm_threaded_no_central_dispatch")
+def vm_threaded_no_central_dispatch(ir: str) -> Optional[str]:
+    # threadedDispatch: every handler inlines its own fetch/decode/indirectbr
+    # tail (see emitThreadedTail() in VMPass_Impl.cpp) instead of routing
+    # through one shared vm.dispatch/vm.fetch pair. Two independent signals:
+    # no vm.fetch block anywhere, and __vm_engine ends up with far more than
+    # the single indirectbr a central-dispatch build has (one per handler).
+    if re.search(r"\bvm\.fetch\b", ir):
+        return "vm.fetch block found — central dispatch was not threaded away"
+    engine = extract_fn_body(ir, "__vm_engine")
+    if engine is None:
+        return "__vm_engine function body not found"
+    n = len(re.findall(r"\bindirectbr\b", engine))
+    if n <= 1:
+        return f"__vm_engine has only {n} indirectbr(s) — dispatch was not inlined per-handler"
+    return None
+
+
+@register("vm_no_threaded_dispatch")
+def vm_no_threaded_dispatch(ir: str) -> Optional[str]:
+    # Inverse of vm_threaded_no_central_dispatch — proves the central
+    # vm.dispatch/vm.fetch pair (and its single indirectbr) is intact when
+    # threadedDispatch=0.
+    if not re.search(r"\bvm\.fetch\b", ir):
+        return "vm.fetch block not found — central dispatch pair missing"
+    engine = extract_fn_body(ir, "__vm_engine")
+    if engine is None:
+        return "__vm_engine function body not found"
+    n = len(re.findall(r"\bindirectbr\b", engine))
+    if n != 1:
+        return f"__vm_engine has {n} indirectbr(s), expected exactly 1 (central dispatch)"
+    return None
