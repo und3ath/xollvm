@@ -763,6 +763,7 @@ namespace llvm {
 		Function* getOrCreateNestedIcmp64Helper();  // idempotent per module
 		Function* getOrCreateNestedFcmpHelper();    // idempotent per module
 		Function* getOrCreateNestedCastHelper();    // idempotent per module
+		Function* getOrCreateNestedBinopFHelper();  // idempotent per module
 		Function* getOrCreateNestedHelper(VMOp Op); // dispatches to the per-opcode authors above
 		void virtualizeNestedHelpersOnce();         // idempotent per module
 

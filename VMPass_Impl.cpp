@@ -462,6 +462,7 @@ namespace {
 	constexpr const char* kNestedIcmp64HelperName = "__vm_h_icmp64";
 	constexpr const char* kNestedFcmpHelperName = "__vm_h_fcmp";
 	constexpr const char* kNestedCastHelperName = "__vm_h_cast";
+	constexpr const char* kNestedBinopFHelperName = "__vm_h_binop_f";
 
 	// Fixed deterministic nesting order, consumed by run() (helper creation),
 	// opcodeNests() (the nestedVMOpcodes cap), and virtualizeNestedHelpersOnce()
@@ -475,6 +476,7 @@ namespace {
 		{ OP_ICMP64,  kNestedIcmp64HelperName },
 		{ OP_FCMP,    kNestedFcmpHelperName },
 		{ OP_CAST,    kNestedCastHelperName },
+		{ OP_BINOP_F, kNestedBinopFHelperName },
 	};
 	constexpr unsigned kNumNestedHelpers =
 		sizeof(kNestedHelperOrder) / sizeof(kNestedHelperOrder[0]);
@@ -497,6 +499,7 @@ Function* VMImpl::getOrCreateNestedHelper(VMOp Op) {
 	case OP_ICMP64:  return getOrCreateNestedIcmp64Helper();
 	case OP_FCMP:    return getOrCreateNestedFcmpHelper();
 	case OP_CAST:    return getOrCreateNestedCastHelper();
+	case OP_BINOP_F: return getOrCreateNestedBinopFHelper();
 	default:         return nullptr;
 	}
 }
@@ -871,6 +874,65 @@ Function* VMImpl::getOrCreateNestedCastHelper() {
 	return HF;
 }
 
+// Pure helper `double __vm_h_binop_f(double a, double b, i8 subop)` -- replicates
+// OP_BINOP_F's compute (buildHandlersFloat). subop bits[6:0] = FBinSubop, bit[7]
+// = f32-mode flag: when set, the f64 result is rounded to f32 precision
+// (fptrunc->fpext), matching native float arithmetic. Plain (no fast-math) FP
+// ops, mirroring the handler. Default case is FBS_FADD.
+Function* VMImpl::getOrCreateNestedBinopFHelper() {
+	if (Function* Existing = M.getFunction(kNestedBinopFHelperName))
+		return Existing;
+
+	FunctionType* FTy = FunctionType::get(DoubleTy, { DoubleTy, DoubleTy, I8Ty }, false);
+	Function* HF = Function::Create(FTy, GlobalValue::InternalLinkage,
+		kNestedBinopFHelperName, &M);
+	HF->addFnAttr(Attribute::NoUnwind);
+	Argument* AArg = HF->getArg(0); AArg->setName("a");
+	Argument* BArg = HF->getArg(1); BArg->setName("b");
+	Argument* SubArg = HF->getArg(2); SubArg->setName("subop");
+
+	BasicBlock* EntryBB = BasicBlock::Create(Ctx, "entry", HF);
+	IRBuilder<> B(EntryBB);
+	Value* Sub32 = B.CreateZExt(SubArg, I32Ty, "sub32");
+	Value* Op = B.CreateAnd(Sub32, B.getInt32(0x7F), "op");      // FBinSubop
+	Value* IsF32 = B.CreateICmpNE(
+		B.CreateAnd(Sub32, B.getInt32(0x80), "f32b"), B.getInt32(0), "f32");
+
+	BasicBlock* MergeBB = BasicBlock::Create(Ctx, "merge", HF);
+	BasicBlock* DefBB = BasicBlock::Create(Ctx, "def", HF);
+	SwitchInst* SW = B.CreateSwitch(Op, DefBB, 5);
+
+	IRBuilder<> BM(MergeBB);
+	auto* Phi = BM.CreatePHI(DoubleTy, 6, "r");
+	// Round to f32 precision when bit 7 was set (matches the handler).
+	Value* Narrow = BM.CreateFPExt(
+		BM.CreateFPTrunc(Phi, Type::getFloatTy(Ctx), "nt"), DoubleTy, "ne");
+	Value* Final = BM.CreateSelect(IsF32, Narrow, Phi, "fin");
+	BM.CreateRet(Final);
+
+	{
+		// Default implements FBS_FADD (matches OP_BINOP_F's fallback).
+		IRBuilder<> BD(DefBB);
+		Phi->addIncoming(BD.CreateFAdd(AArg, BArg, "fadd"), DefBB);
+		BD.CreateBr(MergeBB);
+	}
+
+	auto addCase = [&](uint32_t Case, const Twine& Name, auto Emit) {
+		BasicBlock* CBB = BasicBlock::Create(Ctx, Name, HF);
+		IRBuilder<> BC(CBB);
+		Phi->addIncoming(Emit(BC), CBB);
+		BC.CreateBr(MergeBB);
+		SW->addCase(B.getInt32(Case), CBB);
+		};
+
+	addCase(FBS_FSUB, "fsub", [&](IRBuilder<>& BC) { return BC.CreateFSub(AArg, BArg, "fsub"); });
+	addCase(FBS_FMUL, "fmul", [&](IRBuilder<>& BC) { return BC.CreateFMul(AArg, BArg, "fmul"); });
+	addCase(FBS_FDIV, "fdiv", [&](IRBuilder<>& BC) { return BC.CreateFDiv(AArg, BArg, "fdiv"); });
+	addCase(FBS_FREM, "frem", [&](IRBuilder<>& BC) { return BC.CreateFRem(AArg, BArg, "frem"); });
+
+	return HF;
+}
+
 // Inner-virtualize every created pure helper, exactly once per module. Must
 // run AFTER populateVMEngine() -- see the sequencing note above. Loops over
 // the fixed nesting order; a helper not found by name was never referenced
@@ -883,6 +945,11 @@ void VMImpl::virtualizeNestedHelpersOnce() {
 	VMPassConfig InnerCfg = Cfg;
 	InnerCfg.nestedVM = false; // hard recursion guard: no helper is ever itself nested
 	InnerCfg.minBlocks = 1;    // helper is a single small switch
+	// NOTE: NestedVMHardened is reserved. Hardening the helper's thin wrapper
+	// via the standard wrapper-hardening passes currently yields dominance-
+	// invalid IR on the helper's small wrapper shape; left off until that is
+	// fixed. The distinct inner engine already provides the second layer.
+	InnerCfg.hardened = false;
 
 	for (unsigned i = 0; i < kNumNestedHelpers; ++i) {
 		Function* HelperFn = M.getFunction(kNestedHelperOrder[i].Name);
@@ -1663,10 +1730,21 @@ void VMImpl::buildHandlersFloat() {
 		Value* AIdx = rdFR(B, IP, 1, "vm.bof.a");
 		Value* BIdx = rdFR(B, IP, 2, "vm.bof.b");
 		Value* Sub8 = rdByte(B, IP, 3, "vm.bof.op");   // raw byte incl. bit7
+		Value* AV = ldFR(B, AIdx), * BV = ldFR(B, BIdx);
+
+		if (NestedVM && opcodeNests(OP_BINOP_F)) {
+			// Compute via the pure helper (separately inner-virtualized). The
+			// helper takes the full subop byte and applies the f32 rounding
+			// itself, so the result is final.
+			Function* HelperFn = M.getFunction(kNestedBinopFHelperName);
+			Value* Sub8b = B.CreateTrunc(Sub8, I8Ty, "vm.bof.sub8");
+			Value* Rv = B.CreateCall(HelperFn, { AV, BV, Sub8b }, "vm.bof.nested");
+			stFR(B, Dst, Rv);
+			B.CreateBr(Dispatch);
+		} else {
 		Value* Sub = B.CreateAnd(Sub8, B.getInt32(0x7F), "vm.bof.sub"); // op only
 		Value* IsF32 = B.CreateICmpNE(
 			B.CreateAnd(Sub8, B.getInt32(0x80)), B.getInt32(0), "vm.bof.f32");
-		Value* AV = ldFR(B, AIdx), * BV = ldFR(B, BIdx);
 
 		// Carry IsF32 (i1) into the merge block via alloca so every incoming
 		// edge can read it without duplicating the comparison.
@@ -1704,6 +1782,7 @@ void VMImpl::buildHandlersFloat() {
 		addFCase(FBS_FMUL, "vm.bof.mul", [&](IRBuilder<>& BC) { return BC.CreateFMul(AV, BV, "vm.fmul"); });
 		addFCase(FBS_FDIV, "vm.bof.div", [&](IRBuilder<>& BC) { return BC.CreateFDiv(AV, BV, "vm.fdiv"); });
 		addFCase(FBS_FREM, "vm.bof.rem", [&](IRBuilder<>& BC) { return BC.CreateFRem(AV, BV, "vm.frem"); });
+		}
 	}
 
 	// OP_FCMP -- [dst_vr:u8 a_fr:u8 b_fr:u8 pred:u8] 
