@@ -271,3 +271,26 @@ def vm_no_threaded_dispatch(ir: str) -> Optional[str]:
     if n != 1:
         return f"__vm_engine has {n} indirectbr(s), expected exactly 1 (central dispatch)"
     return None
+
+
+@register("vm_keyeddisp_ip_xor")
+def vm_keyeddisp_ip_xor(ir: str) -> Optional[str]:
+    # keyedDispatch: VMImpl::opKeyByteIR computes a per-IP XOR key (named
+    # ...vm.opk*) that emitThreadedTail/buildDispatch XOR into the raw fetched
+    # opcode byte (result named ...vm.opd) before it's mapped to a handler.
+    # Both name fragments only appear when keyedDispatch=1 emits the
+    # un-XOR sequence.
+    if not re.search(r"vm\.opk", ir):
+        return "no vm.opk value found — opKeyByteIR key mix not emitted"
+    if not re.search(r"vm\.opd", ir):
+        return "no vm.opd value found — opcode-byte un-XOR not emitted"
+    return None
+
+
+@register("vm_no_keyeddisp")
+def vm_no_keyeddisp(ir: str) -> Optional[str]:
+    # Inverse of vm_keyeddisp_ip_xor — proves the per-IP opcode-byte XOR is
+    # absent when keyedDispatch=0.
+    if re.search(r"vm\.opk|vm\.opd", ir):
+        return "vm.opk/vm.opd found but keyedDispatch=0"
+    return None

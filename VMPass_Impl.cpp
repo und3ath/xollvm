@@ -2361,6 +2361,14 @@ void VMImpl::buildDispatch() {
 		// loadBC() already decrypts when EncBytecode=1
 		Value* OpB = Raw;
 
+		// keyedDispatch: un-XOR the per-IP opcode key applied by
+		// BytecodeEmitter::bop() at write time, before mapping the byte to a
+		// permuted opcode index.
+		if (KeyedDispatch) {
+			auto* SaltL = B.CreateLoad(I32Ty, EffSalt, "vm.opk.salt"); SaltL->setVolatile(true);
+			OpB = B.CreateXor(OpB, opKeyByteIR(B, SaltL, IP, "vm.opk"), "vm.opd");
+		}
+
 		// Advance IP past opcode byte
 		B.CreateStore(B.CreateAdd(IP, B.getInt32(1), "vm.ip1"), VMIP)->setVolatile(true);
 
@@ -2431,6 +2439,14 @@ void VMImpl::emitThreadedTail(IRBuilder<>& B) {
 
 	// loadBC() already decrypts when EncBytecode=1
 	Value* OpB = Raw;
+
+	// keyedDispatch: un-XOR the per-IP opcode key applied by
+	// BytecodeEmitter::bop() at write time, before mapping the byte to a
+	// permuted opcode index. Mirrors buildDispatch()'s vm.fetch logic exactly.
+	if (KeyedDispatch) {
+		auto* SaltL = FB.CreateLoad(I32Ty, EffSalt, "vm.opk.salt"); SaltL->setVolatile(true);
+		OpB = FB.CreateXor(OpB, opKeyByteIR(FB, SaltL, IP2, "vm.opk"), "vm.opd");
+	}
 
 	// Advance IP past opcode byte
 	FB.CreateStore(FB.CreateAdd(IP2, FB.getInt32(1), "vm.ip1"), VMIP)->setVolatile(true);
@@ -4952,6 +4968,7 @@ bool VMImpl::run() {
 	E.setOpcodeMap(&OpMap);
 	E.setTargetBlind(SaltConst, BlindTargets);
 	E.setConstInStream(ConstInStream);
+	E.setKeyedDispatch(SaltConst, KeyedDispatch);
 	if (!E.run(F, CTSalt, M.getDataLayout())) {
 		FailReason = E.getFailReason().str();
 		if (FailReason.empty()) FailReason = "bytecode emission failed";
@@ -4961,7 +4978,7 @@ bool VMImpl::run() {
 	if (ObfVerify) {
 		std::string VErr;
 		uint32_t BadIP = 0;
-		if (!verifyBytecode(E, CTSalt, OpMap, VErr, BadIP, SaltConst, BlindTargets)) {
+		if (!verifyBytecode(E, CTSalt, OpMap, VErr, BadIP, SaltConst, BlindTargets, KeyedDispatch)) {
 			FailReason = ("bytecode verify failed at ip " + std::to_string(BadIP) + ": " + VErr);
 			return false;
 		}

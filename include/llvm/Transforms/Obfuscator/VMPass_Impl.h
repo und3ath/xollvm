@@ -288,6 +288,7 @@ namespace llvm {
 		const unsigned NestedVMOpcodes;  // 0 = all eligible opcodes nest; N>0 = first N in the fixed order (see opcodeNests)
 		const bool     NestedVMHardened; // reserved: harden the inner VM layer
 		const bool     ThreadedDispatch; // inline fetch/decode/indirectbr into every handler's back-edge; no central vm.dispatch/vm.fetch
+		const bool     KeyedDispatch;    // XOR each opcode byte with a per-IP compile-time key at emit/fetch time
 		// Which shared engine this build targets: 0 = plain ("__vm_engine"),
 		// 1 = nesting ("__vm_engine.nest"). Derived from NestedVM, not an
 		// independent knob -- a nestedVM=true build always wants the engine
@@ -438,6 +439,7 @@ namespace llvm {
 			NestedVMOpcodes(Cfg.nestedVMOpcodes),
 			NestedVMHardened(Cfg.nestedVMHardened),
 			ThreadedDispatch(Cfg.threadedDispatch),
+			KeyedDispatch(Cfg.keyedDispatch),
 			EngineId(NestedVM ? 1u : 0u),
 			SaltConst(R.u32()),
 			// IMPORTANT: indices are only XOR-salted when obfRegIdx=1.
@@ -502,6 +504,20 @@ namespace llvm {
 			k = B.CreateMul(k, B.getInt32(0x9E3779B1u), N + ".tk1");
 			k = B.CreateXor(k, B.CreateLShr(k, B.getInt32(16), N + ".tk2s"), N + ".tk2");
 			return k;
+		}
+
+		// keyedDispatch: runtime (IR) mix — mirrors BytecodeEmitter::opKeyByteCT
+		// op-for-op. Computes the per-IP opcode-byte XOR key from the runtime
+		// salt (caller loads it, volatile, before calling this) and the
+		// fetch-time IP. Applied to the raw fetched opcode byte before the
+		// OP_COUNT urem in emitThreadedTail/buildDispatch.
+		Value* opKeyByteIR(IRBuilder<>& B, Value* Salt, Value* Idx32, const Twine& N) {
+			Value* IPp1 = B.CreateAdd(Idx32, B.getInt32(1), N + ".ok0");
+			Value* Mul = B.CreateMul(Salt, IPp1, N + ".ok1");
+			Value* Shr = B.CreateLShr(Salt, B.getInt32(8), N + ".ok2");
+			Value* K = B.CreateXor(Mul, Shr, N + ".ok3");
+			Value* Key32 = B.CreateAnd(K, B.getInt32(0xFF), N + ".okm");
+			return B.CreateTrunc(Key32, I8Ty, N + ".ok8");
 		}
 
 		// Lazy AES fetch: remove the AES-CTR layer for the byte at Idx32.

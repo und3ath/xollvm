@@ -955,6 +955,11 @@ bool BytecodeEmitter::run(Function& F, uint8_t S, const DataLayout& D) {
 		SmallVector<uint8_t, 1024> Body;
 		Body.swap(BC);
 
+		// keyedDispatch: every position recorded in KeyedOpIPs so far belongs to
+		// the body (the prologue hasn't been written yet) and was baked with a
+		// key computed against its pre-splice IP -- see the re-key loop below.
+		size_t BodyOpCount = KeyedOpIPs.size();
+
 		for (auto& KV : ImmLoads) {
 			bop(OP_LOADI);
 			b8(xorSalt(KV.first));
@@ -976,6 +981,19 @@ bool BytecodeEmitter::run(Function& F, uint8_t S, const DataLayout& D) {
 
 		uint32_t PrologueLen = ip();
 		BC.append(Body.begin(), Body.end());
+
+		// keyedDispatch: re-key every body opcode byte now that its final
+		// (post-splice) IP is known -- strip the stale pre-splice mask and apply
+		// the correct one. Prologue opcode bytes (recorded after BodyOpCount)
+		// were already written at their final IP and are left untouched.
+		if (KeyedDispatch) {
+			for (size_t i = 0; i < BodyOpCount; ++i) {
+				uint32_t OldIP = KeyedOpIPs[i];
+				uint32_t NewIP = OldIP + PrologueLen;
+				BC[NewIP] ^= opKeyByteCT(KeyedSalt, OldIP) ^ opKeyByteCT(KeyedSalt, NewIP);
+				KeyedOpIPs[i] = NewIP;
+			}
+		}
 
 		for (auto& KV : BlockIP) KV.second += PrologueLen;
 		for (Fixup& FX : Fixups) FX.Offset += PrologueLen;

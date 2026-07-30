@@ -87,6 +87,12 @@ VM_THREADED_ENGINE_GATES = [g for g in VM_ENGINE_GATES if g != "vm_engine_dispat
 VM_THREADED_SHARED_GATES = VM_THREADED_CORE_GATES + VM_THREADED_ENGINE_GATES
 VM_THREADED_GATES = ["vm_threaded_no_central_dispatch"]
 
+# keyedDispatch: each opcode byte is XOR'd with a per-IP compile-time key at
+# emit time and un-XOR'd at fetch time. Purely a byte-value transform on the
+# existing dispatch path -- doesn't change dispatch structure, so it composes
+# with any of the CORE/ENGINE/THREADED gate sets above.
+VM_KEYEDDISP_GATES = ["vm_keyeddisp_ip_xor"]
+
 _DBG = ["--obf-debug", "--obf-verbose"]
 
 
@@ -95,7 +101,7 @@ def register(reg: Registry, **_opts) -> None:
 
     reg.add(name="rt_vm_v7_basic", passes=["vm"],
             ann_override=vm_v7,
-            gates=VM_CORE_GATES + ["vm_enc_ctor", "vm_no_threaded_dispatch"],
+            gates=VM_CORE_GATES + ["vm_enc_ctor", "vm_no_threaded_dispatch", "vm_no_keyeddisp"],
             extra_opts=_DBG, category="vm")
     reg.add(name="rt_vm_v7_bare", passes=["vm"],
             ann_override=ann_extra("vm_v7_bare"),
@@ -620,3 +626,71 @@ def register(reg: Registry, **_opts) -> None:
             ann_override=vm_v7_thr,
             extra_opts=_DBG, gates=["seed_determinism"], category="vm",
             src_override=render_vm_v7_multi_function_program(vm_v7_thr))
+
+    # ── keyedDispatch (XOR every opcode byte with a per-IP compile-time key
+    # at write time in BytecodeEmitter::bop(), un-XOR at fetch time in
+    # emitThreadedTail/buildDispatch and verifyBytecode) ──
+    # Correctness gate: differential output proves the same physical bytecode
+    # decodes correctly through the per-IP un-XOR at every fetch site.
+    # Feature-active gate (VM_KEYEDDISP_GATES) proves the IR actually emits
+    # the per-IP key mix and opcode-byte XOR, not silently falling back to a
+    # plain fetch.
+    vm_v7_kd = ann_extra("vm_v7_keyeddisp")
+    vm_v7_kd_multi = ann_extra("vm_v7_keyeddisp_multi_fn")
+    vm_v7_kd_hard = ann_extra("vm_v7_keyeddisp_hardened")
+    vm_v7_kd_stack = ann_extra("vm_v7_keyeddisp_stack")
+
+    reg.add(name="rt_vm_v7_keyeddisp_multi_fn", passes=["vm"],
+            ann_override=vm_v7_kd_multi,
+            gates=VM_SHARED_GATES + VM_KEYEDDISP_GATES + [
+                "vm_enc_ctor", "vm_callees_global", "vm_multi_fn_shared",
+            ],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_multi_fn_aes_program(vm_v7_kd_multi))
+    reg.add(name="rt_vm_v7_keyeddisp_i64", passes=["vm"],
+            ann_override=vm_v7_kd,
+            gates=VM_SHARED_GATES + VM_KEYEDDISP_GATES + ["vm_enc_ctor"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_i64_ops_program(vm_v7_kd))
+    reg.add(name="rt_vm_v7_keyeddisp_float", passes=["vm"],
+            ann_override=vm_v7_kd,
+            gates=VM_SHARED_GATES + VM_KEYEDDISP_GATES + [
+                "vm_fregs_alloca", "vm_enc_ctor",
+            ],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_float_basic_program(vm_v7_kd))
+    reg.add(name="rt_vm_v7_keyeddisp_switch", passes=["vm"],
+            ann_override=vm_v7_kd,
+            gates=VM_SHARED_GATES + VM_KEYEDDISP_GATES + [
+                "vm_enc_ctor", "vm_multi_fn_shared",
+            ],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_switch_dispatch_program(vm_v7_kd))
+    # hardened + keyedDispatch: hardening operates on handler-block bodies
+    # (MBA, dead blocks, dispatch/handler guards) which are all still present
+    # under keyedDispatch (a pure byte-value transform on the opcode fetch,
+    # not a dispatch-structure change), so the full hardened gate set applies
+    # unchanged (cf. rt_vm_v7_hardened above).
+    reg.add(name="rt_vm_v7_keyeddisp_hardened", passes=["vm"],
+            ann_override=vm_v7_kd_hard,
+            gates=VM_CORE_GATES + VM_KEYEDDISP_GATES + [
+                "vm_enc_ctor", "vm_hardened_mba", "vm_hardened_dead_blocks",
+                "vm_hardened_dispatch_guard", "vm_hardened_handler_guards",
+            ],
+            extra_opts=_DBG, category="vm")
+    # Full-stack composition: keyedDispatch + threadedDispatch + encDispatch +
+    # lazyDecrypt + constInStream + nestedVM together. Proves the per-IP
+    # opcode un-XOR composes with the inlined threaded fetch tail, the
+    # encrypted dispatch map, the lazy-AES fetch path, the encrypted-stream
+    # constant prologue, and the inner nested-VM engine.
+    reg.add(name="rt_vm_v7_keyeddisp_stack", passes=["vm"],
+            ann_override=vm_v7_kd_stack,
+            gates=VM_THREADED_SHARED_GATES + VM_THREADED_GATES + VM_KEYEDDISP_GATES
+                + VM_AES_GATES + VM_LAZYDECRYPT_GATES + VM_CONSTINSTREAM_GATES
+                + VM_NESTEDVM_GATES + ["vm_enc_ctor", "vm_multi_fn_shared"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_switch_dispatch_program(vm_v7_kd_stack))
+    reg.add(name="rt_vm_v7_keyeddisp_determinism", passes=["vm"],
+            ann_override=vm_v7_kd,
+            extra_opts=_DBG, gates=["seed_determinism"], category="vm",
+            src_override=render_vm_v7_multi_function_program(vm_v7_kd))

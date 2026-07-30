@@ -153,6 +153,18 @@ EXTRA_ANN: Dict[str, str] = {
     # from the outer Cfg via virtualizeNestedHelpersOnce()'s InnerCfg copy).
     "vm_v7_threaded_stack":    "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,useAES=1,"
                                "threadedDispatch=1,lazyDecrypt=1,constInStream=1,nestedVM=1)",
+    # keyedDispatch: each opcode byte is XOR'd with a per-IP compile-time key
+    # at emit time (BytecodeEmitter::bop) and un-XOR'd at fetch time
+    # (emitThreadedTail/buildDispatch); same physical byte decodes to a
+    # different logical opcode depending on where it's read from.
+    "vm_v7_keyeddisp":          "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,keyedDispatch=1)",
+    "vm_v7_keyeddisp_multi_fn": "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,keyedDispatch=1)",
+    "vm_v7_keyeddisp_hardened": "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,keyedDispatch=1,hardened=1)",
+    # Full composition proof: keyedDispatch + threadedDispatch + encDispatch +
+    # lazyDecrypt + constInStream + nestedVM all together.
+    "vm_v7_keyeddisp_stack":    "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,useAES=1,"
+                               "keyedDispatch=1,threadedDispatch=1,encDispatch=1,"
+                               "lazyDecrypt=1,constInStream=1,nestedVM=1)",
 }
 
 

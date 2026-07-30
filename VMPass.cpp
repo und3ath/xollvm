@@ -66,6 +66,7 @@ VMPassConfig VMPassConfig::fromPassConfig(const PassConfig& PC) {
 	getUInt("nestedVMOpcodes", Cfg.nestedVMOpcodes);
 	getBool("nestedVMHardened", Cfg.nestedVMHardened);
 	getBool("threadedDispatch", Cfg.threadedDispatch);
+	getBool("keyedDispatch", Cfg.keyedDispatch);
 
 	// useAES requires encBytecode — if the user disabled encryption entirely,
 	// AES has nothing to replace.

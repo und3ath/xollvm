@@ -310,6 +310,12 @@ namespace llvm {
 		// indirectbr). Off = byte-identical to the central-dispatch build.
 		bool     threadedDispatch = false;
 
+		// keyedDispatch: XOR each written opcode byte with a per-IP compile-time
+		// key at emit time; un-XOR at fetch time. The same physical byte read
+		// from two different IPs decodes to different logical opcodes, so a
+		// static byte->handler map no longer holds. Off = byte-identical.
+		bool     keyedDispatch = false;
+
 		static VMPassConfig fromPassConfig(const PassConfig& PC);
 		bool validate() const;
 	};
