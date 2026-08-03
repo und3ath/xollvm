@@ -27,6 +27,7 @@
 // ============================================================================
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
@@ -117,6 +118,16 @@ namespace llvm {
 		/// key derived from saltFull (see opKeyByteCT); on is the knob.
 		void setKeyedDispatch(uint32_t saltFull, bool on) { KeyedSalt = saltFull; KeyedDispatch = on; }
 
+		/// superOps: fuse eligible i32 `mul`+`add` chains into a single
+		/// OP_MULADD opcode instead of two OP_BINOP opcodes.
+		void setSuperOps(bool on) { SuperOps = on; }
+
+		/// randISA (P9-A): module-uniform permutation of semantic operand-field
+		/// byte encodings. When null (or identity), subop bytes are written raw
+		/// (byte-identical to pre-feature). The pointed-to map must be the same
+		/// module-wide instance the shared handler switch-cases were built from.
+		void setISAEnc(const ISAEnc* E) { IsaEnc = E; }
+
 		/// Compile F into bytecode.  Salt is the CTSalt byte used to XOR register
 		/// index bytes (0 when obfRegIdx is disabled).
 		/// Returns false on failure; FailReason is populated.
@@ -131,6 +142,55 @@ namespace llvm {
 		bool               ConstInStream = false;
 		uint32_t           KeyedSalt = 0;
 		bool               KeyedDispatch = false;
+		bool               SuperOps = false;
+		const ISAEnc* IsaEnc = nullptr;
+
+		/// Apply the RandISA BinSubop permutation (identity when off/null).
+		uint8_t encBinSubop(uint8_t Logical) const {
+			return IsaEnc ? IsaEnc->encBinSubop(Logical) : Logical;
+		}
+
+		/// Apply the RandISA ICmp-predicate permutation (identity when off/null).
+		uint8_t encIcmpPred(uint8_t Pred) const {
+			return IsaEnc ? IsaEnc->encIcmpPred(Pred) : Pred;
+		}
+
+		/// Apply the RandISA CastKind permutation (identity when off/null).
+		uint8_t encCastKind(uint8_t Kind) const {
+			return IsaEnc ? IsaEnc->encCastKind(Kind) : Kind;
+		}
+
+		/// Apply the RandISA FBinSubop permutation to the op part (identity when
+		/// off/null). Caller masks off / re-applies the bit-7 f32 flag.
+		uint8_t encFBinSubop(uint8_t Op) const {
+			return IsaEnc ? IsaEnc->encFBinSubop(Op) : Op;
+		}
+
+		/// Apply the RandISA FCmp-predicate permutation (identity when off/null).
+		uint8_t encFcmpPred(uint8_t Pred) const {
+			return IsaEnc ? IsaEnc->encFcmpPred(Pred) : Pred;
+		}
+
+		// superOps: `add` -> the `mul` fused into it. The fused OP_MULADD is
+		// emitted where the ADD naturally sits in program order (not the
+		// mul's position) -- SSA dominance already guarantees every operand
+		// of the add (including the mul's own inputs) is available there, in
+		// any block relationship between the two, with no extra checks
+		// needed. Populated by scanSuperOps() before slot pre-assignment;
+		// consumed by emit(Instruction*).
+		DenseMap<Instruction*, Instruction*> FusedAddToMul;
+		// superOps: `mul` instructions folded away -- they get no vreg slot
+		// (pre-assignment loop) and emit no bytes (emit(Instruction*));
+		// their result is computed inline by the fused OP_MULADD instead.
+		DenseSet<Instruction*> SkippedMuls;
+
+		// superOps: identify fusion candidates in F -- `%m = mul i32 %a,%b`
+		// with exactly one use, that use being a direct `%d = add i32 %m,%c`
+		// (i32, any block). No availability check is needed for %c: since
+		// emission happens at %d's own position, every operand %d has in the
+		// original program (including %m's inputs %a/%b, which dominate %m
+		// and therefore %d) is already resolvable there.
+		void scanSuperOps(Function& F);
 		// keyedDispatch: pre-splice IP of every opcode byte written by bop(), in
 		// emission order. Consumed by the constInStream prologue-splice step in
 		// run() to re-key body opcode bytes once their final (post-splice) IP is

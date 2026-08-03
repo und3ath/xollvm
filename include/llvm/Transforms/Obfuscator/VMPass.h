@@ -42,11 +42,9 @@
 //   obfRegIdx   (default on)  XOR register-index bytes with a compile-time
 //                             salt; handlers re-XOR from a volatile load.
 //   encBytecode (default on)  .init_array constructor decrypts @fn.vm.bytecode
-//                             at process load.  LCG keystream by default;
-//                             AES-128-CTR when useAES=1.
-//   useAES      (default on)  Replace LCG with AES-128-CTR via the shared
-//                             __obf_aes_ctr_decrypt() runtime (same engine
-//                             used by `strenc`).
+//                             at process load via AES-128-CTR, using the
+//                             shared __obf_aes_ctr_decrypt() runtime (same
+//                             engine used by `strenc`).
 //   regEncrypt  (opt-in)      Per-slot XOR of register file values at rest.
 //   hardened    (opt-in)      Wrapper junk/MBA/flattening, engine hardening,
 //                             FNV-1a integrity ctor, callee XOR masking.

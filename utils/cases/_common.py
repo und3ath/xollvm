@@ -165,6 +165,50 @@ EXTRA_ANN: Dict[str, str] = {
     "vm_v7_keyeddisp_stack":    "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,useAES=1,"
                                "keyedDispatch=1,threadedDispatch=1,encDispatch=1,"
                                "lazyDecrypt=1,constInStream=1,nestedVM=1)",
+    # superOps: eligible i32 `mul`+`add` chains (mul single-use, consumed
+    # directly by the add) fuse into one OP_MULADD opcode instead of two
+    # OP_BINOP opcodes. Off = correctness-identical (OP_COUNT grows by one).
+    "vm_v7_superops":          "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,superOps=1)",
+    "vm_v7_superops_multi_fn": "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,superOps=1)",
+    "vm_v7_superops_hardened": "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,superOps=1,hardened=1)",
+    # Full composition proof: superOps + threadedDispatch + keyedDispatch +
+    # encDispatch + lazyDecrypt + constInStream + nestedVM + useAES together.
+    "vm_v7_superops_stack":    "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,useAES=1,"
+                               "superOps=1,threadedDispatch=1,keyedDispatch=1,"
+                               "encDispatch=1,lazyDecrypt=1,constInStream=1,nestedVM=1)",
+    # bindAntiDebug: fold anti-debug detection (IsDebuggerPresent +
+    # CheckRemoteDebuggerPresent + NtQueryInformationProcess) into the AES
+    # round-key mask global at .init_array priority 100, instead of
+    # salt-poisoning traps a patched detection call can simply avoid
+    # triggering. Requires hardened (implies antiDebug).
+    "vm_v7_bindadeb":          "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,hardened=1,bindAntiDebug=1)",
+    "vm_v7_bindadeb_multi_fn": "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,hardened=1,bindAntiDebug=1)",
+    # Full composition proof: bindAntiDebug + threadedDispatch + keyedDispatch +
+    # encDispatch + lazyDecrypt + constInStream + nestedVM + superOps together.
+    "vm_v7_bindadeb_stack":    "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,useAES=1,hardened=1,"
+                               "bindAntiDebug=1,threadedDispatch=1,keyedDispatch=1,encDispatch=1,"
+                               "lazyDecrypt=1,constInStream=1,nestedVM=1,superOps=1)",
+    # randISA: per-build randomization of semantic operand-field encodings.
+    # Permutes the BinSubop byte (OP_BINOP/OP_BINOP64) and the ICmp predicate
+    # byte (OP_ICMP/OP_ICMP64) module-uniformly from the module seed, so the
+    # shared handler's switch-case / select-chain constants and the emitted
+    # bytecode operand bytes differ across builds. Off = byte-identical (identity
+    # maps). Output stays correct; only the encoding rotates per seed.
+    "vm_v7_randisa":          "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,randISA=1)",
+    "vm_v7_randisa_multi_fn": "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,randISA=1)",
+    "vm_v7_randisa_hardened": "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,randISA=1,hardened=1)",
+    # Full composition proof: randISA + nestedVM (inner-helper emitter must agree
+    # with the plain engine's permuted handler) + superOps + threadedDispatch +
+    # keyedDispatch + encDispatch + lazyDecrypt + constInStream + useAES together.
+    "vm_v7_randisa_stack":    "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,useAES=1,"
+                              "randISA=1,nestedVM=1,superOps=1,threadedDispatch=1,"
+                              "keyedDispatch=1,encDispatch=1,lazyDecrypt=1,constInStream=1)",
+    # preset=<name>: config-surface shortcut resolved in VMPassConfig::fromPassConfig
+    # before explicit knobs (which still override). medium == today's defaults.
+    "vm_v7_preset_light":  "vm(minBlocks=1,preset=light)",
+    "vm_v7_preset_medium": "vm(minBlocks=1,preset=medium)",
+    "vm_v7_preset_high":   "vm(minBlocks=1,preset=high)",
+    "vm_v7_preset_max":    "vm(minBlocks=1,preset=max)",
 }
 
 
@@ -359,3 +403,7 @@ def render_vm_v7_switch_dispatch_program(annotation: str) -> str:
 
 def render_vm_v7_i64_ret_highslot_program(annotation: str) -> str:
     return programs.render("vm.i64_ret_highslot", annotation=annotation)
+
+
+def render_vm_v7_superops_muladd_hot_program(annotation: str) -> str:
+    return programs.render("vm.superops_muladd", annotation=annotation)

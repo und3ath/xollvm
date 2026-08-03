@@ -273,6 +273,20 @@ def vm_no_threaded_dispatch(ir: str) -> Optional[str]:
     return None
 
 
+@register("vm_superops_muladd_present")
+def vm_superops_muladd_present(ir: str) -> Optional[str]:
+    # superOps: eligible i32 mul+add chains fuse into a single OP_MULADD
+    # handler (vm.opc.muladd.*) instead of two OP_BINOP handlers. The handler
+    # block itself is always built (dormant, like every other opcode in the
+    # shared engine) regardless of the knob, so its mere presence doesn't
+    # prove fusion fired -- this gate only asserts the block exists at all,
+    # i.e. the ISA/handler machinery is wired up; differential-output gates
+    # elsewhere prove the fused bytecode still computes the right answer.
+    if not re.search(r"vm\.opc\.muladd\.", ir):
+        return "no vm.opc.muladd.* handler block found — OP_MULADD handler missing"
+    return None
+
+
 @register("vm_keyeddisp_ip_xor")
 def vm_keyeddisp_ip_xor(ir: str) -> Optional[str]:
     # keyedDispatch: VMImpl::opKeyByteIR computes a per-IP XOR key (named
@@ -293,4 +307,219 @@ def vm_no_keyeddisp(ir: str) -> Optional[str]:
     # absent when keyedDispatch=0.
     if re.search(r"vm\.opk|vm\.opd", ir):
         return "vm.opk/vm.opd found but keyedDispatch=0"
+    return None
+
+
+@register("vm_bindadeb_ctor_present")
+def vm_bindadeb_ctor_present(ir: str) -> Optional[str]:
+    # bindAntiDebug: buildAntiDebugKeyBindCtor() emits a per-function
+    # .init_array constructor (name suffix .vm.adbind.ctor, priority 100 --
+    # ahead of the AES decrypt ctor at 65535) that computes a debugger-
+    # detection bit via IsDebuggerPresent/CheckRemoteDebuggerPresent/
+    # NtQueryInformationProcess and XORs it into the masked AES round-key
+    # global in the vm.adbind.combine block. Both the ctor and the detection
+    # call must be present together, or this could just be buildAntiDebugGate's
+    # unrelated dispatch-level gate (which also calls IsDebuggerPresent under
+    # plain hardened+antiDebug, independent of bindAntiDebug).
+    m = re.search(r"define[^\n]*@([\w.]+\.vm\.adbind\.ctor)\b", ir)
+    if not m:
+        return "no .vm.adbind.ctor constructor found"
+    body = extract_fn_body(ir, m.group(1))
+    if body is None:
+        return "vm.adbind.ctor matched but function body extraction failed"
+    if "IsDebuggerPresent" not in body:
+        return "vm.adbind.ctor found but no IsDebuggerPresent call inside it"
+    if not re.search(r"vm\.adbind\.combine\b", body):
+        return "vm.adbind.ctor found but no vm.adbind.combine (mask-XOR) block"
+    return None
+
+
+@register("vm_no_bindadeb_ctor")
+def vm_no_bindadeb_ctor(ir: str) -> Optional[str]:
+    # Inverse of vm_bindadeb_ctor_present — proves the ctor is absent when
+    # bindAntiDebug=0.
+    if re.search(r"vm\.adbind\.", ir):
+        return "vm.adbind.* found but bindAntiDebug=0"
+    return None
+
+
+# Canonical (identity) BinSubop byte encoding, straight from enum VMOp/BinSubop.
+# The OP_BINOP / OP_BINOP64 handler's switch routes each subop byte value to a
+# named case block; without randISA those case values equal these constants.
+_RANDISA_IDENTITY = {
+    "sub": 1, "mul": 2, "and": 3, "or": 4, "xor": 5, "shl": 6,
+    "lshr": 7, "ashr": 8, "sdiv": 9, "udiv": 10, "srem": 11, "urem": 12,
+}
+
+
+def _binsubop_case_map(ir: str) -> dict:
+    # Extract {case-block-name -> switch case value} from the OP_BINOP (vm.bo.*)
+    # and OP_BINOP64 (vm.bo64.*) handler switches. First occurrence wins (the K
+    # handler-variant copies all share the same module-uniform encoding). ADD is
+    # the switch default (no explicit case), so it never appears here.
+    # NB: LLVM uniquifies colliding block names by appending digits
+    # (e.g. %vm.bo.sub -> %vm.bo.sub343, and the K handler-variant copies), so
+    # allow a trailing \d* before the word boundary.
+    out: dict = {}
+    for val, name in re.findall(
+        r"i32 (\d+), label %vm\.bo(?:64)?\.(sub|mul|and|or|xor|shl|lshr|ashr|sdiv|udiv|srem|urem)\d*\b",
+        ir,
+    ):
+        out.setdefault(name, int(val))
+    return out
+
+
+@register("vm_randisa_permuted")
+def vm_randisa_permuted(ir: str) -> Optional[str]:
+    # randISA: the BinSubop byte encoding is permuted module-uniformly per build,
+    # so the OP_BINOP/OP_BINOP64 handler switch routes named case blocks from
+    # NON-canonical byte values. Proves the permutation actually reached the
+    # handler switch-case constants (not a silent no-op). Deterministic per seed;
+    # the astronomically-unlikely case of a seed reproducing the full identity
+    # is guarded by checking the whole present subset at once.
+    m = _binsubop_case_map(ir)
+    if not m:
+        return "no OP_BINOP subop switch found — cannot verify randISA permutation"
+    if all(_RANDISA_IDENTITY.get(name) == val for name, val in m.items()):
+        return ("OP_BINOP subop encoding is the canonical identity "
+                f"({sorted(m.items())}) — randISA permutation not applied")
+    return None
+
+
+# Canonical ICmp predicate dispatch sequence: the OP_ICMP / OP_ICMP64 handler
+# select-chain tests the decoded predicate byte against each CmpInst::Predicate
+# value in the fixed emission order EQ,NE,UGT,UGE,ULT,ULE,SGT,SGE,SLT,SLE =
+# 32..41. Without randISA that sequence is exactly this ascending run.
+_RANDISA_ICMP_CANON = [32, 33, 34, 35, 36, 37, 38, 39, 40, 41]
+
+
+def _icmp_pred_sequence(ir: str):
+    # Extract the predicate-dispatch constants (icmp eq against a value in
+    # 32..41, constant on the RHS = the CreateICmpEQ(Pred, k) tests) in textual
+    # emission order, then return the first block of 10 IF it is a permutation of
+    # the canonical set (a sanity check that we actually captured the predicate
+    # dispatch and not stray comparisons). Returns None if no clean block found.
+    seq = [int(n) for n in re.findall(r"icmp eq i32 %[^,\n]+, (3[2-9]|4[01])\b", ir)]
+    if len(seq) < 10:
+        return None
+    first10 = seq[:10]
+    if sorted(first10) != _RANDISA_ICMP_CANON:
+        return None
+    return first10
+
+
+@register("vm_no_randisa")
+def vm_no_randisa(ir: str) -> Optional[str]:
+    # Inverse of vm_randisa_permuted — with randISA off the BinSubop encoding is
+    # the canonical identity and the ICmp predicate dispatch is the ascending
+    # 32..41 run. Empty maps (a program with no int binops / no icmp) trivially
+    # pass: absence can't be a permutation.
+    m = _binsubop_case_map(ir)
+    bad = {name: val for name, val in m.items()
+           if _RANDISA_IDENTITY.get(name) != val}
+    if bad:
+        return f"OP_BINOP subop encoding is permuted but randISA=0: {sorted(bad.items())}"
+    seq = _icmp_pred_sequence(ir)
+    if seq is not None and seq != _RANDISA_ICMP_CANON:
+        return f"ICmp predicate dispatch is permuted but randISA=0: {seq}"
+    cseq = _cast_kind_sequence(ir)
+    if cseq is not None and cseq != _RANDISA_CAST_CANON:
+        return f"OP_CAST kind dispatch is permuted but randISA=0: {cseq}"
+    fb = _labeled_case_map(ir, "vm.bof.", _RANDISA_FBINSUBOP_CANON)
+    fbbad = {k: v for k, v in fb.items() if _RANDISA_FBINSUBOP_CANON.get(k) != v}
+    if fbbad:
+        return f"OP_BINOP_F subop is permuted but randISA=0: {sorted(fbbad.items())}"
+    fc = _labeled_case_map(ir, "vm.fcp.", _RANDISA_FCMP_CANON)
+    fcbad = {k: v for k, v in fc.items() if _RANDISA_FCMP_CANON.get(k) != v}
+    if fcbad:
+        return f"OP_FCMP predicate is permuted but randISA=0: {sorted(fcbad.items())}"
+    return None
+
+
+@register("vm_randisa_icmp_permuted")
+def vm_randisa_icmp_permuted(ir: str) -> Optional[str]:
+    # randISA broadening: the ICmp predicate byte encoding is permuted module-
+    # uniformly per build, so the OP_ICMP/OP_ICMP64 handler select-chain tests
+    # the decoded predicate against a NON-canonical ordering of 32..41. Proves
+    # the predicate permutation reached the handler (not a silent no-op).
+    seq = _icmp_pred_sequence(ir)
+    if seq is None:
+        return "no OP_ICMP predicate dispatch found — cannot verify randISA permutation"
+    if seq == _RANDISA_ICMP_CANON:
+        return (f"ICmp predicate dispatch is the canonical order {seq} — "
+                "randISA predicate permutation not applied")
+    return None
+
+
+# Canonical encodings for the switch/select-chain families broadened after ICmp.
+# CAST is a select-chain over the kind byte 0..7 in ascending emission order.
+_RANDISA_CAST_CANON = [0, 1, 2, 3, 4, 5, 6, 7]
+# OP_BINOP_F switch: label -> FBinSubop value (FADD=0 is the default, no case).
+_RANDISA_FBINSUBOP_CANON = {"sub": 1, "mul": 2, "div": 3, "rem": 4}
+# OP_FCMP switch: label -> raw CmpInst::Predicate value (FCMP_FALSE=0 default).
+_RANDISA_FCMP_CANON = {
+    "oeq": 1, "ogt": 2, "oge": 3, "olt": 4, "ole": 5, "one": 6, "ord": 7,
+    "uno": 8, "ueq": 9, "ugt": 10, "uge": 11, "ult": 12, "ule": 13, "une": 14,
+}
+
+
+def _labeled_case_map(ir: str, prefix: str, names) -> dict:
+    # {label-suffix -> switch case value} for `i32 N, label %<prefix><suffix>`.
+    # Allow a trailing \d* — LLVM uniquifies colliding block names (e.g.
+    # %vm.bof.sub -> %vm.bof.sub343) and appends digits to variant copies.
+    alt = "|".join(names)
+    out: dict = {}
+    for val, name in re.findall(
+        rf"i32 (\d+), label %{re.escape(prefix)}({alt})\d*\b", ir):
+        out.setdefault(name, int(val))
+    return out
+
+
+def _cast_kind_sequence(ir: str):
+    # OP_CAST is a select-chain: `icmp eq i32 %vm.ca.k<...>, K` for K = the
+    # permuted kind of each of the 8 slots, in ascending emission order. Return
+    # the first block of 8 IF it is a permutation of 0..7 (sanity).
+    seq = [int(n) for n in re.findall(r"icmp eq i32 %vm\.ca\.k[^,\n]*, ([0-7])\b", ir)]
+    if len(seq) < 8:
+        return None
+    first8 = seq[:8]
+    if sorted(first8) != _RANDISA_CAST_CANON:
+        return None
+    return first8
+
+
+@register("vm_randisa_cast_permuted")
+def vm_randisa_cast_permuted(ir: str) -> Optional[str]:
+    # randISA broadening: the CastKind byte is permuted, so OP_CAST's kind
+    # select-chain tests the decoded kind against a NON-canonical ordering of
+    # 0..7.
+    seq = _cast_kind_sequence(ir)
+    if seq is None:
+        return "no OP_CAST kind dispatch found — cannot verify randISA permutation"
+    if seq == _RANDISA_CAST_CANON:
+        return f"OP_CAST kind dispatch is the canonical order {seq} — randISA not applied"
+    return None
+
+
+@register("vm_randisa_fbinsubop_permuted")
+def vm_randisa_fbinsubop_permuted(ir: str) -> Optional[str]:
+    # randISA broadening: the FBinSubop (OP_BINOP_F) sub-opcode is permuted, so
+    # the handler switch routes vm.bof.<op> blocks from non-canonical values.
+    m = _labeled_case_map(ir, "vm.bof.", _RANDISA_FBINSUBOP_CANON)
+    if not m:
+        return "no OP_BINOP_F subop switch found — cannot verify randISA permutation"
+    if all(_RANDISA_FBINSUBOP_CANON.get(k) == v for k, v in m.items()):
+        return f"OP_BINOP_F subop encoding is canonical ({sorted(m.items())}) — randISA not applied"
+    return None
+
+
+@register("vm_randisa_fcmp_permuted")
+def vm_randisa_fcmp_permuted(ir: str) -> Optional[str]:
+    # randISA broadening: the FCmp predicate byte is permuted, so the OP_FCMP
+    # handler switch routes vm.fcp.<pred> blocks from non-canonical values.
+    m = _labeled_case_map(ir, "vm.fcp.", _RANDISA_FCMP_CANON)
+    if not m:
+        return "no OP_FCMP predicate switch found — cannot verify randISA permutation"
+    if all(_RANDISA_FCMP_CANON.get(k) == v for k, v in m.items()):
+        return f"OP_FCMP predicate encoding is canonical ({sorted(m.items())}) — randISA not applied"
     return None

@@ -318,7 +318,7 @@
  *   rollingRegKey    (0)     evolve the per-slot register key on each store
  *   antiDebug        (1)     anti-debug traps (active only when hardened=1)
  *   adDispatchThreshold  (5000)  rdtsc cycle delta for the dispatch gate
- *   adHandlerThreshold   (500)   rdtsc cycle delta for handler spot-checks
+ *   adHandlerThreshold   (5000)  rdtsc cycle delta for handler spot-checks (debounced)
  *   adDispatchInterval   (64)    check every N fetches (power of 2)
  *   adHandlerProb        [0-100] (10)  % of handlers that carry a trap
  *

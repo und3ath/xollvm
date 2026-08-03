@@ -278,8 +278,7 @@ namespace llvm {
 		bool     enable = false;
 		unsigned minBlocks = 1;
 		unsigned maxBlocks = 400;     // 0 = no limit
-		bool     useAES = true;       // AES-CTR replaces LCG (Layer 2)
-		bool     lazyDecrypt = false; // AES layer removed per-instruction at fetch instead of whole-buffer in ctor (requires useAES + encBytecode)
+		bool     lazyDecrypt = false; // AES layer removed per-instruction at fetch instead of whole-buffer in ctor (requires encBytecode)
 		bool     obfRegIdx = true;    // XOR register indices with compile-time salt
 		bool     encDispatch = true;   // P2: encrypted per-opcode->handler index indirection (on)
 		unsigned handlerVariants = 3;  // K handler-body variants per opcode (P1 polymorphism on; 1 = off)
@@ -293,9 +292,10 @@ namespace llvm {
 		bool     antiDebug = true;    // anti-debug traps (active when hardened=1)
 		// configurable anti-debug thresholds
 		unsigned adDispatchThreshold = 5000;  // rdtsc delta for dispatch-level gate (cycles)
-		unsigned adHandlerThreshold = 500;   // rdtsc delta for handler spot-checks (cycles)
+		unsigned adHandlerThreshold = 5000;  // rdtsc delta for handler spot-checks (cycles) — at the debug-exception floor; debounced over kDebounce consecutive hits
 		unsigned adDispatchInterval = 64;    // check every N fetch iterations (power of 2)
 		unsigned adHandlerProb = 10;    // % of handlers to trap (0-100)
+		bool     bindAntiDebug = false; // W7: fold anti-debug detection into AES key mask (bytecode decodes wrong under debugger). Requires hardened.
 
 		bool     nestedVM = false;         // virtualize eligible opcode handlers with a second VM layer
 		// 0 = all eligible opcodes nest; N>0 = only the first N, in the fixed
@@ -315,6 +315,19 @@ namespace llvm {
 		// from two different IPs decodes to different logical opcodes, so a
 		// static byte->handler map no longer holds. Off = byte-identical.
 		bool     keyedDispatch = false;
+
+		// superOps: fuse eligible i32 `mul`+`add` chains (mul result single-use,
+		// consumed directly by the add) into one OP_MULADD opcode instead of two
+		// OP_BINOP opcodes. Off = correctness-identical (OP_COUNT grows by one).
+		bool     superOps = false;
+
+		// randISA: per-build randomization of semantic operand-field encodings.
+		// W6: permutes the sub-opcode byte values (BinSubop for OP_BINOP/BINOP64)
+		// module-uniformly from the module seed, so the shared handler's switch-
+		// case constants — and the bytecode subop bytes — differ across builds.
+		// Two builds of the same source at different seeds share no static handler
+		// signature for the permuted families. Off = byte-identical (identity map).
+		bool     randISA = false;
 
 		static VMPassConfig fromPassConfig(const PassConfig& PC);
 		bool validate() const;

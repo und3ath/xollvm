@@ -14,7 +14,6 @@
 //   FBinSubop   — sub-opcode byte for OP_BINOP_F (f64 register file) [Step 01.1]
 //   FCastKind   — kind byte for OP_FCAST (f64 <-> i32/i64)           [Step 01.1]
 //   VMOpcodeMap — per-function logical<->physical opcode bijection
-//   LCG_A/C     — LCG constants for bytecode encryption
 // ============================================================================
 
 #include <cstdint>
@@ -106,7 +105,13 @@ namespace llvm {
 		OP_FCAST_V64F = 0x32,  // vreg64 i64 → freg  : FK_SI64TOFP / FK_UI64TOFP
 
 		OP_LOADI64 = 0x33,  // dst64:u8 imm:i64le  (1+1+8 = 10 bytes)
-		OP_COUNT = 0x34
+
+		// superOps: fused super-operator. Replaces `%c = mul i32 %a,%b; %d = add
+		// i32 %c,%e` (mul single-use, consumed directly by the add) with one
+		// opcode so lifting the handler doesn't recover a lone mul or add.
+		OP_MULADD = 0x34,  // dst:u8 a:u8 b:u8 c:u8  (5 bytes) -- dst = a*b + c (i32)
+
+		OP_COUNT = 0x35
 	};
 
 	// Max handler-body variants per opcode in the shared __vm_engine.
@@ -217,16 +222,6 @@ namespace llvm {
 	};
 
 	// ============================================================================
-	// LCG constants — legacy fallback (useAES=0).
-	// When useAES=1 (default, Step 03), the LCG layer is replaced by AES-128-CTR
-	// and these constants no longer appear in the emitted binary.  They are kept
-	// for the useAES=0 regression-safety path.
-	// ============================================================================
-
-	static constexpr uint64_t LCG_A = 6364136223846793005ULL;
-	static constexpr uint64_t LCG_C = 1442695040888963407ULL;
-
-	// ============================================================================
 	// VMOpcodeMap (P02)
 	//
 	// Per-function logical<->physical opcode bijection.  The emitter calls
@@ -291,6 +286,117 @@ namespace llvm {
 
 		uint8_t encode(VMOp Logical)     const { return L2P[(uint8_t)Logical]; }
 		VMOp    decode(uint8_t Physical) const { return (VMOp)P2L[(unsigned)Physical % OP_COUNT]; }
+	};
+
+	// ============================================================================
+	// ISAEnc (P9-A) — per-build randomization of semantic operand-field encodings.
+	//
+	// Unlike VMOpcodeMap (which permutes the *opcode* byte per function), ISAEnc
+	// permutes the *sub-opcode* operand byte values module-uniformly, so the value
+	// is baked identically into (a) the shared engine's handler switch-case
+	// constants and (b) every function's emitted bytecode. Two builds at different
+	// seeds get different maps → the permuted handlers share no static signature.
+	//
+	// Default construction is the IDENTITY map, so a build with the knob off emits
+	// exactly the pre-feature byte for every field (byte-identical guarantee).
+	// initPermuted() is called only when randISA is on, with a module-uniform RNG
+	// derived from the module seed (independent of the per-function RNG stream).
+	//
+	// Each family has its own permutation drawn from an INDEPENDENT module-seed-
+	// derived RNG (distinct fork label), so adding a family leaves the others'
+	// maps bit-identical. Covered families (grow as randISA broadens, one knob):
+	//   BinSubop  — OP_BINOP / OP_BINOP64 sub-opcode byte (13 values, 0..12)
+	//   ICmpPred  — OP_ICMP / OP_ICMP64 predicate byte (10 values, raw LLVM
+	//               CmpInst::Predicate ICMP_EQ..ICMP_SLE = 32..41)
+	//   CastKind  — OP_CAST kind byte (8 values, 0..7)
+	//   FBinSubop — OP_BINOP_F sub-opcode byte, op part only (5 values, 0..4);
+	//               the f32-mode flag (bit 7) is masked off before permuting
+	//   FCmpPred  — OP_FCMP predicate byte (14 values, raw LLVM CmpInst::Predicate
+	//               FCMP_OEQ..FCMP_UNO = 1..14; FCMP_FALSE=0 / FCMP_TRUE=15 pass
+	//               through unchanged and still hit the handler's default = 0)
+	//
+	// Not covered (documented, intentionally left identity): Cast64Kind (the
+	// handler branches ext/trunc on a Kind>=C64_TRUNC1 range test — permuting
+	// breaks the ordering), FCastKind (each opcode only does a single binary
+	// signed/unsigned Kind== check — negligible diversity), OP_SELECT kind (a
+	// 3-value register-file selector via structural branches, not a semantic op).
+	// ============================================================================
+
+	struct ISAEnc {
+		static constexpr unsigned kNumBinSubop  = 13;  // BS_ADD .. BS_UREM
+		static constexpr unsigned kNumCastKind  = 8;   // CK_ZEXT1 .. CK_TRUNC16
+		static constexpr unsigned kNumFBinSubop = 5;   // FBS_FADD .. FBS_FREM
+
+		// ICmp / FCmp predicates are raw LLVM CmpInst::Predicate enum values,
+		// contiguous runs. Kept as literals so this header stays free of LLVM IR
+		// includes; static_asserted against the real enum at the (single) use
+		// site in VMPass_Handlers.cpp.
+		static constexpr uint8_t  kIcmpPredBase = 32;  // CmpInst::ICMP_EQ
+		static constexpr unsigned kNumIcmpPred  = 10;  // ICMP_EQ .. ICMP_SLE
+		static constexpr uint8_t  kFcmpPredBase = 1;   // CmpInst::FCMP_OEQ
+		static constexpr unsigned kNumFcmpPred  = 14;  // FCMP_OEQ .. FCMP_UNO
+
+		uint8_t BinSubopL2P[kNumBinSubop];    // logical BinSubop   -> physical byte
+		uint8_t IcmpPredL2P[kNumIcmpPred];    // (pred - base)      -> physical pred byte
+		uint8_t CastKindL2P[kNumCastKind];    // logical CastKind   -> physical byte
+		uint8_t FBinSubopL2P[kNumFBinSubop];  // logical FBinSubop  -> physical byte
+		uint8_t FcmpPredL2P[kNumFcmpPred];    // (pred - base)      -> physical pred byte
+
+		ISAEnc() { initIdentity(); }
+
+		void initIdentity() {
+			for (unsigned i = 0; i < kNumBinSubop; ++i)  BinSubopL2P[i]  = (uint8_t)i;
+			for (unsigned i = 0; i < kNumCastKind; ++i)  CastKindL2P[i]  = (uint8_t)i;
+			for (unsigned i = 0; i < kNumFBinSubop; ++i) FBinSubopL2P[i] = (uint8_t)i;
+			for (unsigned i = 0; i < kNumIcmpPred; ++i)
+				IcmpPredL2P[i] = (uint8_t)(kIcmpPredBase + i);
+			for (unsigned i = 0; i < kNumFcmpPred; ++i)
+				FcmpPredL2P[i] = (uint8_t)(kFcmpPredBase + i);
+		}
+
+		// Deterministic Fisher-Yates over a value domain [Base, Base+N), driven
+		// by a module-uniform RNG. TRand must expose u32().
+		template <typename TRand>
+		static void shuffleInto(TRand& R, uint8_t* Out, unsigned N, uint8_t Base) {
+			for (unsigned i = 0; i < N; ++i) Out[i] = (uint8_t)(Base + i);
+			for (unsigned i = N - 1; i > 0; --i) {
+				unsigned j = (unsigned)(R.u32() % (i + 1));
+				uint8_t tmp = Out[i]; Out[i] = Out[j]; Out[j] = tmp;
+			}
+		}
+
+		// Each family permutes from its OWN RNG (see ISAEnc header) so adding a
+		// family leaves earlier families' maps bit-identical.
+		template <typename TRand>
+		void initPermuted(TRand& R) { shuffleInto(R, BinSubopL2P, kNumBinSubop, 0); }
+		template <typename TRand>
+		void initIcmpPermuted(TRand& R) { shuffleInto(R, IcmpPredL2P, kNumIcmpPred, kIcmpPredBase); }
+		template <typename TRand>
+		void initCastPermuted(TRand& R) { shuffleInto(R, CastKindL2P, kNumCastKind, 0); }
+		template <typename TRand>
+		void initFBinPermuted(TRand& R) { shuffleInto(R, FBinSubopL2P, kNumFBinSubop, 0); }
+		template <typename TRand>
+		void initFcmpPermuted(TRand& R) { shuffleInto(R, FcmpPredL2P, kNumFcmpPred, kFcmpPredBase); }
+
+		uint8_t encBinSubop(uint8_t Logical) const {
+			return (Logical < kNumBinSubop) ? BinSubopL2P[Logical] : Logical;
+		}
+		uint8_t encCastKind(uint8_t Kind) const {
+			return (Kind < kNumCastKind) ? CastKindL2P[Kind] : Kind;
+		}
+		// FBinSubop is the op part only (0..4); callers mask off the bit-7 f32
+		// flag before calling and OR it back onto the result themselves.
+		uint8_t encFBinSubop(uint8_t Op) const {
+			return (Op < kNumFBinSubop) ? FBinSubopL2P[Op] : Op;
+		}
+		uint8_t encIcmpPred(uint8_t Pred) const {
+			unsigned idx = (unsigned)Pred - kIcmpPredBase;
+			return (idx < kNumIcmpPred) ? IcmpPredL2P[idx] : Pred;
+		}
+		uint8_t encFcmpPred(uint8_t Pred) const {
+			unsigned idx = (unsigned)Pred - kFcmpPredBase;
+			return (idx < kNumFcmpPred) ? FcmpPredL2P[idx] : Pred;
+		}
 	};
 
 } // namespace llvm

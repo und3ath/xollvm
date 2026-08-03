@@ -109,6 +109,13 @@ set(OBF_SOURCES
   VMPass_Emitter.cpp
   VMPass_Verifier.cpp
   VMPass_Impl.cpp
+  VMPass_AntiDebug.cpp
+  VMPass_Crypto.cpp
+  VMPass_Dispatch.cpp
+  VMPass_Handlers.cpp
+  VMPass_Harden.cpp
+  VMPass_Nested.cpp
+  VMPass_Wrapper.cpp
   EHUtils.cpp
   TargetCompat.cpp
   FunctionObfContextAnalysis.cpp

@@ -24,6 +24,7 @@ from ._common import (
     render_vm_v7_switch_dispatch_program,
     render_vm_v7_i64_ret_highslot_program,
     render_vm_v7_multiblock_program,
+    render_vm_v7_superops_muladd_hot_program,
 )
 
 
@@ -93,6 +94,33 @@ VM_THREADED_GATES = ["vm_threaded_no_central_dispatch"]
 # with any of the CORE/ENGINE/THREADED gate sets above.
 VM_KEYEDDISP_GATES = ["vm_keyeddisp_ip_xor"]
 
+# superOps: eligible i32 mul+add chains fuse into one OP_MULADD opcode
+# instead of two OP_BINOP opcodes. The handler block is always present
+# (dormant, like any other opcode in the shared engine) regardless of the
+# knob -- see vm_superops_muladd_present's docstring -- so this is a smoke
+# check that the ISA/handler wiring exists, not proof fusion fired. That
+# proof is the differential-output correctness gate every case below
+# already carries (mismatched fusion would produce a wrong answer).
+VM_SUPEROPS_GATES = ["vm_superops_muladd_present"]
+
+# bindAntiDebug: folds debugger detection into the AES round-key mask global
+# via a dedicated .init_array ctor instead of salt-poisoning traps. Purely a
+# .init_array addition -- doesn't touch dispatch/handler structure, so it
+# composes with any of the CORE/ENGINE/THREADED gate sets above. Requires
+# hardened=1 (implies antiDebug=1).
+VM_BINDADEB_GATES = ["vm_bindadeb_ctor_present"]
+
+# randISA: the BinSubop byte encoding (OP_BINOP/OP_BINOP64 subop) is permuted
+# module-uniformly per build, so the shared handler's switch-case constants are
+# non-canonical. Purely a constant-value change on the existing switch -- doesn't
+# touch dispatch/handler structure, so it composes with the CORE/ENGINE gate
+# sets. Needs a program with int binops (the switch must exist to inspect);
+# not attached to pure-float cases or nestedVM cases (which route OP_BINOP to a
+# helper call, so the main handler has no subop switch to inspect).
+VM_RANDISA_GATES = ["vm_randisa_permuted", "vm_randisa_icmp_permuted",
+                    "vm_randisa_cast_permuted", "vm_randisa_fbinsubop_permuted",
+                    "vm_randisa_fcmp_permuted"]
+
 _DBG = ["--obf-debug", "--obf-verbose"]
 
 
@@ -101,7 +129,8 @@ def register(reg: Registry, **_opts) -> None:
 
     reg.add(name="rt_vm_v7_basic", passes=["vm"],
             ann_override=vm_v7,
-            gates=VM_CORE_GATES + ["vm_enc_ctor", "vm_no_threaded_dispatch", "vm_no_keyeddisp"],
+            gates=VM_CORE_GATES + ["vm_enc_ctor", "vm_no_threaded_dispatch",
+                   "vm_no_keyeddisp", "vm_no_bindadeb_ctor", "vm_no_randisa"],
             extra_opts=_DBG, category="vm")
     reg.add(name="rt_vm_v7_bare", passes=["vm"],
             ann_override=ann_extra("vm_v7_bare"),
@@ -694,3 +723,248 @@ def register(reg: Registry, **_opts) -> None:
             ann_override=vm_v7_kd,
             extra_opts=_DBG, gates=["seed_determinism"], category="vm",
             src_override=render_vm_v7_multi_function_program(vm_v7_kd))
+
+    # ── superOps (eligible i32 `mul`+`add` chains fuse into one OP_MULADD
+    # opcode instead of two OP_BINOP opcodes) ──
+    # Correctness gate: differential output proves the fused handler
+    # (dst = a*b + c) computes exactly what the original two-instruction
+    # sequence did. Feature-active gate (VM_SUPEROPS_GATES) is a smoke check
+    # only -- see its docstring for why block presence can't distinguish
+    # on/off under the shared engine.
+    vm_v7_so = ann_extra("vm_v7_superops")
+    vm_v7_so_multi = ann_extra("vm_v7_superops_multi_fn")
+    vm_v7_so_hard = ann_extra("vm_v7_superops_hardened")
+    vm_v7_so_stack = ann_extra("vm_v7_superops_stack")
+
+    reg.add(name="rt_vm_v7_superops_muladd_hot", passes=["vm"],
+            ann_override=vm_v7_so,
+            gates=VM_CORE_GATES + VM_SUPEROPS_GATES + ["vm_enc_ctor"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_superops_muladd_hot_program(vm_v7_so))
+    reg.add(name="rt_vm_v7_superops_multi_fn", passes=["vm"],
+            ann_override=vm_v7_so_multi,
+            gates=VM_SHARED_GATES + VM_SUPEROPS_GATES + [
+                "vm_enc_ctor", "vm_callees_global", "vm_multi_fn_shared",
+            ],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_multi_fn_aes_program(vm_v7_so_multi))
+    reg.add(name="rt_vm_v7_superops_hardened", passes=["vm"],
+            ann_override=vm_v7_so_hard,
+            gates=VM_CORE_GATES + VM_SUPEROPS_GATES + [
+                "vm_enc_ctor", "vm_hardened_mba", "vm_hardened_dead_blocks",
+                "vm_hardened_dispatch_guard", "vm_hardened_handler_guards",
+            ],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_superops_muladd_hot_program(vm_v7_so_hard))
+    # Full-stack composition: superOps + threadedDispatch + keyedDispatch +
+    # encDispatch + lazyDecrypt + constInStream + nestedVM together, proven
+    # against the muladd-heavy program so fusion is actually exercised under
+    # every other hardening layer at once.
+    reg.add(name="rt_vm_v7_superops_stack", passes=["vm"],
+            ann_override=vm_v7_so_stack,
+            gates=VM_THREADED_SHARED_GATES + VM_THREADED_GATES + VM_KEYEDDISP_GATES
+                + VM_SUPEROPS_GATES + VM_AES_GATES + VM_LAZYDECRYPT_GATES
+                + VM_CONSTINSTREAM_GATES + VM_NESTEDVM_GATES
+                + ["vm_enc_ctor"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_superops_muladd_hot_program(vm_v7_so_stack))
+    reg.add(name="rt_vm_v7_superops_determinism", passes=["vm"],
+            ann_override=vm_v7_so,
+            extra_opts=_DBG, gates=["seed_determinism"], category="vm",
+            src_override=render_vm_v7_superops_muladd_hot_program(vm_v7_so))
+
+    # ── bindAntiDebug (fold debugger detection into the AES round-key mask
+    # global via a dedicated .init_array ctor at priority 100, instead of
+    # salt-poisoning traps a patched detection call can simply avoid
+    # triggering) ──
+    # Correctness gate: differential output proves the ctor's XOR-with-0
+    # no-op path (no debugger) leaves the AES key intact and bytecode decodes
+    # correctly. Feature-active gate (VM_BINDADEB_GATES) proves the ctor and
+    # its debugger-detection call are actually emitted. bindAntiDebug always
+    # requires hardened=1, so every case here also carries the hardened gates.
+    vm_v7_bd = ann_extra("vm_v7_bindadeb")
+    vm_v7_bd_multi = ann_extra("vm_v7_bindadeb_multi_fn")
+    vm_v7_bd_stack = ann_extra("vm_v7_bindadeb_stack")
+
+    reg.add(name="rt_vm_v7_bindadeb_multi_fn", passes=["vm"],
+            ann_override=vm_v7_bd_multi,
+            gates=VM_SHARED_GATES + VM_BINDADEB_GATES + [
+                "vm_enc_ctor", "vm_callees_global", "vm_multi_fn_shared",
+                "vm_hardened_mba", "vm_hardened_dead_blocks",
+                "vm_hardened_dispatch_guard", "vm_hardened_handler_guards",
+            ],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_multi_fn_aes_program(vm_v7_bd_multi))
+    reg.add(name="rt_vm_v7_bindadeb_i64", passes=["vm"],
+            ann_override=vm_v7_bd,
+            gates=VM_CORE_GATES + VM_BINDADEB_GATES + [
+                "vm_enc_ctor", "vm_hardened_mba", "vm_hardened_dead_blocks",
+                "vm_hardened_dispatch_guard", "vm_hardened_handler_guards",
+            ],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_i64_ops_program(vm_v7_bd))
+    reg.add(name="rt_vm_v7_bindadeb_float", passes=["vm"],
+            ann_override=vm_v7_bd,
+            gates=VM_CORE_GATES + VM_BINDADEB_GATES + [
+                "vm_fregs_alloca", "vm_enc_ctor",
+                "vm_hardened_mba", "vm_hardened_dead_blocks",
+                "vm_hardened_dispatch_guard", "vm_hardened_handler_guards",
+            ],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_float_basic_program(vm_v7_bd))
+    reg.add(name="rt_vm_v7_bindadeb_switch", passes=["vm"],
+            ann_override=vm_v7_bd,
+            gates=VM_CORE_GATES + VM_BINDADEB_GATES + [
+                "vm_enc_ctor", "vm_hardened_mba", "vm_hardened_dead_blocks",
+                "vm_hardened_dispatch_guard", "vm_hardened_handler_guards",
+            ],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_switch_dispatch_program(vm_v7_bd))
+    # Full-stack composition: bindAntiDebug + threadedDispatch + keyedDispatch +
+    # encDispatch + lazyDecrypt + constInStream + nestedVM + superOps together.
+    # threadedDispatch removes the central vm.dispatch/vm.fetch pair, which
+    # also makes hardenVMEngine's dead-block/pre-dispatch-split hardening a
+    # structural no-op (cf. rt_vm_v7_threaded_hardened) -- MBA and handler-entry
+    # guards stay active and are still checked.
+    reg.add(name="rt_vm_v7_bindadeb_stack", passes=["vm"],
+            ann_override=vm_v7_bd_stack,
+            gates=VM_THREADED_SHARED_GATES + VM_THREADED_GATES + VM_BINDADEB_GATES
+                + VM_KEYEDDISP_GATES + VM_AES_GATES + VM_LAZYDECRYPT_GATES
+                + VM_CONSTINSTREAM_GATES + VM_NESTEDVM_GATES + VM_SUPEROPS_GATES
+                + ["vm_enc_ctor", "vm_multi_fn_shared",
+                   "vm_hardened_mba", "vm_hardened_handler_guards"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_switch_dispatch_program(vm_v7_bd_stack))
+    reg.add(name="rt_vm_v7_bindadeb_determinism", passes=["vm"],
+            ann_override=vm_v7_bd,
+            extra_opts=_DBG, gates=["seed_determinism"], category="vm",
+            src_override=render_vm_v7_multi_function_program(vm_v7_bd))
+
+    # ── randISA (per-build permutation of the BinSubop byte encoding, so the
+    # OP_BINOP/OP_BINOP64 handler's subop switch-case constants and the emitted
+    # bytecode subop bytes differ across builds) ──
+    # Correctness gate: differential output proves the permuted subop bytes
+    # decode to the right operation through the permuted handler switch.
+    # Feature-active gate (VM_RANDISA_GATES) proves the switch case values are
+    # actually non-canonical, i.e. the permutation reached the handler (not a
+    # silent no-op). Not attached to the float case (BinSubop is integer-only)
+    # or the stack case (nestedVM routes OP_BINOP to a helper call, so the main
+    # handler carries no subop switch to inspect) -- those rely on correctness +
+    # the inner helper's own permuted switch matching the plain engine.
+    vm_v7_ri = ann_extra("vm_v7_randisa")
+    vm_v7_ri_multi = ann_extra("vm_v7_randisa_multi_fn")
+    vm_v7_ri_hard = ann_extra("vm_v7_randisa_hardened")
+    vm_v7_ri_stack = ann_extra("vm_v7_randisa_stack")
+
+    reg.add(name="rt_vm_v7_randisa_multi_fn", passes=["vm"],
+            ann_override=vm_v7_ri_multi,
+            gates=VM_SHARED_GATES + VM_RANDISA_GATES + [
+                "vm_enc_ctor", "vm_callees_global", "vm_multi_fn_shared",
+            ],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_multi_fn_aes_program(vm_v7_ri_multi))
+    reg.add(name="rt_vm_v7_randisa_i64", passes=["vm"],
+            ann_override=vm_v7_ri,
+            gates=VM_SHARED_GATES + VM_RANDISA_GATES + ["vm_enc_ctor"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_i64_ops_program(vm_v7_ri))
+    reg.add(name="rt_vm_v7_randisa_float", passes=["vm"],
+            ann_override=vm_v7_ri,
+            gates=VM_SHARED_GATES + ["vm_fregs_alloca", "vm_enc_ctor"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_float_basic_program(vm_v7_ri))
+    reg.add(name="rt_vm_v7_randisa_switch", passes=["vm"],
+            ann_override=vm_v7_ri,
+            gates=VM_SHARED_GATES + VM_RANDISA_GATES + [
+                "vm_enc_ctor", "vm_multi_fn_shared",
+            ],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_switch_dispatch_program(vm_v7_ri))
+    # hardened + randISA: hardening (MBA on handler bodies, dead blocks,
+    # dispatch/handler guards) is orthogonal to the subop-encoding permutation
+    # -- diversifyHandlerVariants rewrites the arithmetic inside the case
+    # blocks, not the switch case constants -- so the full hardened gate set
+    # applies unchanged and the permutation gate still holds.
+    reg.add(name="rt_vm_v7_randisa_hardened", passes=["vm"],
+            ann_override=vm_v7_ri_hard,
+            gates=VM_CORE_GATES + VM_RANDISA_GATES + [
+                "vm_enc_ctor", "vm_hardened_mba", "vm_hardened_dead_blocks",
+                "vm_hardened_dispatch_guard", "vm_hardened_handler_guards",
+            ],
+            extra_opts=_DBG, category="vm")
+    # Full-stack composition: randISA + nestedVM + superOps + threadedDispatch +
+    # keyedDispatch + encDispatch + lazyDecrypt + constInStream + useAES. The
+    # critical interaction is randISA + nestedVM: the inner-helper emitter must
+    # write the SAME permuted subop bytes the plain engine's handler decodes,
+    # and the helper's own subop switch must carry the same permuted cases --
+    # a mismatch would miscompute (caught by the differential-output gate).
+    reg.add(name="rt_vm_v7_randisa_stack", passes=["vm"],
+            ann_override=vm_v7_ri_stack,
+            gates=VM_THREADED_SHARED_GATES + VM_THREADED_GATES + VM_KEYEDDISP_GATES
+                + VM_AES_GATES + VM_LAZYDECRYPT_GATES + VM_CONSTINSTREAM_GATES
+                + VM_NESTEDVM_GATES + VM_SUPEROPS_GATES
+                + ["vm_enc_ctor", "vm_multi_fn_shared"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_switch_dispatch_program(vm_v7_ri_stack))
+    reg.add(name="rt_vm_v7_randisa_determinism", passes=["vm"],
+            ann_override=vm_v7_ri,
+            extra_opts=_DBG, gates=["seed_determinism"], category="vm",
+            src_override=render_vm_v7_multi_function_program(vm_v7_ri))
+
+    # ── preset=<light|medium|high|max> config-surface shortcut ──
+    # Resolved in VMPassConfig::fromPassConfig before the explicit-knob getBool/
+    # getUInt calls, so this is a pure config-resolution convenience, not a new
+    # hardening feature: no new opcodes, no new IR marker. Gates below reuse the
+    # existing feature-active gates the resolved knobs already carry.
+    # medium is the acceptance case: it must resolve to exactly today's
+    # defaults, so its gate set intentionally mirrors rt_vm_v7_basic's (proving
+    # equivalence), not the fuller multi-fn shared-engine gate set.
+    vm_v7_preset_light = ann_extra("vm_v7_preset_light")
+    vm_v7_preset_medium = ann_extra("vm_v7_preset_medium")
+    vm_v7_preset_high = ann_extra("vm_v7_preset_high")
+    vm_v7_preset_max = ann_extra("vm_v7_preset_max")
+
+    reg.add(name="rt_vm_v7_preset_light_multi_fn", passes=["vm"],
+            ann_override=vm_v7_preset_light,
+            gates=VM_CORE_GATES + ["vm_enc_ctor"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_multi_fn_aes_program(vm_v7_preset_light))
+    reg.add(name="rt_vm_v7_preset_medium_multi_fn", passes=["vm"],
+            ann_override=vm_v7_preset_medium,
+            gates=VM_CORE_GATES + ["vm_enc_ctor", "vm_no_threaded_dispatch", "vm_no_keyeddisp"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_multi_fn_aes_program(vm_v7_preset_medium))
+    # high/max both set threadedDispatch=1, which removes the single central
+    # vm.dispatch/vm.fetch pair -- so (as with every other threadedDispatch
+    # case in this file, e.g. rt_vm_v7_threaded_multi_fn) the shared-engine
+    # gate set must drop vm_dispatch_present/vm_engine_dispatch via
+    # VM_THREADED_SHARED_GATES instead of the plain VM_SHARED_GATES.
+    reg.add(name="rt_vm_v7_preset_high_multi_fn", passes=["vm"],
+            ann_override=vm_v7_preset_high,
+            gates=VM_THREADED_SHARED_GATES + VM_THREADED_GATES,
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_multi_fn_aes_program(vm_v7_preset_high))
+    reg.add(name="rt_vm_v7_preset_max_multi_fn", passes=["vm"],
+            ann_override=vm_v7_preset_max,
+            gates=VM_THREADED_SHARED_GATES + VM_LAZYDECRYPT_GATES + VM_CONSTINSTREAM_GATES
+                + VM_NESTEDVM_GATES + VM_SUPEROPS_GATES + VM_KEYEDDISP_GATES
+                + VM_BINDADEB_GATES + VM_THREADED_GATES,
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_multi_fn_aes_program(vm_v7_preset_max))
+
+    reg.add(name="rt_vm_v7_preset_light_determinism", passes=["vm"],
+            ann_override=vm_v7_preset_light,
+            extra_opts=_DBG, gates=["seed_determinism"], category="vm",
+            src_override=render_vm_v7_multi_function_program(vm_v7_preset_light))
+    reg.add(name="rt_vm_v7_preset_medium_determinism", passes=["vm"],
+            ann_override=vm_v7_preset_medium,
+            extra_opts=_DBG, gates=["seed_determinism"], category="vm",
+            src_override=render_vm_v7_multi_function_program(vm_v7_preset_medium))
+    reg.add(name="rt_vm_v7_preset_high_determinism", passes=["vm"],
+            ann_override=vm_v7_preset_high,
+            extra_opts=_DBG, gates=["seed_determinism"], category="vm",
+            src_override=render_vm_v7_multi_function_program(vm_v7_preset_high))
+    reg.add(name="rt_vm_v7_preset_max_determinism", passes=["vm"],
+            ann_override=vm_v7_preset_max,
+            extra_opts=_DBG, gates=["seed_determinism"], category="vm",
+            src_override=render_vm_v7_multi_function_program(vm_v7_preset_max))

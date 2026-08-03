@@ -40,4 +40,5 @@ CLAUDE.md
 *.user
 
 # Private planning docs (never commit)
-docs/VM_HARDENING_PLAN.md
+.claude/
+docs/VM_GAP_ANALYSIS.md

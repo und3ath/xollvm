@@ -35,6 +35,62 @@ using namespace llvm;
 VMPassConfig VMPassConfig::fromPassConfig(const PassConfig& PC) {
 	VMPassConfig Cfg;
 	Cfg.enable = PC.enabled;
+
+	// preset=<light|medium|high|max>: shortcut bundle applied before explicit
+	// knobs below, so any explicit knob in the annotation overrides the preset.
+	auto It = PC.params.find("preset");
+	if (It != PC.params.end()) {
+		const std::string& P = It->second;
+		if (P == "light") {
+			// always-on baseline + K=1, no other hardening
+			Cfg.obfRegIdx = true;
+			Cfg.encBytecode = true;
+			Cfg.handlerVariants = 1;
+			Cfg.encDispatch = false;
+			Cfg.strongBytecode = false;
+			Cfg.blindTargets = false;
+		} else if (P == "medium") {
+			// current defaults; explicit for readability + stability
+			Cfg.obfRegIdx = true;
+			Cfg.encBytecode = true;
+			Cfg.handlerVariants = 3;
+			Cfg.encDispatch = true;
+			Cfg.strongBytecode = true;
+			Cfg.blindTargets = true;
+		} else if (P == "high") {
+			// medium + hardened + threaded + keyed
+			Cfg.obfRegIdx = true;
+			Cfg.encBytecode = true;
+			Cfg.handlerVariants = 3;
+			Cfg.encDispatch = true;
+			Cfg.strongBytecode = true;
+			Cfg.blindTargets = true;
+			Cfg.hardened = true;
+			Cfg.threadedDispatch = true;
+			Cfg.keyedDispatch = true;
+		} else if (P == "max") {
+			// high + all remaining knobs on
+			Cfg.obfRegIdx = true;
+			Cfg.encBytecode = true;
+			Cfg.handlerVariants = 3;
+			Cfg.encDispatch = true;
+			Cfg.strongBytecode = true;
+			Cfg.blindTargets = true;
+			Cfg.hardened = true;
+			Cfg.threadedDispatch = true;
+			Cfg.keyedDispatch = true;
+			Cfg.lazyDecrypt = true;
+			Cfg.constInStream = true;
+			Cfg.nestedVM = true;
+			Cfg.superOps = true;
+			Cfg.rollingRegKey = true;
+			Cfg.bindAntiDebug = true;
+			Cfg.randISA = true;
+		}
+		// Unknown preset name: silently ignore, falls through to defaults +
+		// explicit knobs.
+	}
+
 	auto getUInt = [&](StringRef K, unsigned& O) {
 		auto It = PC.params.find(K.str());
 		if (It != PC.params.end()) O = (unsigned)std::stoul(It->second);
@@ -51,7 +107,6 @@ VMPassConfig VMPassConfig::fromPassConfig(const PassConfig& PC) {
 	getBool("constInStream", Cfg.constInStream);
 	getBool("strongBytecode", Cfg.strongBytecode);
 	getBool("blindTargets", Cfg.blindTargets);
-	getBool("useAES", Cfg.useAES);
 	getBool("lazyDecrypt", Cfg.lazyDecrypt);
 	getBool("hardened", Cfg.hardened);
 	getBool("regEncrypt", Cfg.regEncrypt);
@@ -61,18 +116,18 @@ VMPassConfig VMPassConfig::fromPassConfig(const PassConfig& PC) {
 	getUInt("adHandlerThreshold", Cfg.adHandlerThreshold);
 	getUInt("adDispatchInterval", Cfg.adDispatchInterval);
 	getUInt("adHandlerProb", Cfg.adHandlerProb);
+	getBool("bindAntiDebug", Cfg.bindAntiDebug);
 	getUInt("handlerVariants", Cfg.handlerVariants);
 	getBool("nestedVM", Cfg.nestedVM);
 	getUInt("nestedVMOpcodes", Cfg.nestedVMOpcodes);
 	getBool("nestedVMHardened", Cfg.nestedVMHardened);
 	getBool("threadedDispatch", Cfg.threadedDispatch);
 	getBool("keyedDispatch", Cfg.keyedDispatch);
+	getBool("superOps", Cfg.superOps);
+	getBool("randISA", Cfg.randISA);
 
-	// useAES requires encBytecode — if the user disabled encryption entirely,
-	// AES has nothing to replace.
-	if (!Cfg.encBytecode) Cfg.useAES = false;
-	// lazyDecrypt requires useAES — nothing to defer if AES isn't the cipher.
-	if (!Cfg.useAES) Cfg.lazyDecrypt = false;
+	// lazyDecrypt requires encBytecode — nothing to defer if bytecode isn't encrypted.
+	if (!Cfg.encBytecode) Cfg.lazyDecrypt = false;
 	// hardened requires encBytecode (meaningful only with encrypted bytecode)
 	if (!Cfg.encBytecode) Cfg.hardened = false;
 	// constInStream requires encBytecode — the whole point is to hide constants
@@ -80,6 +135,8 @@ VMPassConfig VMPassConfig::fromPassConfig(const PassConfig& PC) {
 	if (!Cfg.encBytecode) Cfg.constInStream = false;
 	// hardened implies regEncrypt — encrypted registers complement MBA-obscured handlers
 	if (Cfg.hardened) Cfg.regEncrypt = true;
+	// bindAntiDebug requires hardened + antiDebug (its detection substrate)
+	if (!Cfg.hardened || !Cfg.antiDebug) Cfg.bindAntiDebug = false;
 	if (Cfg.handlerVariants < 1) Cfg.handlerVariants = 1;
 	if (Cfg.handlerVariants > kMaxHandlerVariants) Cfg.handlerVariants = kMaxHandlerVariants;
 	return Cfg;

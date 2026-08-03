@@ -283,14 +283,62 @@ uint32_t BytecodeEmitter::bsize(BasicBlock* BB) {
 }
 
 
+// superOps: find `%m = mul i32 %a,%b; %d = add i32 %m,%c` chains where %m
+// has exactly one use (the add) and that use is a direct i32 add (not
+// through a cast/phi/select). The fused OP_MULADD is emitted where the ADD
+// naturally sits in program order (see emit(Instruction*)), not at the
+// mul's position -- so no operand-availability check is needed here: SSA
+// dominance already guarantees every operand the add has in the original
+// program, including the mul's own inputs (which dominate the mul and
+// therefore the add too), is resolvable by the time the add's position is
+// reached, regardless of which block either instruction is in.
+void BytecodeEmitter::scanSuperOps(Function& F) {
+	for (BasicBlock& BB : F) {
+		for (Instruction& I : BB) {
+			if (I.getOpcode() != Instruction::Mul) continue;
+			if (!I.getType()->isIntegerTy(32)) continue;
+			if (!I.hasOneUse()) continue;
+
+			auto* Add = dyn_cast<Instruction>(I.user_back());
+			if (!Add || Add->getOpcode() != Instruction::Add) continue;
+			if (!Add->getType()->isIntegerTy(32)) continue;
+			if (FusedAddToMul.count(Add)) continue;  // add already claimed by another mul
+
+			FusedAddToMul[Add] = &I;
+			SkippedMuls.insert(&I);
+		}
+	}
+}
+
+
 void BytecodeEmitter::emit(Instruction* I) {
 	if (isa<AllocaInst>(I) || isa<UnreachableInst>(I))
 		return;
 
+	// superOps: this mul's result is computed inline by its fused add's
+	// OP_MULADD (below) instead of its own OP_BINOP.
+	if (SuperOps && SkippedMuls.count(I))
+		return;
 
 	unsigned Op = I->getOpcode();
 	Type* Ty = I->getType();
 
+	// superOps: this add is fused with a preceding mul -- emit one
+	// OP_MULADD here (at the add's own position) instead of the mul's
+	// OP_BINOP + this add's OP_BINOP.
+	if (SuperOps && Op == Instruction::Add) {
+		auto FIt = FusedAddToMul.find(I);
+		if (FIt != FusedAddToMul.end()) {
+			Instruction* Mul = FIt->second;
+			Value* C = (I->getOperand(0) == Mul) ? I->getOperand(1) : I->getOperand(0);
+			bop(OP_MULADD);
+			b8(xorSalt(newVR(I)));                // dst slot = this add's own result
+			b8(xorSalt(vr(Mul->getOperand(0))));  // a
+			b8(xorSalt(vr(Mul->getOperand(1))));  // b
+			b8(xorSalt(vr(C)));                   // c
+			return;
+		}
+	}
 
 	if (Op == Instruction::Add || Op == Instruction::Sub || Op == Instruction::Mul ||
 		Op == Instruction::And || Op == Instruction::Or || Op == Instruction::Xor ||
@@ -318,7 +366,7 @@ void BytecodeEmitter::emit(Instruction* I) {
 		b8(xorSalt(Is64 ? newVR64(I) : newVR(I)));
 		b8(xorSalt(Is64 ? vr64(I->getOperand(0)) : vr(I->getOperand(0))));
 		b8(xorSalt(Is64 ? vr64(I->getOperand(1)) : vr(I->getOperand(1))));
-		b8(Sub); return;
+		b8(encBinSubop((uint8_t)Sub)); return;
 	}
 
 
@@ -347,7 +395,8 @@ void BytecodeEmitter::emit(Instruction* I) {
 		for (int i = 0; i < 5; i++) if (FOL[i] == Op) { FSub = FSL[i]; break; }
 		// Bit 7 (FBS_F32_FLAG): round f64 result to f32 precision.
 		// Set when the source instruction has float (not double) type.
-		uint8_t FSubByte = (uint8_t)FSub;
+		// randISA permutes the op part only; the flag bit is OR'd back after.
+		uint8_t FSubByte = encFBinSubop((uint8_t)FSub);
 		if (Ty->isFloatTy()) FSubByte |= (uint8_t)FBS_F32_FLAG;
 		bop(OP_BINOP_F);
 		b8(xorSalt(newFR(I))); b8(xorSalt(fr(I->getOperand(0)))); b8(xorSalt(fr(I->getOperand(1)))); b8(FSubByte); return;
@@ -361,7 +410,7 @@ void BytecodeEmitter::emit(Instruction* I) {
 		Type* T0 = FCI->getOperand(0)->getType();
 		if (!(T0->isFloatTy() || T0->isDoubleTy())) { markUnsupported(I); return; }
 		bop(OP_FCMP);
-		b8(xorSalt(newVR(I))); b8(xorSalt(fr(FCI->getOperand(0)))); b8(xorSalt(fr(FCI->getOperand(1)))); b8((uint8_t)FCI->getPredicate()); return;
+		b8(xorSalt(newVR(I))); b8(xorSalt(fr(FCI->getOperand(0)))); b8(xorSalt(fr(FCI->getOperand(1)))); b8(encFcmpPred((uint8_t)FCI->getPredicate())); return;
 	}
 
 
@@ -416,7 +465,7 @@ void BytecodeEmitter::emit(Instruction* I) {
 			b8(xorSalt(newVR(I)));
 			b8(xorSalt(vr(CI->getOperand(0))));
 			b8(xorSalt(vr(CI->getOperand(1))));
-			b8((uint8_t)CI->getPredicate());
+			b8(encIcmpPred((uint8_t)CI->getPredicate()));
 			return;
 		}
 		if (T0->isIntegerTy(64) && T1->isIntegerTy(64)) {
@@ -424,7 +473,7 @@ void BytecodeEmitter::emit(Instruction* I) {
 			b8(xorSalt(newVR(I)));
 			b8(xorSalt(vr64(CI->getOperand(0))));
 			b8(xorSalt(vr64(CI->getOperand(1))));
-			b8((uint8_t)CI->getPredicate());
+			b8(encIcmpPred((uint8_t)CI->getPredicate()));
 			return;
 
 		}
@@ -439,7 +488,7 @@ void BytecodeEmitter::emit(Instruction* I) {
 		if (Ty->isIntegerTy(32)) {
 			if (W != 1 && W != 8 && W != 16) { markUnsupported(I); return; }
 			CastKind K = (W == 1) ? CK_ZEXT1 : (W == 8) ? CK_ZEXT8 : CK_ZEXT16;
-			bop(OP_CAST); b8(xorSalt(newVR(I))); b8(xorSalt(vr(I->getOperand(0)))); b8(K); return;
+			bop(OP_CAST); b8(xorSalt(newVR(I))); b8(xorSalt(vr(I->getOperand(0)))); b8(encCastKind((uint8_t)K)); return;
 		}
 		if (Ty->isIntegerTy(64)) {
 			Cast64Kind K =
@@ -457,7 +506,7 @@ void BytecodeEmitter::emit(Instruction* I) {
 		if (Ty->isIntegerTy(32)) {
 			if (W != 8 && W != 16) { markUnsupported(I); return; }
 			CastKind K = (W == 8) ? CK_SEXT8 : CK_SEXT16;
-			bop(OP_CAST); b8(xorSalt(newVR(I))); b8(xorSalt(vr(I->getOperand(0)))); b8(K); return;
+			bop(OP_CAST); b8(xorSalt(newVR(I))); b8(xorSalt(vr(I->getOperand(0)))); b8(encCastKind((uint8_t)K)); return;
 		}
 		if (Ty->isIntegerTy(64)) {
 			Cast64Kind K =
@@ -475,7 +524,7 @@ void BytecodeEmitter::emit(Instruction* I) {
 		if (STy->isIntegerTy(32)) {
 			if (W != 1 && W != 8 && W != 16) { markUnsupported(I); return; }
 			CastKind K = (W == 1) ? CK_TRUNC1 : (W == 8) ? CK_TRUNC8 : CK_TRUNC16;
-			bop(OP_CAST); b8(xorSalt(newVR(I))); b8(xorSalt(vr(I->getOperand(0)))); b8(K); return;
+			bop(OP_CAST); b8(xorSalt(newVR(I))); b8(xorSalt(vr(I->getOperand(0)))); b8(encCastKind((uint8_t)K)); return;
 		}
 		if (STy->isIntegerTy(64)) {
 			Cast64Kind K =
@@ -836,6 +885,8 @@ bool BytecodeEmitter::run(Function& F, uint8_t S, const DataLayout& D) {
 	ImmLoadsF.clear();
 	Fixups.clear();
 	NVR = NVR64 = NPR = NFR = 0;
+	FusedAddToMul.clear();
+	SkippedMuls.clear();
 
 	Unsupported = false;
 	FirstUnsupportedInst = nullptr;
@@ -901,12 +952,25 @@ bool BytecodeEmitter::run(Function& F, uint8_t S, const DataLayout& D) {
 		PHIAllocas.push_back(std::move(D));
 	}
 
+	// superOps: identify fusion candidates before slot pre-assignment, so the
+	// pre-assignment loop below can skip handing a fused-away mul its own
+	// (unused) slot.
+	if (SuperOps) scanSuperOps(F);
+
 	// Pre-assign slots for *all* instruction results (except allocas/unreachable).
 	// This removes any reliance on basic-block iteration order for vr()/pr() lookups,
 	// and makes constants/pointer-const pools naturally allocate "above" all SSA results.
 	for (BasicBlock& BB : F) {
 		for (Instruction& I : BB) {
 			if (isa<AllocaInst>(&I) || isa<UnreachableInst>(&I)) continue;
+
+			// superOps: a fused-away mul's own SSA value never gets a slot --
+			// its result is computed inline by its fused add's OP_MULADD. The
+			// add itself needs no special-casing here: it falls through to
+			// the normal integer-slot assignment just below, exactly as any
+			// other i32-producing instruction would.
+			if (SuperOps && SkippedMuls.count(&I)) continue;
+
 			Type* Ty = I.getType();
 			if (Ty->isVoidTy()) continue;
 

@@ -260,6 +260,35 @@ namespace llvm {
 	} // namespace VMEngine
 
 
+	// Nested-VM helper symbol names + fixed nesting order. Single definition
+	// via inline constexpr so every translation unit sees the same objects.
+	inline constexpr const char* kNestedBinopHelperName   = "__vm_h_binop";
+	inline constexpr const char* kNestedBinop64HelperName = "__vm_h_binop64";
+	inline constexpr const char* kNestedIcmpHelperName    = "__vm_h_icmp";
+	inline constexpr const char* kNestedIcmp64HelperName  = "__vm_h_icmp64";
+	inline constexpr const char* kNestedFcmpHelperName    = "__vm_h_fcmp";
+	inline constexpr const char* kNestedCastHelperName    = "__vm_h_cast";
+	inline constexpr const char* kNestedBinopFHelperName  = "__vm_h_binop_f";
+
+	// Fixed deterministic nesting order, consumed by VMImpl::run()
+	// (helper creation), opcodeNests() (the nestedVMOpcodes cap) and
+	// virtualizeNestedHelpersOnce() (inner virtualization). When
+	// NestedVMOpcodes==N>0, only the first N entries of this list nest;
+	// the rest stay inline.
+	struct NestedHelperDesc { VMOp Op; const char* Name; };
+	inline constexpr NestedHelperDesc kNestedHelperOrder[] = {
+		{ OP_BINOP,   kNestedBinopHelperName   },
+		{ OP_BINOP64, kNestedBinop64HelperName },
+		{ OP_ICMP,    kNestedIcmpHelperName    },
+		{ OP_ICMP64,  kNestedIcmp64HelperName  },
+		{ OP_FCMP,    kNestedFcmpHelperName    },
+		{ OP_CAST,    kNestedCastHelperName    },
+		{ OP_BINOP_F, kNestedBinopFHelperName  },
+	};
+	inline constexpr unsigned kNumNestedHelpers =
+		sizeof(kNestedHelperOrder) / sizeof(kNestedHelperOrder[0]);
+
+
 	struct VMImpl {
 		Function& F;
 		Module& M;
@@ -279,7 +308,6 @@ namespace llvm {
 		const bool     EncBytecode;
 		const bool     StrongBC;     // P3: per-position PRF Layer-1 keystream
 		const bool     BlindTargets; // P3-B: XOR-blind bytecode branch targets
-		const bool     UseAES;       // AES-CTR replaces LCG
 		const bool     LazyDecrypt;  // AES layer removed per-instruction at fetch instead of whole-buffer in ctor
 		const bool     RegEncrypt;   // XOR-encrypt register values at rest
 		const bool     RollingRegKey; // P4-C: evolve per-slot reg XOR key on each store
@@ -289,6 +317,9 @@ namespace llvm {
 		const bool     NestedVMHardened; // reserved: harden the inner VM layer
 		const bool     ThreadedDispatch; // inline fetch/decode/indirectbr into every handler's back-edge; no central vm.dispatch/vm.fetch
 		const bool     KeyedDispatch;    // XOR each opcode byte with a per-IP compile-time key at emit/fetch time
+		const bool     SuperOps;         // fuse eligible i32 mul+add chains into one OP_MULADD opcode at emission
+		const bool     BindAntiDebug;    // fold anti-debug detection into the AES round-key mask instead of salt-poisoning traps
+		const bool     RandISA;          // per-build permutation of semantic operand-field byte encodings (currently BinSubop)
 		// Which shared engine this build targets: 0 = plain ("__vm_engine"),
 		// 1 = nesting ("__vm_engine.nest"). Derived from NestedVM, not an
 		// independent knob -- a nestedVM=true build always wants the engine
@@ -297,9 +328,15 @@ namespace llvm {
 		const unsigned EngineId;
 		const uint32_t SaltConst;    // full 32-bit salt stored in vm.salt
 		const uint8_t  CTSalt;       // low byte of SaltConst must match deobf() key
-		const uint64_t EncSeed;      // seed for bytecode LCG encryption
+		// Module-uniform obfuscation seed (Ann.ModuleSeed). Same value for every
+		// function of the module — the derivation source for RandISA's module-wide
+		// operand-encoding permutation (must agree between the shared handler and
+		// every per-function/nested emitter). Passed explicitly through the
+		// synthetic ctor so nested-helper virtualization inherits the same map.
+		const uint64_t MasterSeed;
 
 		VMOpcodeMap OpMap;
+		ISAEnc      IsaEnc;   // identity unless RandISA; module-uniform subop-byte permutation
 
 		BytecodeEmitter E;
 		std::string FailReason;
@@ -360,7 +397,7 @@ namespace llvm {
 
 		// lazyDecrypt: forward-declared/looked-up once per module (during the
 		// founding function's populateVMEngine call) so the shared engine's
-		// fetch path can call it before buildEncryptCtorAES() links the stub.
+		// fetch path can call it before buildEncryptCtor() links the stub.
 		Function* KeystreamFn = nullptr;
 
 		// Handler indirection layer
@@ -412,12 +449,14 @@ namespace llvm {
 
 		// Normal per-function path: config + RNG come from the annotation-driven
 		// VMCtx (FunctionObfContextAnalysis-backed).
-		explicit VMImpl(VMCtx& VCtx) : VMImpl(VCtx.F, VCtx.Cfg, VCtx.R) {}
+		explicit VMImpl(VMCtx& VCtx) : VMImpl(VCtx.F, VCtx.Cfg, VCtx.R, VCtx.MasterSeed) {}
 
 		// Synthetic-function path: explicit config + RNG, no VMCtx/annotation.
 		// Used to virtualize compiler-authored helper functions (e.g. nested-VM
-		// opcode helpers) that have no FunctionObfContext of their own.
-		VMImpl(Function& Fn, const VMPassConfig& CfgIn, obf::Rng& RIn)
+		// opcode helpers) that have no FunctionObfContext of their own. The caller
+		// must forward the outer module's MasterSeed so RandISA's operand-encoding
+		// map is identical to the shared handler and the outer emitters.
+		VMImpl(Function& Fn, const VMPassConfig& CfgIn, obf::Rng& RIn, uint64_t MasterSeedIn = 0)
 			: F(Fn), M(*Fn.getParent()), Ctx(Fn.getContext()),
 			I8Ty(Type::getInt8Ty(Ctx)),
 			I16Ty(Type::getInt16Ty(Ctx)),
@@ -430,7 +469,6 @@ namespace llvm {
 			EncBytecode(Cfg.encBytecode),
 			StrongBC(Cfg.strongBytecode),
 			BlindTargets(Cfg.blindTargets),
-			UseAES(Cfg.useAES),
 			LazyDecrypt(Cfg.lazyDecrypt),
 			RegEncrypt(Cfg.regEncrypt),
 			RollingRegKey(Cfg.rollingRegKey),
@@ -440,28 +478,50 @@ namespace llvm {
 			NestedVMHardened(Cfg.nestedVMHardened),
 			ThreadedDispatch(Cfg.threadedDispatch),
 			KeyedDispatch(Cfg.keyedDispatch),
+			SuperOps(Cfg.superOps),
+			BindAntiDebug(Cfg.bindAntiDebug),
+			RandISA(Cfg.randISA),
 			EngineId(NestedVM ? 1u : 0u),
 			SaltConst(R.u32()),
 			// IMPORTANT: indices are only XOR-salted when obfRegIdx=1.
 			// When obfRegIdx=0, emitter must write raw indices (CTSalt=0).
 			CTSalt(ObfRegIdx ? (uint8_t)(SaltConst & 0xFF) : 0),
-			EncSeed(((uint64_t)R.u32() << 32) | R.u32()) {
+			MasterSeed(MasterSeedIn) {
 			// per-function opcode permutation for handler-table/bytecode diversity.
 			OpMap.initPermuted(R);
 
-			//  generate per-function AES key material from RNG
-			if (UseAES) {
-				for (int i = 0; i < 4; i++) {
-					uint32_t W = R.u32();
-					AESKey[i * 4 + 0] = (W >> 0) & 0xFF;
-					AESKey[i * 4 + 1] = (W >> 8) & 0xFF;
-					AESKey[i * 4 + 2] = (W >> 16) & 0xFF;
-					AESKey[i * 4 + 3] = (W >> 24) & 0xFF;
-				}
-				vm_aes::keyExpand(AESKey, AESExpandedKey);
-				for (auto& b : AESRKMask) b = (uint8_t)(R.u32() & 0xFF);
-				AESNonce = ((uint64_t)R.u32() << 32) | R.u32();
+			// RandISA (P9-A): module-uniform permutation of semantic operand-field
+			// byte encodings. Derived from MasterSeed (NOT the per-function RNG R)
+			// so the shared handler switch-cases, every per-function emitter, and
+			// nested-helper emitters all agree module-wide. Drawn from a private
+			// RNG so R's stream is untouched -> knob-off is byte-identical
+			// (IsaEnc stays the identity map from its default ctor).
+			if (RandISA) {
+				// Each family draws from its own MasterSeed-derived RNG (distinct
+				// fork label) so adding a family leaves the others bit-identical.
+				obf::Rng BinRng(obf::mix64(MasterSeed ^ obf::fnv1a64("vm.isa.binsubop")));
+				IsaEnc.initPermuted(BinRng);
+				obf::Rng IcmpRng(obf::mix64(MasterSeed ^ obf::fnv1a64("vm.isa.icmppred")));
+				IsaEnc.initIcmpPermuted(IcmpRng);
+				obf::Rng CastRng(obf::mix64(MasterSeed ^ obf::fnv1a64("vm.isa.castkind")));
+				IsaEnc.initCastPermuted(CastRng);
+				obf::Rng FBinRng(obf::mix64(MasterSeed ^ obf::fnv1a64("vm.isa.fbinsubop")));
+				IsaEnc.initFBinPermuted(FBinRng);
+				obf::Rng FcmpRng(obf::mix64(MasterSeed ^ obf::fnv1a64("vm.isa.fcmppred")));
+				IsaEnc.initFcmpPermuted(FcmpRng);
 			}
+
+			//  generate per-function AES key material from RNG
+			for (int i = 0; i < 4; i++) {
+				uint32_t W = R.u32();
+				AESKey[i * 4 + 0] = (W >> 0) & 0xFF;
+				AESKey[i * 4 + 1] = (W >> 8) & 0xFF;
+				AESKey[i * 4 + 2] = (W >> 16) & 0xFF;
+				AESKey[i * 4 + 3] = (W >> 24) & 0xFF;
+			}
+			vm_aes::keyExpand(AESKey, AESExpandedKey);
+			for (auto& b : AESRKMask) b = (uint8_t)(R.u32() & 0xFF);
+			AESNonce = ((uint64_t)R.u32() << 32) | R.u32();
 		}
 
 		bool run();
@@ -525,7 +585,7 @@ namespace llvm {
 		// into the per-call scratch window (EffLazyCtx), then reads the covering
 		// byte. Emitted straight-line (no control flow) so callers that assume
 		// linear emission across loadBC/loadBCDyn stay valid.
-		// Only called when LazyDecrypt (implies EncBytecode + UseAES).
+		// Only called when LazyDecrypt (implies EncBytecode).
 		Value* lazyAESByte(IRBuilder<>& B, Value* Idx32, const Twine& N) {
 			Value* RKPtr = B.CreateGEP(I8Ty, EffLazyCtx,
 				B.getInt64(VMEngine::kLazyCtxRKOff), N + ".lz.rk");
@@ -812,9 +872,7 @@ namespace llvm {
 		// Handler back-edge dispatch: central Dispatch branch when
 		// !ThreadedDispatch, inlined threaded tail otherwise.
 		void nextInsn(IRBuilder<>& B);
-		void buildEncryptCtor();    // optional encryption constructor
-		void buildEncryptCtorAES(); // Step 03: AES-CTR constructor
-		void buildEncryptCtorLCG(); // Legacy LCG constructor (useAES=0)
+		void buildEncryptCtor();    // optional encryption constructor (AES-CTR)
 
 		// Step 06: shared engine setup
 		void setupEffLocal();         // point Eff* at per-function state
@@ -835,6 +893,7 @@ namespace llvm {
 		void buildIntegrityHashCtor();   // .init_array FNV-1a check
 		void buildCalleeXorCtor();       // .init_array callee XOR masking
 		void buildAntiDebugGate(VMEngine::SharedState* SS); // dispatch timing gate
+		void buildAntiDebugKeyBindCtor(); // .init_array: fold detection into AES round-key mask
 	};
 
 } // namespace llvm
