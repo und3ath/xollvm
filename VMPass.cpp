@@ -125,6 +125,7 @@ VMPassConfig VMPassConfig::fromPassConfig(const PassConfig& PC) {
 	getBool("keyedDispatch", Cfg.keyedDispatch);
 	getBool("superOps", Cfg.superOps);
 	getBool("randISA", Cfg.randISA);
+	getUInt("enginePoolSize", Cfg.enginePoolSize);
 
 	// lazyDecrypt requires encBytecode — nothing to defer if bytecode isn't encrypted.
 	if (!Cfg.encBytecode) Cfg.lazyDecrypt = false;
@@ -139,6 +140,7 @@ VMPassConfig VMPassConfig::fromPassConfig(const PassConfig& PC) {
 	if (!Cfg.hardened || !Cfg.antiDebug) Cfg.bindAntiDebug = false;
 	if (Cfg.handlerVariants < 1) Cfg.handlerVariants = 1;
 	if (Cfg.handlerVariants > kMaxHandlerVariants) Cfg.handlerVariants = kMaxHandlerVariants;
+	if (Cfg.enginePoolSize < 1) Cfg.enginePoolSize = 1;
 	return Cfg;
 }
 

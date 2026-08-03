@@ -174,11 +174,26 @@ namespace llvm {
 		/// bytecode's own binops never call back into the helper.
 		static constexpr const char* kVMEngineNestName = "__vm_engine.nest";
 
+		/// P10 engine pool: EngineId packs (poolIdx, layer) as
+		/// `EngineId = poolIdx*2 + layer`, where layer 0 = plain, 1 = nest.
+		/// poolIdx 0 reproduces the pre-pool ids 0/1 exactly, so a single-engine
+		/// build (enginePoolSize==1) is byte-identical.
+		inline unsigned engineLayer(unsigned EngineId)  { return EngineId & 1u; }
+		inline unsigned enginePoolOf(unsigned EngineId) { return EngineId >> 1; }
+		inline unsigned makeEngineId(unsigned Pool, unsigned Layer) {
+			return Pool * 2u + (Layer & 1u);
+		}
+
 		/// EngineId 0 -> plain engine ("__vm_engine"), 1 -> nesting engine
-		/// ("__vm_engine.nest"). Selects both the SharedState instance and the
-		/// emitted Function's symbol name.
-		inline const char* vmEngineName(unsigned EngineId) {
-			return EngineId ? kVMEngineNestName : kVMEngineName;
+		/// ("__vm_engine.nest"); pool members >0 append ".p<N>" to the base name
+		/// ("__vm_engine.p1", "__vm_engine.nest.p1", ...). Selects both the
+		/// SharedState instance and the emitted Function's symbol name. poolIdx 0
+		/// returns the exact pre-pool names -> byte-identical single-engine build.
+		inline std::string vmEngineName(unsigned EngineId) {
+			std::string Base = engineLayer(EngineId) ? kVMEngineNestName : kVMEngineName;
+			unsigned Pool = enginePoolOf(EngineId);
+			if (Pool == 0) return Base;
+			return Base + ".p" + std::to_string(Pool);
 		}
 
 		/// Return the canonical FunctionType for vm_engine. `lazy` appends the
@@ -320,12 +335,17 @@ namespace llvm {
 		const bool     SuperOps;         // fuse eligible i32 mul+add chains into one OP_MULADD opcode at emission
 		const bool     BindAntiDebug;    // fold anti-debug detection into the AES round-key mask instead of salt-poisoning traps
 		const bool     RandISA;          // per-build permutation of semantic operand-field byte encodings (currently BinSubop)
-		// Which shared engine this build targets: 0 = plain ("__vm_engine"),
-		// 1 = nesting ("__vm_engine.nest"). Derived from NestedVM, not an
-		// independent knob -- a nestedVM=true build always wants the engine
-		// whose OP_BINOP calls the helper; nestedVM=false (including the
-		// helper's own inner-virtualization) always wants the plain one.
+		// Which shared engine this build targets. Packs (poolIdx, layer) as
+		// poolIdx*2 + layer (layer 0 = plain "__vm_engine", 1 = nesting
+		// "__vm_engine.nest"). The layer is derived from NestedVM (a nestedVM=true
+		// build wants the engine whose OP_BINOP calls the helper; nestedVM=false,
+		// including the helper's own inner-virtualization, wants the plain one).
+		// The poolIdx (P10) selects which of EnginePoolSize structurally-distinct
+		// engines this function runs; poolIdx 0 reproduces the pre-pool ids 0/1.
 		const unsigned EngineId;
+		// Number of distinct engines in the module pool (P10, Cfg.enginePoolSize
+		// clamped to >=1). 1 = single shared engine (byte-identical to pre-pool).
+		const unsigned EnginePoolSize;
 		const uint32_t SaltConst;    // full 32-bit salt stored in vm.salt
 		const uint8_t  CTSalt;       // low byte of SaltConst must match deobf() key
 		// Module-uniform obfuscation seed (Ann.ModuleSeed). Same value for every
@@ -482,6 +502,7 @@ namespace llvm {
 			BindAntiDebug(Cfg.bindAntiDebug),
 			RandISA(Cfg.randISA),
 			EngineId(NestedVM ? 1u : 0u),
+			EnginePoolSize(Cfg.enginePoolSize ? Cfg.enginePoolSize : 1u),
 			SaltConst(R.u32()),
 			// IMPORTANT: indices are only XOR-salted when obfRegIdx=1.
 			// When obfRegIdx=0, emitter must write raw indices (CTSalt=0).

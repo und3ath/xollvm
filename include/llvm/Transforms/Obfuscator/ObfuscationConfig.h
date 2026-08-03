@@ -329,6 +329,14 @@ namespace llvm {
 		// signature for the permuted families. Off = byte-identical (identity map).
 		bool     randISA = false;
 
+		// enginePoolSize: number of distinct shared VM engines built per module
+		// (W1 "the real kill"). N>1 builds N structurally-independent engines;
+		// each virtualized function deterministically picks one by its own seed,
+		// so lifting one function's engine gives no shortcut for a function that
+		// runs a different engine. 1 = single shared engine (byte-identical to
+		// the pre-pool build). Clamped to >=1.
+		unsigned enginePoolSize = 1;
+
 		static VMPassConfig fromPassConfig(const PassConfig& PC);
 		bool validate() const;
 	};
