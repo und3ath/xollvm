@@ -523,3 +523,37 @@ def vm_randisa_fcmp_permuted(ir: str) -> Optional[str]:
     if all(_RANDISA_FCMP_CANON.get(k) == v for k, v in m.items()):
         return f"OP_FCMP predicate encoding is canonical ({sorted(m.items())}) — randISA not applied"
     return None
+
+
+# ── P10 engine pool ──────────────────────────────────────────────────────────
+# The plain shared engine is emitted as @__vm_engine; with enginePoolSize>1 the
+# pass builds additional pool members @__vm_engine.p1, @__vm_engine.p2, ... and
+# each virtualized function's handler table targets whichever one its name+seed
+# hash selected. (Nested-VM builds an orthogonal @__vm_engine.nest[.pN]; the
+# regexes below deliberately match only the plain-layer names.)
+def _plain_engine_defs(ir: str) -> set:
+    return set(re.findall(r"^define\b[^\n]*@(__vm_engine(?:\.p\d+)?)\(", ir, re.M))
+
+
+@register("vm_enginepool_multi")
+def vm_enginepool_multi(ir: str) -> Optional[str]:
+    # enginePoolSize>1: prove the module actually contains more than one distinct
+    # shared engine (not a silent single-engine no-op). Any two-plus distinct
+    # plain-engine definitions satisfy it; the exact per-function split is a hash
+    # of the name + module seed and is asserted correct by the differential-output
+    # gates, not here.
+    defs = _plain_engine_defs(ir)
+    if len(defs) < 2:
+        return (f"expected >=2 distinct plain engines, found {sorted(defs)} — "
+                "engine pool did not materialise multiple engines")
+    return None
+
+
+@register("vm_no_enginepool")
+def vm_no_enginepool(ir: str) -> Optional[str]:
+    # Inverse: with pooling off (enginePoolSize=1, the default) the module has
+    # exactly one plain engine @__vm_engine and no .pN pool members.
+    pool = re.findall(r"^define\b[^\n]*@__vm_engine\.p\d+\(", ir, re.M)
+    if pool:
+        return f"found {len(pool)} pool-member engine(s) but enginePoolSize=1 — pool leaked when off"
+    return None

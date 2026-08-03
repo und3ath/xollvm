@@ -9,6 +9,7 @@ from ._common import (
     render_vm_v7_call_program,
     render_vm_v7_call_vararg_program,
     render_vm_v7_casts_program,
+    render_vm_v7_enginepool_program,
     render_vm_v7_float_basic_program,
     render_vm_v7_float_cast_program,
     render_vm_v7_float_comprehensive_program,
@@ -121,6 +122,12 @@ VM_RANDISA_GATES = ["vm_randisa_permuted", "vm_randisa_icmp_permuted",
                     "vm_randisa_cast_permuted", "vm_randisa_fbinsubop_permuted",
                     "vm_randisa_fcmp_permuted"]
 
+# enginePoolSize>1 builds several distinct shared engines (@__vm_engine[.pN]);
+# this proves more than one materialised. Attached to the multi-function pool
+# cases (the enginepool.c program has nine virtualized functions, so at least
+# two distinct engines are effectively certain across seeds).
+VM_ENGINEPOOL_GATES = ["vm_enginepool_multi"]
+
 _DBG = ["--obf-debug", "--obf-verbose"]
 
 
@@ -130,7 +137,8 @@ def register(reg: Registry, **_opts) -> None:
     reg.add(name="rt_vm_v7_basic", passes=["vm"],
             ann_override=vm_v7,
             gates=VM_CORE_GATES + ["vm_enc_ctor", "vm_no_threaded_dispatch",
-                   "vm_no_keyeddisp", "vm_no_bindadeb_ctor", "vm_no_randisa"],
+                   "vm_no_keyeddisp", "vm_no_bindadeb_ctor", "vm_no_randisa",
+                   "vm_no_enginepool"],
             extra_opts=_DBG, category="vm")
     reg.add(name="rt_vm_v7_bare", passes=["vm"],
             ann_override=ann_extra("vm_v7_bare"),
@@ -910,6 +918,51 @@ def register(reg: Registry, **_opts) -> None:
             ann_override=vm_v7_ri,
             extra_opts=_DBG, gates=["seed_determinism"], category="vm",
             src_override=render_vm_v7_multi_function_program(vm_v7_ri))
+
+    # ── P10 engine pool (enginePoolSize>1) ──
+    # Each of the enginepool.c program's nine virtualized functions is assigned
+    # to one of N=4 shared engines by a hash of its name + module seed, so the
+    # build materialises several distinct @__vm_engine[.pN] functions. The pool
+    # gate proves >=2 exist; the differential-output check (run for every case)
+    # proves the per-function split still computes correctly across engines.
+    #
+    # Gate hygiene: with a hash split any given pool slot -- including slot 0's
+    # base name @__vm_engine -- may be empty, so these cases use only NAME-
+    # AGNOSTIC gates. The singleton / multi-fn-shared / engine-body gates
+    # (which hard-code the @__vm_engine base name and assert exactly one engine)
+    # are intentionally excluded; they are proven on the non-pooled cases.
+    vm_v7_ep_multi = ann_extra("vm_v7_enginepool_multi_fn")
+    vm_v7_ep_hard = ann_extra("vm_v7_enginepool_hardened")
+    vm_v7_ep_stack = ann_extra("vm_v7_enginepool_stack")
+
+    _EP_CORE = VM_CORE_GATES + VM_ENGINEPOOL_GATES + ["vm_enc_ctor", "vm_wrapper_is_thin"]
+    reg.add(name="rt_vm_v7_enginepool_multi_fn", passes=["vm"],
+            ann_override=vm_v7_ep_multi,
+            gates=_EP_CORE,
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_enginepool_program(vm_v7_ep_multi))
+    # hardened composes: MBA/dead-blocks/guards run inside whichever pool engine
+    # each function landed on. Correctness (differential output) exercises the
+    # hardened path; the hardened-internal engine-body gates are omitted because
+    # they hard-code the base engine name (see gate-hygiene note above).
+    reg.add(name="rt_vm_v7_enginepool_hardened", passes=["vm"],
+            ann_override=vm_v7_ep_hard,
+            gates=_EP_CORE,
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_enginepool_program(vm_v7_ep_hard))
+    # Full-stack composition (minus nestedVM): pool + superOps + threadedDispatch
+    # + keyedDispatch + encDispatch + lazyDecrypt + constInStream + useAES. The
+    # threaded build removes the central vm.dispatch, so drop vm_dispatch_present.
+    reg.add(name="rt_vm_v7_enginepool_stack", passes=["vm"],
+            ann_override=vm_v7_ep_stack,
+            gates=VM_THREADED_CORE_GATES + VM_ENGINEPOOL_GATES
+                + ["vm_enc_ctor", "vm_wrapper_is_thin"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_enginepool_program(vm_v7_ep_stack))
+    reg.add(name="rt_vm_v7_enginepool_determinism", passes=["vm"],
+            ann_override=vm_v7_ep_multi,
+            extra_opts=_DBG, gates=["seed_determinism"], category="vm",
+            src_override=render_vm_v7_enginepool_program(vm_v7_ep_multi))
 
     # ── preset=<light|medium|high|max> config-surface shortcut ──
     # Resolved in VMPassConfig::fromPassConfig before the explicit-knob getBool/

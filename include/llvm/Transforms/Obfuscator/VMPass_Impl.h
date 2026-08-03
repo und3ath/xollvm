@@ -469,14 +469,30 @@ namespace llvm {
 
 		// Normal per-function path: config + RNG come from the annotation-driven
 		// VMCtx (FunctionObfContextAnalysis-backed).
-		explicit VMImpl(VMCtx& VCtx) : VMImpl(VCtx.F, VCtx.Cfg, VCtx.R, VCtx.MasterSeed) {}
+		explicit VMImpl(VMCtx& VCtx)
+			: VMImpl(VCtx.F, VCtx.Cfg, VCtx.R, VCtx.MasterSeed,
+				computePoolIdx(VCtx.F, VCtx.Cfg, VCtx.MasterSeed)) {}
+
+		// P10: deterministically assign this function to one of Cfg.enginePoolSize
+		// plain engines. The module-uniform MasterSeed is mixed with the function
+		// name hash so the split is stable within a build yet diversifies across
+		// seeds. Returns 0 WITHOUT hashing when pooling is off (size <= 1), so a
+		// single-engine build keeps EngineId = NestedVM?1:0 exactly (byte-identical).
+		static unsigned computePoolIdx(const Function& Fn, const VMPassConfig& Cfg,
+			uint64_t MasterSeed) {
+			unsigned N = Cfg.enginePoolSize ? Cfg.enginePoolSize : 1u;
+			if (N <= 1) return 0;
+			uint64_t H = obf::mix64(MasterSeed ^ obf::fnv1a64(Fn.getName()));
+			return (unsigned)(H % N);
+		}
 
 		// Synthetic-function path: explicit config + RNG, no VMCtx/annotation.
 		// Used to virtualize compiler-authored helper functions (e.g. nested-VM
 		// opcode helpers) that have no FunctionObfContext of their own. The caller
 		// must forward the outer module's MasterSeed so RandISA's operand-encoding
 		// map is identical to the shared handler and the outer emitters.
-		VMImpl(Function& Fn, const VMPassConfig& CfgIn, obf::Rng& RIn, uint64_t MasterSeedIn = 0)
+		VMImpl(Function& Fn, const VMPassConfig& CfgIn, obf::Rng& RIn, uint64_t MasterSeedIn = 0,
+			unsigned PoolIdxIn = 0)
 			: F(Fn), M(*Fn.getParent()), Ctx(Fn.getContext()),
 			I8Ty(Type::getInt8Ty(Ctx)),
 			I16Ty(Type::getInt16Ty(Ctx)),
@@ -501,7 +517,11 @@ namespace llvm {
 			SuperOps(Cfg.superOps),
 			BindAntiDebug(Cfg.bindAntiDebug),
 			RandISA(Cfg.randISA),
-			EngineId(NestedVM ? 1u : 0u),
+			// P10: the plain layer is pooled across PoolIdxIn (0..N-1); nestedVM
+			// builds pin to pool 0's nest engine (EngineId 1) so the single shared
+			// __vm_h_* helper is virtualized exactly once (nest-layer pooling is a
+			// later phase). PoolIdxIn 0 + nestedVM?1:0 reproduces the pre-pool id.
+			EngineId(VMEngine::makeEngineId(NestedVM ? 0u : PoolIdxIn, NestedVM ? 1u : 0u)),
 			EnginePoolSize(Cfg.enginePoolSize ? Cfg.enginePoolSize : 1u),
 			SaltConst(R.u32()),
 			// IMPORTANT: indices are only XOR-salted when obfRegIdx=1.
