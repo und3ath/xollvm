@@ -128,6 +128,11 @@ VM_RANDISA_GATES = ["vm_randisa_permuted", "vm_randisa_icmp_permuted",
 # two distinct engines are effectively certain across seeds).
 VM_ENGINEPOOL_GATES = ["vm_enginepool_multi"]
 
+# metamorphicEngines gives each pool engine a per-clone-seeded MBA rewrite
+# (marker `me.noise`), so the N engines have structurally distinct bodies rather
+# than name-only clones. Pairs with VM_ENGINEPOOL_GATES (>=2 engines exist).
+VM_METAMORPH_GATES = ["vm_metamorph_engines"]
+
 _DBG = ["--obf-debug", "--obf-verbose"]
 
 
@@ -138,7 +143,7 @@ def register(reg: Registry, **_opts) -> None:
             ann_override=vm_v7,
             gates=VM_CORE_GATES + ["vm_enc_ctor", "vm_no_threaded_dispatch",
                    "vm_no_keyeddisp", "vm_no_bindadeb_ctor", "vm_no_randisa",
-                   "vm_no_enginepool"],
+                   "vm_no_enginepool", "vm_no_metamorph_engines"],
             extra_opts=_DBG, category="vm")
     reg.add(name="rt_vm_v7_bare", passes=["vm"],
             ann_override=ann_extra("vm_v7_bare"),
@@ -975,6 +980,32 @@ def register(reg: Registry, **_opts) -> None:
             gates=_EP_CORE + ["vm_nestedvm_helper_virtualized"],
             extra_opts=_DBG, category="vm",
             src_override=render_vm_v7_enginepool_program(vm_v7_ep_nested))
+
+    # ── metamorphic engine pool (per-clone MBA rewrite) ──
+    # metamorphicEngines with handlerVariants=1 and no hardening isolates the
+    # feature: without it the pool engines are near-identical bodies (name-only
+    # clones); with it each engine's integer handler arithmetic is rewritten with
+    # a per-clone-seeded MBA identity (the `me.noise` marker), so the bodies
+    # diverge structurally. Same name-agnostic gate hygiene as the pool cases.
+    vm_v7_mm = ann_extra("vm_v7_metamorph")
+    vm_v7_mm_stack = ann_extra("vm_v7_metamorph_stack")
+    reg.add(name="rt_vm_v7_metamorph_multi_fn", passes=["vm"],
+            ann_override=vm_v7_mm,
+            gates=_EP_CORE + VM_METAMORPH_GATES,
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_enginepool_program(vm_v7_mm))
+    # Full-stack composition (minus nestedVM): threaded build drops the central
+    # vm.dispatch, so use VM_THREADED_CORE_GATES.
+    reg.add(name="rt_vm_v7_metamorph_stack", passes=["vm"],
+            ann_override=vm_v7_mm_stack,
+            gates=VM_THREADED_CORE_GATES + VM_ENGINEPOOL_GATES + VM_METAMORPH_GATES
+                + ["vm_enc_ctor", "vm_wrapper_is_thin"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_enginepool_program(vm_v7_mm_stack))
+    reg.add(name="rt_vm_v7_metamorph_determinism", passes=["vm"],
+            ann_override=vm_v7_mm,
+            extra_opts=_DBG, gates=["seed_determinism"], category="vm",
+            src_override=render_vm_v7_enginepool_program(vm_v7_mm))
 
     # ── preset=<light|medium|high|max> config-surface shortcut ──
     # Resolved in VMPassConfig::fromPassConfig before the explicit-knob getBool/

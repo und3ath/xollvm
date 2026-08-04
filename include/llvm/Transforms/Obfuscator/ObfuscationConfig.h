@@ -337,6 +337,16 @@ namespace llvm {
 		// the pre-pool build). Clamped to >=1.
 		unsigned enginePoolSize = 1;
 
+		// metamorphicEngines: give each engine in the pool a structurally
+		// distinct handler body, not just a distinct name. Every engine's integer
+		// handler arithmetic is rewritten with semantics-preserving MBA identities
+		// chosen from a per-engine (pool-index-derived) seed, so lifting one
+		// clone's handlers yields no pattern match for another clone -- even when
+		// handlerVariants=1 and hardened=0 leave the bodies otherwise identical.
+		// Requires enginePoolSize>1 (no clones to diversify otherwise). Off =
+		// byte-identical.
+		bool     metamorphicEngines = false;
+
 		static VMPassConfig fromPassConfig(const PassConfig& PC);
 		bool validate() const;
 	};

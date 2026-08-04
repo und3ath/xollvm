@@ -556,3 +556,25 @@ def vm_no_enginepool(ir: str) -> Optional[str]:
     if pool:
         return f"found {len(pool)} pool-member engine(s) but enginePoolSize=1 — pool leaked when off"
     return None
+
+
+@register("vm_metamorph_engines")
+def vm_metamorph_engines(ir: str) -> Optional[str]:
+    # metamorphicEngines rewrites each pool clone's integer handler arithmetic
+    # with per-clone-seeded MBA identities (metamorphRewriteEngine), tagging the
+    # result `me.noise`. The marker is emitted nowhere else, so its presence
+    # proves the per-clone rewrite fired. The seed is keyed on EngineId, so any
+    # two engines that both carry it necessarily diverge (different identity
+    # picks); the companion vm_enginepool_multi gate proves >=2 engines exist,
+    # and the differential-output gate proves the rewrite stayed correct.
+    if not re.search(r"me\.noise", ir):
+        return "no me.noise marker — per-clone metamorphic engine rewrite did not run"
+    return None
+
+
+@register("vm_no_metamorph_engines")
+def vm_no_metamorph_engines(ir: str) -> Optional[str]:
+    n = len(re.findall(r"me\.noise", ir))
+    if n:
+        return f"found {n} me.noise marker(s) but metamorphicEngines=0 — leaked when off"
+    return None

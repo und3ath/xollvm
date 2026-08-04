@@ -455,3 +455,97 @@ void VMImpl::diversifyHandlerVariants(Function* EF) {
 		errs() << "[vm] variant-diversify: " << Rewrites
 		<< " MBA rewrites (" << NumVariants << " variants)\n";
 }
+
+
+// ============================================================================
+// metamorphRewriteEngine (engine-pool metamorphism, P10)
+//
+// diversifyHandlerVariants makes the K variant COPIES within one engine
+// distinct; this makes the N ENGINES of the pool distinct from each other.
+// Every integer handler binop (in any VariantOf-tagged block) is rewritten
+// with a semantics-preserving MBA identity chosen from a per-CLONE RNG seeded
+// by this engine's pool identity (EngineId) and the module seed -- NOT the
+// founding function's RNG -- so two engines get different rewrites regardless
+// of which function happened to build each, and even when handlerVariants=1
+// and hardened=0 would otherwise leave the bodies byte-for-byte identical.
+//
+// Runs for every engine (including pool 0) when MetamorphicEngines is on;
+// off (the default, and forced off unless enginePoolSize>1) it is never
+// called, so the build is byte-identical. Placed right after
+// diversifyHandlerVariants in populateVMEngine -- same window: handler blocks
+// built, VariantOf valid, dispatch not yet emitted (so the urem/IP arithmetic
+// a lifter fingerprints is untouched -- only opcode-compute blocks are here).
+// ============================================================================
+void VMImpl::metamorphRewriteEngine(Function* EF) {
+	if (!EF || !MetamorphicEngines) return;
+
+	// Per-clone seed: module-uniform MasterSeed mixed with this engine's pool
+	// identity. Independent of the founding function's RNG so the divergence is
+	// keyed on the clone, deterministically and reproducibly.
+	obf::Rng MetaRng(obf::mix64(MasterSeed ^ obf::fnv1a64("vm.metamorph.engine")
+		^ ((uint64_t)EngineId * 0x9E3779B97F4A7C15ull)));
+	llvm::obf::MbaUtils   MBA(M, MetaRng, "obf.vm.metamorph.mba.i32");
+	llvm::obf::OpaqueUtils Opaque(M, MetaRng, "vm.metamorph.opaque.i32");
+
+	SmallVector<BinaryOperator*, 256> Cands;
+	for (BasicBlock& BB : *EF) {
+		if (VariantOf.find(&BB) == VariantOf.end()) continue; // handler blocks only
+		for (Instruction& I : BB) {
+			if (auto* BO = dyn_cast<BinaryOperator>(&I)) {
+				if (!BO->getType()->isIntegerTy()) continue;
+				if (!llvm::obf::MbaUtils::isTargetOpcode(BO->getOpcode())) continue;
+				Cands.push_back(BO);
+			}
+		}
+	}
+
+	unsigned Rewrites = 0;
+	for (BinaryOperator* BO : Cands) {
+		if (!BO->getParent()) continue; // already erased
+		IRBuilder<> B(BO);
+		Value* A = BO->getOperand(0);
+		Value* V = BO->getOperand(1);
+		unsigned pick = MetaRng.u32();   // per-clone identity choice at this site
+		Value* Rv = nullptr;
+		switch (BO->getOpcode()) {
+		case Instruction::Add:
+			switch (pick % 3) { case 0: Rv = MBA.add(B, A, V); break;
+							    case 1: Rv = MBA.addAlt(B, A, V); break;
+							    default: Rv = MBA.addAlt2(B, A, V); } break;
+		case Instruction::Sub:
+			switch (pick % 3) { case 0: Rv = MBA.sub(B, A, V); break;
+							    case 1: Rv = MBA.subAlt(B, A, V); break;
+							    default: Rv = MBA.subAlt2(B, A, V); } break;
+		case Instruction::Or:
+			switch (pick % 3) { case 0: Rv = MBA.bitwiseOr(B, A, V); break;
+							    case 1: Rv = MBA.bitwiseOrAlt(B, A, V); break;
+							    default: Rv = MBA.bitwiseOrAlt2(B, A, V); } break;
+		case Instruction::And:
+			Rv = (pick % 2) ? MBA.bitwiseAndAlt(B, A, V) : MBA.bitwiseAnd(B, A, V); break;
+		case Instruction::Xor:
+			Rv = (pick % 2) ? MBA.bitwiseXorAlt(B, A, V) : MBA.bitwiseXor(B, A, V); break;
+		default: break;
+		}
+		if (!Rv) continue;
+
+		// Per-site opaque-zero XOR (matches diversify's noise pattern + width
+		// handling) so repeated identities still diverge and resist -O2 folding.
+		Value* Z = Opaque.opaqueZero32(B);
+		Type* RT = Rv->getType();
+		if (RT != Z->getType()) {
+			if (RT->getIntegerBitWidth() > 32) Z = B.CreateZExt(Z, RT, "me.z.ext");
+			else                                Z = B.CreateTrunc(Z, RT, "me.z.tr");
+		}
+		Rv = B.CreateXor(Rv, Z, "me.noise");
+
+		BO->replaceAllUsesWith(Rv);
+		BO->eraseFromParent();
+		++Rewrites;
+	}
+
+	LLVM_DEBUG(dbgs() << "[vm] metamorphRewriteEngine(EngineId=" << EngineId
+		<< "): " << Rewrites << " per-clone MBA rewrites\n");
+	if (ObfVerbose)
+		errs() << "[vm] metamorph-engine(id=" << EngineId << "): "
+		<< Rewrites << " MBA rewrites\n";
+}

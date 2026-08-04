@@ -346,6 +346,9 @@ namespace llvm {
 		// Number of distinct engines in the module pool (P10, Cfg.enginePoolSize
 		// clamped to >=1). 1 = single shared engine (byte-identical to pre-pool).
 		const unsigned EnginePoolSize;
+		// Give each pool engine a structurally distinct handler body via a
+		// per-clone-seeded MBA rewrite (requires EnginePoolSize>1). Off = no rewrite.
+		const bool     MetamorphicEngines;
 		const uint32_t SaltConst;    // full 32-bit salt stored in vm.salt
 		const uint8_t  CTSalt;       // low byte of SaltConst must match deobf() key
 		// Module-uniform obfuscation seed (Ann.ModuleSeed). Same value for every
@@ -525,6 +528,7 @@ namespace llvm {
 			// PoolIdxIn 0 + nestedVM?1:0 reproduces the pre-pool id (0 or 1).
 			EngineId(VMEngine::makeEngineId(PoolIdxIn, NestedVM ? 1u : 0u)),
 			EnginePoolSize(Cfg.enginePoolSize ? Cfg.enginePoolSize : 1u),
+			MetamorphicEngines(Cfg.metamorphicEngines),
 			SaltConst(R.u32()),
 			// IMPORTANT: indices are only XOR-salted when obfRegIdx=1.
 			// When obfRegIdx=0, emitter must write raw indices (CTSalt=0).
@@ -928,6 +932,7 @@ namespace llvm {
 		void flattenWrapper();        // switch-dispatch flattening
 		void hardenVMEngine(Function* EF, VMEngine::SharedState* SS);
 		void diversifyHandlerVariants(Function* EF); // per-variant MBA metamorphism
+		void metamorphRewriteEngine(Function* EF);   // per-clone MBA metamorphism (engine pool)
 
 		// anti-debug infrastructure
 		/// Emit IR to silently corrupt the salt value (salt ^= PoisonKey).
