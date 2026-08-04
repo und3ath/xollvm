@@ -203,6 +203,41 @@ EXTRA_ANN: Dict[str, str] = {
     "vm_v7_randisa_stack":    "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,useAES=1,"
                               "randISA=1,nestedVM=1,superOps=1,threadedDispatch=1,"
                               "keyedDispatch=1,encDispatch=1,lazyDecrypt=1,constInStream=1)",
+    # enginePoolSize=N: build N structurally-distinct shared engines per module;
+    # each virtualized function picks one by a hash of its name + module seed, so
+    # lifting one function's engine gives no shortcut for a function on another.
+    # Off (size 1) = byte-identical single engine. Composes with everything except
+    # nestedVM (which pins its functions to pool 0's nest engine for now).
+    "vm_v7_enginepool":          "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,enginePoolSize=4)",
+    "vm_v7_enginepool_multi_fn": "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,enginePoolSize=4)",
+    "vm_v7_enginepool_hardened": "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,enginePoolSize=4,hardened=1)",
+    # Full composition proof (minus nestedVM): pool + superOps + threadedDispatch
+    # + keyedDispatch + encDispatch + lazyDecrypt + constInStream + useAES.
+    "vm_v7_enginepool_stack":    "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,useAES=1,"
+                                 "enginePoolSize=4,superOps=1,threadedDispatch=1,"
+                                 "keyedDispatch=1,encDispatch=1,lazyDecrypt=1,constInStream=1)",
+    # nestedVM + pool: the nest layer is pooled too (@__vm_engine.nest.pN); the
+    # one shared __vm_h_* helper set stays virtualized exactly once (plain pool 0).
+    "vm_v7_enginepool_nested":   "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,nestedVM=1,enginePoolSize=4)",
+    # metamorphicEngines: per-clone MBA rewrite gives each pool engine a distinct
+    # handler body. handlerVariants=1 (+ no hardening) isolates the effect --
+    # without it the pool engines would be near-identical bodies.
+    "vm_v7_metamorph":       "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,enginePoolSize=4,"
+                             "handlerVariants=1,metamorphicEngines=1)",
+    # Full composition (minus nestedVM): metamorph + pool + superOps + threaded +
+    # keyed + encDispatch + lazy + const + useAES.
+    "vm_v7_metamorph_stack": "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,useAES=1,"
+                             "enginePoolSize=4,metamorphicEngines=1,superOps=1,"
+                             "threadedDispatch=1,keyedDispatch=1,encDispatch=1,"
+                             "lazyDecrypt=1,constInStream=1)",
+    # perFnEngine: every virtualized function gets its own dedicated engine.
+    "vm_v7_perfn":       "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,perFnEngine=1)",
+    # Full composition (minus nestedVM): perFnEngine + metamorph + superOps +
+    # threaded + keyed + encDispatch + lazy + const + useAES.
+    "vm_v7_perfn_stack": "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,useAES=1,"
+                         "perFnEngine=1,metamorphicEngines=1,superOps=1,"
+                         "threadedDispatch=1,keyedDispatch=1,encDispatch=1,"
+                         "lazyDecrypt=1,constInStream=1)",
     # preset=<name>: config-surface shortcut resolved in VMPassConfig::fromPassConfig
     # before explicit knobs (which still override). medium == today's defaults.
     "vm_v7_preset_light":  "vm(minBlocks=1,preset=light)",
@@ -395,6 +430,10 @@ def render_vm_v7_multi_function_program(annotation: str) -> str:
 
 def render_vm_v7_multi_fn_aes_program(annotation: str) -> str:
     return programs.render("vm.multi_fn_aes", annotation=annotation)
+
+
+def render_vm_v7_enginepool_program(annotation: str) -> str:
+    return programs.render("vm.enginepool", annotation=annotation)
 
 
 def render_vm_v7_switch_dispatch_program(annotation: str) -> str:

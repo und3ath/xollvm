@@ -1,0 +1,81 @@
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+/* Nine independently-virtualized functions. With enginePoolSize>1 the pass
+   assigns each to one of N shared engines by a hash of its name + the module
+   seed, so a build ends up with several distinct @__vm_engine[.pN] functions.
+   Nine functions make "at least two distinct engines" statistically certain
+   across seeds (P(all in one pool) at N=4 is ~6e-5). */
+
+__attribute__((noinline, annotate("{annotation}")))
+uint32_t obf_ep0(uint32_t x, uint32_t y) {{
+    uint32_t r = x + y;
+    for (uint32_t i = 0; i < (y & 7u); i++) r = r * 3u + i;
+    return r ^ 0x9E3779B9u;
+}}
+
+__attribute__((noinline, annotate("{annotation}")))
+uint32_t obf_ep1(uint32_t x, uint32_t y) {{
+    uint32_t s = x;
+    if (y & 1u) s = s * 7u + 11u; else s = s - y;
+    return s ^ (x << 3);
+}}
+
+__attribute__((noinline, annotate("{annotation}")))
+uint32_t obf_ep2(uint32_t a, uint32_t b) {{
+    uint32_t t = a ^ b;
+    for (uint32_t i = 0; i < (a & 3u); i++) t += (b >> (i & 7u)) + 1u;
+    return t + 0x1234u;
+}}
+
+__attribute__((noinline, annotate("{annotation}")))
+uint32_t obf_ep3(uint32_t a, uint32_t b) {{
+    uint32_t u = a * b;
+    if (u > 4096u) u -= 999u; else u += 17u;
+    return u ^ (a >> 2);
+}}
+
+__attribute__((noinline, annotate("{annotation}")))
+uint32_t obf_ep4(uint32_t x, uint32_t y) {{
+    uint32_t r = 1u;
+    for (uint32_t i = 1; i <= (x & 0xFu); i++) r = r * i + y;
+    return r - x;
+}}
+
+__attribute__((noinline, annotate("{annotation}")))
+uint32_t obf_ep5(uint32_t x, uint32_t y) {{
+    uint32_t s = (x << 1) + (y >> 1);
+    s = (s & 0xFFFFu) | ((x ^ y) << 16);
+    return s + 3u;
+}}
+
+__attribute__((noinline, annotate("{annotation}")))
+uint32_t obf_ep6(uint32_t a, uint32_t b) {{
+    uint32_t v = a;
+    while (v > b && v > 1u) v = v - b - 1u;
+    return v ^ (b + 7u);
+}}
+
+__attribute__((noinline, annotate("{annotation}")))
+uint32_t obf_ep7(uint32_t a, uint32_t b) {{
+    uint32_t w = a + 2u * b;
+    for (uint32_t i = 0; i < 4u; i++) w = (w * 5u + 1u) ^ (a >> i);
+    return w;
+}}
+
+__attribute__((noinline, annotate("{annotation}")))
+uint32_t obf_target(uint32_t x, uint32_t y) {{
+    uint32_t a = obf_ep0(x, y) + obf_ep1(y, x);
+    a += obf_ep2(x, y) ^ obf_ep3(y, x);
+    a += obf_ep4(x, y) + obf_ep5(y, x);
+    a += obf_ep6(x, y) ^ obf_ep7(y, x);
+    return a;
+}}
+
+int main(int argc, char** argv) {{
+    uint32_t x = (argc > 1) ? (uint32_t)atoi(argv[1]) : 42;
+    uint32_t y = (argc > 2) ? (uint32_t)atoi(argv[2]) : 17;
+    printf("%u\n", obf_target(x, y));
+    return 0;
+}}

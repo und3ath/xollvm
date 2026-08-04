@@ -329,6 +329,32 @@ namespace llvm {
 		// signature for the permuted families. Off = byte-identical (identity map).
 		bool     randISA = false;
 
+		// enginePoolSize: number of distinct shared VM engines built per module
+		// (W1 "the real kill"). N>1 builds N structurally-independent engines;
+		// each virtualized function deterministically picks one by its own seed,
+		// so lifting one function's engine gives no shortcut for a function that
+		// runs a different engine. 1 = single shared engine (byte-identical to
+		// the pre-pool build). Clamped to >=1.
+		unsigned enginePoolSize = 1;
+
+		// metamorphicEngines: give each engine in the pool a structurally
+		// distinct handler body, not just a distinct name. Every engine's integer
+		// handler arithmetic is rewritten with semantics-preserving MBA identities
+		// chosen from a per-engine (pool-index-derived) seed, so lifting one
+		// clone's handlers yields no pattern match for another clone -- even when
+		// handlerVariants=1 and hardened=0 leave the bodies otherwise identical.
+		// Requires enginePoolSize>1 (no clones to diversify otherwise). Off =
+		// byte-identical.
+		bool     metamorphicEngines = false;
+
+		// perFnEngine: give THIS function its own dedicated shared engine instead
+		// of hashing it into the enginePoolSize pool. Because annotations are
+		// per-function, setting it on selected (critical) functions gives them
+		// private engines while the rest share the pool (annotation-selective);
+		// setting it everywhere gives a full per-function engine build. Highest
+		// structural resilience, highest .text cost. Off = use enginePoolSize.
+		bool     perFnEngine = false;
+
 		static VMPassConfig fromPassConfig(const PassConfig& PC);
 		bool validate() const;
 	};

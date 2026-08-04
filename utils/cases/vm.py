@@ -9,6 +9,7 @@ from ._common import (
     render_vm_v7_call_program,
     render_vm_v7_call_vararg_program,
     render_vm_v7_casts_program,
+    render_vm_v7_enginepool_program,
     render_vm_v7_float_basic_program,
     render_vm_v7_float_cast_program,
     render_vm_v7_float_comprehensive_program,
@@ -121,6 +122,17 @@ VM_RANDISA_GATES = ["vm_randisa_permuted", "vm_randisa_icmp_permuted",
                     "vm_randisa_cast_permuted", "vm_randisa_fbinsubop_permuted",
                     "vm_randisa_fcmp_permuted"]
 
+# enginePoolSize>1 builds several distinct shared engines (@__vm_engine[.pN]);
+# this proves more than one materialised. Attached to the multi-function pool
+# cases (the enginepool.c program has nine virtualized functions, so at least
+# two distinct engines are effectively certain across seeds).
+VM_ENGINEPOOL_GATES = ["vm_enginepool_multi"]
+
+# metamorphicEngines gives each pool engine a per-clone-seeded MBA rewrite
+# (marker `me.noise`), so the N engines have structurally distinct bodies rather
+# than name-only clones. Pairs with VM_ENGINEPOOL_GATES (>=2 engines exist).
+VM_METAMORPH_GATES = ["vm_metamorph_engines"]
+
 _DBG = ["--obf-debug", "--obf-verbose"]
 
 
@@ -130,7 +142,8 @@ def register(reg: Registry, **_opts) -> None:
     reg.add(name="rt_vm_v7_basic", passes=["vm"],
             ann_override=vm_v7,
             gates=VM_CORE_GATES + ["vm_enc_ctor", "vm_no_threaded_dispatch",
-                   "vm_no_keyeddisp", "vm_no_bindadeb_ctor", "vm_no_randisa"],
+                   "vm_no_keyeddisp", "vm_no_bindadeb_ctor", "vm_no_randisa",
+                   "vm_no_enginepool", "vm_no_metamorph_engines"],
             extra_opts=_DBG, category="vm")
     reg.add(name="rt_vm_v7_bare", passes=["vm"],
             ann_override=ann_extra("vm_v7_bare"),
@@ -911,6 +924,114 @@ def register(reg: Registry, **_opts) -> None:
             extra_opts=_DBG, gates=["seed_determinism"], category="vm",
             src_override=render_vm_v7_multi_function_program(vm_v7_ri))
 
+    # ── P10 engine pool (enginePoolSize>1) ──
+    # Each of the enginepool.c program's nine virtualized functions is assigned
+    # to one of N=4 shared engines by a hash of its name + module seed, so the
+    # build materialises several distinct @__vm_engine[.pN] functions. The pool
+    # gate proves >=2 exist; the differential-output check (run for every case)
+    # proves the per-function split still computes correctly across engines.
+    #
+    # Gate hygiene: with a hash split any given pool slot -- including slot 0's
+    # base name @__vm_engine -- may be empty, so these cases use only NAME-
+    # AGNOSTIC gates. The singleton / multi-fn-shared / engine-body gates
+    # (which hard-code the @__vm_engine base name and assert exactly one engine)
+    # are intentionally excluded; they are proven on the non-pooled cases.
+    vm_v7_ep_multi = ann_extra("vm_v7_enginepool_multi_fn")
+    vm_v7_ep_hard = ann_extra("vm_v7_enginepool_hardened")
+    vm_v7_ep_stack = ann_extra("vm_v7_enginepool_stack")
+
+    _EP_CORE = VM_CORE_GATES + VM_ENGINEPOOL_GATES + ["vm_enc_ctor", "vm_wrapper_is_thin"]
+    reg.add(name="rt_vm_v7_enginepool_multi_fn", passes=["vm"],
+            ann_override=vm_v7_ep_multi,
+            gates=_EP_CORE,
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_enginepool_program(vm_v7_ep_multi))
+    # hardened composes: MBA/dead-blocks/guards run inside whichever pool engine
+    # each function landed on. Correctness (differential output) exercises the
+    # hardened path; the hardened-internal engine-body gates are omitted because
+    # they hard-code the base engine name (see gate-hygiene note above).
+    reg.add(name="rt_vm_v7_enginepool_hardened", passes=["vm"],
+            ann_override=vm_v7_ep_hard,
+            gates=_EP_CORE,
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_enginepool_program(vm_v7_ep_hard))
+    # Full-stack composition (minus nestedVM): pool + superOps + threadedDispatch
+    # + keyedDispatch + encDispatch + lazyDecrypt + constInStream + useAES. The
+    # threaded build removes the central vm.dispatch, so drop vm_dispatch_present.
+    reg.add(name="rt_vm_v7_enginepool_stack", passes=["vm"],
+            ann_override=vm_v7_ep_stack,
+            gates=VM_THREADED_CORE_GATES + VM_ENGINEPOOL_GATES
+                + ["vm_enc_ctor", "vm_wrapper_is_thin"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_enginepool_program(vm_v7_ep_stack))
+    reg.add(name="rt_vm_v7_enginepool_determinism", passes=["vm"],
+            ann_override=vm_v7_ep_multi,
+            extra_opts=_DBG, gates=["seed_determinism"], category="vm",
+            src_override=render_vm_v7_enginepool_program(vm_v7_ep_multi))
+    # nestedVM + pool: the nest layer is pooled too (@__vm_engine.nest.pN), while
+    # the single shared __vm_h_* helper set is still virtualized exactly once
+    # against the plain pool-0 engine. Gate hygiene: pool 0's nest slot may be
+    # empty under the hash split, so drop vm_nestedvm_dual_engine (it needs the
+    # base @__vm_engine.nest name) and keep only vm_nestedvm_helper_virtualized,
+    # whose helper always targets the plain pool-0 engine.
+    vm_v7_ep_nested = ann_extra("vm_v7_enginepool_nested")
+    reg.add(name="rt_vm_v7_enginepool_nested", passes=["vm"],
+            ann_override=vm_v7_ep_nested,
+            gates=_EP_CORE + ["vm_nestedvm_helper_virtualized"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_enginepool_program(vm_v7_ep_nested))
+
+    # ── metamorphic engine pool (per-clone MBA rewrite) ──
+    # metamorphicEngines with handlerVariants=1 and no hardening isolates the
+    # feature: without it the pool engines are near-identical bodies (name-only
+    # clones); with it each engine's integer handler arithmetic is rewritten with
+    # a per-clone-seeded MBA identity (the `me.noise` marker), so the bodies
+    # diverge structurally. Same name-agnostic gate hygiene as the pool cases.
+    vm_v7_mm = ann_extra("vm_v7_metamorph")
+    vm_v7_mm_stack = ann_extra("vm_v7_metamorph_stack")
+    reg.add(name="rt_vm_v7_metamorph_multi_fn", passes=["vm"],
+            ann_override=vm_v7_mm,
+            gates=_EP_CORE + VM_METAMORPH_GATES,
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_enginepool_program(vm_v7_mm))
+    # Full-stack composition (minus nestedVM): threaded build drops the central
+    # vm.dispatch, so use VM_THREADED_CORE_GATES.
+    reg.add(name="rt_vm_v7_metamorph_stack", passes=["vm"],
+            ann_override=vm_v7_mm_stack,
+            gates=VM_THREADED_CORE_GATES + VM_ENGINEPOOL_GATES + VM_METAMORPH_GATES
+                + ["vm_enc_ctor", "vm_wrapper_is_thin"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_enginepool_program(vm_v7_mm_stack))
+    reg.add(name="rt_vm_v7_metamorph_determinism", passes=["vm"],
+            ann_override=vm_v7_mm,
+            extra_opts=_DBG, gates=["seed_determinism"], category="vm",
+            src_override=render_vm_v7_enginepool_program(vm_v7_mm))
+
+    # ── per-function engine (perFnEngine, annotation-selective P10-B/C) ──
+    # Every virtualized function gets its own dedicated engine; vm_perfn_engine
+    # asserts >= one distinct engine per function's handler table. Name-agnostic
+    # gate hygiene as with the pool cases (base @__vm_engine is never emitted --
+    # per-function ids all carry a .pN suffix).
+    vm_v7_pf = ann_extra("vm_v7_perfn")
+    vm_v7_pf_stack = ann_extra("vm_v7_perfn_stack")
+    reg.add(name="rt_vm_v7_perfn_multi_fn", passes=["vm"],
+            ann_override=vm_v7_pf,
+            gates=_EP_CORE + ["vm_perfn_engine"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_enginepool_program(vm_v7_pf))
+    # Full-stack composition (minus nestedVM): perFnEngine + metamorph + the rest.
+    # Threaded build drops the central vm.dispatch, so use VM_THREADED_CORE_GATES.
+    reg.add(name="rt_vm_v7_perfn_stack", passes=["vm"],
+            ann_override=vm_v7_pf_stack,
+            gates=VM_THREADED_CORE_GATES + VM_ENGINEPOOL_GATES + VM_METAMORPH_GATES
+                + ["vm_perfn_engine", "vm_enc_ctor", "vm_wrapper_is_thin"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_enginepool_program(vm_v7_pf_stack))
+    reg.add(name="rt_vm_v7_perfn_determinism", passes=["vm"],
+            ann_override=vm_v7_pf,
+            extra_opts=_DBG, gates=["seed_determinism"], category="vm",
+            src_override=render_vm_v7_enginepool_program(vm_v7_pf))
+
     # ── preset=<light|medium|high|max> config-surface shortcut ──
     # Resolved in VMPassConfig::fromPassConfig before the explicit-knob getBool/
     # getUInt calls, so this is a pure config-resolution convenience, not a new
@@ -944,10 +1065,20 @@ def register(reg: Registry, **_opts) -> None:
             gates=VM_THREADED_SHARED_GATES + VM_THREADED_GATES,
             extra_opts=_DBG, category="vm",
             src_override=render_vm_v7_multi_fn_aes_program(vm_v7_preset_high))
+    # preset=max now also sets perFnEngine + metamorphicEngines, so the build
+    # holds many distinct engines (one dedicated engine per function, each with a
+    # per-clone-diversified body) instead of a single shared one. Drop the
+    # singleton engine gate and nestedVM's dual-engine gate (which hard-code the
+    # single base @__vm_engine[.nest] names that no longer describe a per-function
+    # pooled build) and add the pool / per-function / metamorphic feature gates.
+    _MAX_ENGINE_GATES = [g for g in VM_THREADED_ENGINE_GATES if g != "vm_engine_singleton"]
     reg.add(name="rt_vm_v7_preset_max_multi_fn", passes=["vm"],
             ann_override=vm_v7_preset_max,
-            gates=VM_THREADED_SHARED_GATES + VM_LAZYDECRYPT_GATES + VM_CONSTINSTREAM_GATES
-                + VM_NESTEDVM_GATES + VM_SUPEROPS_GATES + VM_KEYEDDISP_GATES
+            gates=VM_THREADED_CORE_GATES + _MAX_ENGINE_GATES
+                + VM_ENGINEPOOL_GATES + VM_METAMORPH_GATES + ["vm_perfn_engine"]
+                + VM_LAZYDECRYPT_GATES + VM_CONSTINSTREAM_GATES
+                + ["vm_nestedvm_helper_virtualized"]
+                + VM_SUPEROPS_GATES + VM_KEYEDDISP_GATES
                 + VM_BINDADEB_GATES + VM_THREADED_GATES,
             extra_opts=_DBG, category="vm",
             src_override=render_vm_v7_multi_fn_aes_program(vm_v7_preset_max))

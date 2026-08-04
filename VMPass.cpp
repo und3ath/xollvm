@@ -86,6 +86,8 @@ VMPassConfig VMPassConfig::fromPassConfig(const PassConfig& PC) {
 			Cfg.rollingRegKey = true;
 			Cfg.bindAntiDebug = true;
 			Cfg.randISA = true;
+			Cfg.perFnEngine = true;         // dedicated engine per virtualized fn
+			Cfg.metamorphicEngines = true;  // distinct handler body per engine
 		}
 		// Unknown preset name: silently ignore, falls through to defaults +
 		// explicit knobs.
@@ -125,6 +127,9 @@ VMPassConfig VMPassConfig::fromPassConfig(const PassConfig& PC) {
 	getBool("keyedDispatch", Cfg.keyedDispatch);
 	getBool("superOps", Cfg.superOps);
 	getBool("randISA", Cfg.randISA);
+	getUInt("enginePoolSize", Cfg.enginePoolSize);
+	getBool("metamorphicEngines", Cfg.metamorphicEngines);
+	getBool("perFnEngine", Cfg.perFnEngine);
 
 	// lazyDecrypt requires encBytecode — nothing to defer if bytecode isn't encrypted.
 	if (!Cfg.encBytecode) Cfg.lazyDecrypt = false;
@@ -139,6 +144,10 @@ VMPassConfig VMPassConfig::fromPassConfig(const PassConfig& PC) {
 	if (!Cfg.hardened || !Cfg.antiDebug) Cfg.bindAntiDebug = false;
 	if (Cfg.handlerVariants < 1) Cfg.handlerVariants = 1;
 	if (Cfg.handlerVariants > kMaxHandlerVariants) Cfg.handlerVariants = kMaxHandlerVariants;
+	if (Cfg.enginePoolSize < 1) Cfg.enginePoolSize = 1;
+	// metamorphicEngines needs >1 engine to diversify across -- either an
+	// explicit pool or per-function engines.
+	if (Cfg.enginePoolSize < 2 && !Cfg.perFnEngine) Cfg.metamorphicEngines = false;
 	return Cfg;
 }
 

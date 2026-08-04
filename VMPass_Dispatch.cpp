@@ -540,6 +540,10 @@ void VMImpl::populateVMEngine() {
 	// Make the K structurally-identical variants distinct (per-variant MBA).
 	diversifyHandlerVariants(EF);
 
+	// Make this pool clone's handler bodies distinct from the other engines'
+	// (per-clone MBA, seeded by EngineId). No-op unless metamorphicEngines is on.
+	metamorphRewriteEngine(EF);
+
 	SS->NumVariants = NumVariants;
 	SS->EncDispatch = EncDispatch;
 	SS->LazyMode = LazyDecrypt;

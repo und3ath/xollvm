@@ -523,3 +523,74 @@ def vm_randisa_fcmp_permuted(ir: str) -> Optional[str]:
     if all(_RANDISA_FCMP_CANON.get(k) == v for k, v in m.items()):
         return f"OP_FCMP predicate encoding is canonical ({sorted(m.items())}) — randISA not applied"
     return None
+
+
+# ── P10 engine pool ──────────────────────────────────────────────────────────
+# The shared engine is @__vm_engine (plain) or @__vm_engine.nest (nestedVM's
+# inner layer). With enginePoolSize>1 the pass emits additional pool members by
+# appending .p<N> to either layer -- @__vm_engine.p1, @__vm_engine.nest.p2, ...
+# -- and each virtualized function's handler table targets whichever engine its
+# name+seed hash selected. A .pN suffix is emitted ONLY when pooling is active
+# and some function hashed to pool>=1, so its presence is unambiguous proof of
+# pooling (distinct from the plain/nest split nestedVM produces on its own).
+_POOL_MEMBER_RE = r"^define\b[^\n]*@__vm_engine(?:\.nest)?\.p\d+\("
+
+
+@register("vm_enginepool_multi")
+def vm_enginepool_multi(ir: str) -> Optional[str]:
+    # enginePoolSize>1: prove the pool actually materialised by finding at least
+    # one .pN pool-member engine (on either the plain or the nest layer). The
+    # exact per-function split is a hash of the name + module seed and is asserted
+    # correct by the differential-output gate, not here.
+    if not re.search(_POOL_MEMBER_RE, ir, re.M):
+        return ("no .pN pool-member engine found — engine pool did not "
+                "materialise multiple engines")
+    return None
+
+
+@register("vm_no_enginepool")
+def vm_no_enginepool(ir: str) -> Optional[str]:
+    # Inverse: with pooling off (enginePoolSize=1, the default) no .pN pool
+    # members exist on either layer.
+    pool = re.findall(_POOL_MEMBER_RE, ir, re.M)
+    if pool:
+        return f"found {len(pool)} pool-member engine(s) but enginePoolSize=1 — pool leaked when off"
+    return None
+
+
+@register("vm_metamorph_engines")
+def vm_metamorph_engines(ir: str) -> Optional[str]:
+    # metamorphicEngines rewrites each pool clone's integer handler arithmetic
+    # with per-clone-seeded MBA identities (metamorphRewriteEngine), tagging the
+    # result `me.noise`. The marker is emitted nowhere else, so its presence
+    # proves the per-clone rewrite fired. The seed is keyed on EngineId, so any
+    # two engines that both carry it necessarily diverge (different identity
+    # picks); the companion vm_enginepool_multi gate proves >=2 engines exist,
+    # and the differential-output gate proves the rewrite stayed correct.
+    if not re.search(r"me\.noise", ir):
+        return "no me.noise marker — per-clone metamorphic engine rewrite did not run"
+    return None
+
+
+@register("vm_no_metamorph_engines")
+def vm_no_metamorph_engines(ir: str) -> Optional[str]:
+    n = len(re.findall(r"me\.noise", ir))
+    if n:
+        return f"found {n} me.noise marker(s) but metamorphicEngines=0 — leaked when off"
+    return None
+
+
+@register("vm_perfn_engine")
+def vm_perfn_engine(ir: str) -> Optional[str]:
+    # perFnEngine gives every virtualized function its own dedicated engine, so
+    # the number of distinct @__vm_engine* definitions is at least the number of
+    # per-function handler tables (@<fn>.vm.ophandlers, excluding the shared
+    # __vm_h_* nested helpers). A pooled build has far fewer engines than
+    # functions, so this only holds under perFnEngine.
+    engines = set(re.findall(r"^define\b[^\n]*@(__vm_engine(?:\.nest)?(?:\.p\d+)?)\(", ir, re.M))
+    tables = set(re.findall(r"@(\w+)\.vm\.ophandlers\b", ir))
+    userfns = {t for t in tables if not t.startswith("__vm_h_")}
+    if len(engines) < len(userfns):
+        return (f"{len(engines)} distinct engines for {len(userfns)} virtualized "
+                "functions — not a per-function engine build")
+    return None
