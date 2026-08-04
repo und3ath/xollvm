@@ -44,7 +44,7 @@
 
   <g filter="url(#dl-sh)"><rect x="530" y="120" width="140" height="60" rx="11" fill="url(#dl-rose)"/></g>
   <text class="t" x="600" y="146" text-anchor="middle">EXECUTE</text>
-  <text class="s" x="600" y="164" text-anchor="middle">1 of 51 opcode handlers</text>
+  <text class="s" x="600" y="164" text-anchor="middle">1 of 53 opcode handlers</text>
 
   <g filter="url(#dl-sh)"><rect x="700" y="120" width="140" height="60" rx="11" fill="url(#dl-teal)"/></g>
   <text class="t" x="770" y="146" text-anchor="middle">ADVANCE IP</text>

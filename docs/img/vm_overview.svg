@@ -48,7 +48,7 @@
   <!-- 5 engine -->
   <g filter="url(#vo-sh)"><rect x="150" y="446" width="360" height="112" rx="12" fill="url(#vo-red)"/></g>
   <text class="t" x="330" y="474" text-anchor="middle">__vm_engine()</text>
-  <text class="s" x="330" y="498" text-anchor="middle">51 handler blocks &#183; one per logical opcode</text>
+  <text class="s" x="330" y="498" text-anchor="middle">53 handler blocks &#183; one per logical opcode</text>
   <text class="s" x="330" y="518" text-anchor="middle">central dispatch loop &#183; indirect branch</text>
   <text class="s" x="330" y="538" text-anchor="middle">register files passed by pointer from wrapper</text>
   <text class="side" x="540" y="498">shared, module-level</text>

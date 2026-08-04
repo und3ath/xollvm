@@ -29,17 +29,17 @@
   <text class="lt" x="300" y="60" text-anchor="middle">L5 &#183; Anti-debug timing gates &#8212; <tspan class="kbd">antiDebug</tspan> (RDTSC, needs hardened)</text>
   <text class="lt" x="300" y="92" text-anchor="middle">L4 &#183; Structural hardening &#8212; <tspan class="kbd">hardened=1</tspan></text>
   <text class="lt" x="300" y="124" text-anchor="middle">L3 &#183; Register-value XOR &#8212; <tspan class="kbd">regEncrypt</tspan></text>
-  <text class="lt" x="300" y="156" text-anchor="middle">L2 &#183; Bytecode encryption &#8212; <tspan class="kbd">useAES</tspan> / LCG</text>
+  <text class="lt" x="300" y="156" text-anchor="middle">L2 &#183; Bytecode encryption &#8212; <tspan class="kbd">encBytecode</tspan> (AES-128-CTR)</text>
   <text class="lt" x="300" y="188" text-anchor="middle">L1 &#183; Register-index XOR &#8212; <tspan class="kbd">obfRegIdx</tspan></text>
   <text class="core" x="300" y="272" text-anchor="middle">Bytecode interpreter</text>
   <text class="cs" x="300" y="296" text-anchor="middle">fetch &#8594; decode</text>
   <text class="cs" x="300" y="316" text-anchor="middle">&#8594; execute &#8594; dispatch</text>
-  <text class="cs" x="300" y="340" text-anchor="middle">51-opcode private ISA</text>
+  <text class="cs" x="300" y="340" text-anchor="middle">53-opcode private ISA</text>
 
   <!-- legend -->
   <text class="h" x="610" y="70">Default state</text>
   <circle cx="622" cy="104" r="7" fill="#2563eb"/><text class="lg" x="640" y="109"><tspan class="kbd">obfRegIdx</tspan> &#8212; on</text>
-  <circle cx="622" cy="134" r="7" fill="#0d9488"/><text class="lg" x="640" y="139"><tspan class="kbd">useAES</tspan> &#8212; on (AES-128-CTR)</text>
+  <circle cx="622" cy="134" r="7" fill="#0d9488"/><text class="lg" x="640" y="139"><tspan class="kbd">encBytecode</tspan> &#8212; on (AES-128-CTR)</text>
   <circle cx="622" cy="164" r="7" fill="#94a3b8"/><text class="lg" x="640" y="169"><tspan class="kbd">regEncrypt</tspan> &#8212; off (opt-in)</text>
   <circle cx="622" cy="194" r="7" fill="#94a3b8"/><text class="lg" x="640" y="199"><tspan class="kbd">hardened</tspan> &#8212; off (opt-in)</text>
   <circle cx="622" cy="224" r="7" fill="#2563eb"/><text class="lg" x="640" y="229"><tspan class="kbd">antiDebug</tspan> &#8212; on if hardened</text>

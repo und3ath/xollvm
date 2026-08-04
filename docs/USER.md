@@ -108,7 +108,7 @@ Aliases are case-insensitive. Canonical IDs in reports and manifests are always 
 
 > [!NOTE]
 > An internal `aes_stub` module pass also exists. It is **not user-callable** via annotations —
-> it is auto-linked when `strenc` or `vm` (with `useAES=1`) is enabled, and embeds the shared
+> it is auto-linked when `strenc` or `vm` (with `encBytecode=1`) is enabled, and embeds the shared
 > `__obf_aes_ctr_decrypt` runtime into the module. You do not need to mention it in `obf:` specs.
 
 ### Parameter parsing rules
@@ -605,23 +605,45 @@ into a **private bytecode stream** stored in a read-only global, then replaces t
 with a minimal interpreter (fetch–decode–execute loop). No original basic blocks or instruction
 patterns survive in the emitted IR.
 
-See **[VM.md](VM.md)** for the full reference (ISA, bytecode layout, hardening layers, interaction
-with other passes, debugging tips).
+See **[VM.md](VM.md)** for the full reference (ISA, bytecode layout, hardening layers, the
+structural features below, interaction with other passes, debugging tips).
+
+The easiest way in is a **preset** bundle; explicit knobs override it:
+
+| `preset=` | Gives you |
+|---|---|
+| `light` | Structural virtualisation only. |
+| `medium` | Today's defaults (bit-identical to a bare `vm`). |
+| `high` | `medium` + structural hardening + threaded & IP-keyed dispatch. |
+| `max` | The strongest tier — everything below, plus a private, metamorphic engine per function. |
+
+Common knobs (see VM.md for the full list):
 
 | Key | Default | Range | Meaning |
 |---|---:|---:|---|
+| `preset` | — | light/medium/high/max | Canned knob bundle (above). |
 | `minBlocks` | 1 | 1–∞ | Skip virtualisation if the function has fewer than N basic blocks. |
 | `maxBlocks` | 400 | 0–∞ | Skip virtualisation if the function has more than N blocks (0 = no limit). |
-| `useAES` | 1 | 0/1 | Replace the LCG layer-2 stream with AES-128-CTR bytecode encryption. |
 | `obfRegIdx` | 1 | 0/1 | XOR every register-index byte in the bytecode with a compile-time salt. |
-| `encBytecode` | 1 | 0/1 | `.init_array` constructor encrypts the bytecode stream at process load time. |
+| `encBytecode` | 1 | 0/1 | AES-128-CTR-encrypt the bytecode; a `.init_array` ctor decrypts it at load time. |
+| `lazyDecrypt` | 0 | 0/1 | Decrypt bytecode per-fetch so it stays ciphertext at rest (needs `encBytecode`). |
+| `constInStream` | 0 | 0/1 | Hide constants inside the encrypted bytecode instead of plaintext stores. |
 | `hardened` | 0 | 0/1 | MBA expressions + opaque predicates on handler blocks; enables anti-debug traps. |
 | `regEncrypt` | 0 | 0/1 | XOR-encrypt virtual register values at rest in the register file. |
 | `antiDebug` | 1 | 0/1 | Anti-debug timing traps in the interpreter (effective only when `hardened=1`). |
+| `bindAntiDebug` | 0 | 0/1 | Fold debugger detection into the AES key — wrong key → garbage under a debugger. |
+| `nestedVM` | 0 | 0/1 | Virtualise hot arithmetic handlers against a second interpreter (depth-2). |
+| `threadedDispatch` | 0 | 0/1 | Inline dispatch into every handler — no single central dispatch loop. |
+| `keyedDispatch` | 0 | 0/1 | Key each opcode byte by instruction pointer; defeats static byte→handler maps. |
+| `superOps` | 0 | 0/1 | Fuse `mul`+`add` into one fused opcode. |
+| `randISA` | 0 | 0/1 | Per-build permutation of operand-field encodings; no cross-build signature. |
+| `enginePoolSize` | 1 | 1–∞ | Spread functions across N structurally-distinct engines. |
+| `perFnEngine` | 0 | 0/1 | Give this function its own dedicated engine. |
+| `metamorphicEngines` | 0 | 0/1 | Diversify each engine's handler bodies (needs a pool or `perFnEngine`). |
 | `adDispatchThreshold` | 5000 | — | RDTSC delta (cycles) for the dispatch-level timing gate. |
-| `adHandlerThreshold` | 500 | — | RDTSC delta (cycles) for handler-level spot checks. |
-| `adDispatchInterval` | 64 | — | Check every N fetch iterations (must be a power of 2). |
-| `adHandlerProb` | 10 | 0–100 | Percentage of handlers to equip with timing traps. |
+| `adHandlerThreshold` | 5000 | — | RDTSC delta (cycles) for handler-level spot checks. |
+
+> The old `useAES` knob was removed — AES-128-CTR is now the only bytecode cipher.
 
 > [!WARNING]
 > `vm` **conflicts with `flattening`** — both completely restructure the CFG.
@@ -635,17 +657,21 @@ with other passes, debugging tips).
 Examples:
 
 ```c
-// Minimal — virtualise with default hardening
+// Minimal — virtualise with default layers (AES + register-index XOR)
 __attribute__((annotate("obf: vm")))
 int minimal(int x) { return x + 1; }
 
-// Standard — AES encryption + register-index obfuscation (defaults)
-__attribute__((annotate("obf: vm(useAES=1,obfRegIdx=1,encBytecode=1)")))
+// Standard — explicit defaults
+__attribute__((annotate("obf: vm(obfRegIdx=1,encBytecode=1)")))
 int standard(int x, int y) { return x * y; }
 
-// Maximum hardening
-__attribute__((annotate("obf: vm(hardened=1,useAES=1,regEncrypt=1,antiDebug=1,adDispatchThreshold=3000)")))
+// Strongest single tier — full stack + a private, metamorphic engine per function
+__attribute__((annotate("obf: vm(preset=max)")))
 int protected_fn(int key, int data) { return key ^ data; }
+
+// Hand-picked hardening: register encryption + anti-debug + tighter dispatch gate
+__attribute__((annotate("obf: vm(hardened=1,regEncrypt=1,antiDebug=1,adDispatchThreshold=3000)")))
+int licensed(int key, int data) { return key ^ data; }
 ```
 
 ---
@@ -659,7 +685,7 @@ them at process load time.
 Three ciphers are available via the `cipher` key:
 
 - **`aes`** *(default)* — AES-128-CTR. Uses the shared `__obf_aes_ctr_decrypt` runtime
-  (the same stub the `vm` pass links when `useAES=1`).
+  (the same stub the `vm` pass links when it encrypts bytecode).
 - **`chacha`** — ChaCha20 (tableless: 256-bit key + 96-bit nonce, no AES S-box tables in the
   binary). Takes precedence over `aes` when both are requested.
 - **`xor`** — legacy XOR keystream. Weakest; kept as a lightweight fallback.
@@ -730,7 +756,7 @@ __attribute__((annotate("obf: mba(prob=70), substitution(loop=2), split(num=6), 
 
 ```c
 // Pre-obfuscate then virtualise the result
-__attribute__((annotate("obf: mba(prob=70), bcf(prob=30), vm(hardened=1,useAES=1,regEncrypt=1)")))
+__attribute__((annotate("obf: mba(prob=70), bcf(prob=30), vm(hardened=1,regEncrypt=1)")))
 ```
 
 ### Trade-offs and pitfalls
