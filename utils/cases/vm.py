@@ -963,6 +963,18 @@ def register(reg: Registry, **_opts) -> None:
             ann_override=vm_v7_ep_multi,
             extra_opts=_DBG, gates=["seed_determinism"], category="vm",
             src_override=render_vm_v7_enginepool_program(vm_v7_ep_multi))
+    # nestedVM + pool: the nest layer is pooled too (@__vm_engine.nest.pN), while
+    # the single shared __vm_h_* helper set is still virtualized exactly once
+    # against the plain pool-0 engine. Gate hygiene: pool 0's nest slot may be
+    # empty under the hash split, so drop vm_nestedvm_dual_engine (it needs the
+    # base @__vm_engine.nest name) and keep only vm_nestedvm_helper_virtualized,
+    # whose helper always targets the plain pool-0 engine.
+    vm_v7_ep_nested = ann_extra("vm_v7_enginepool_nested")
+    reg.add(name="rt_vm_v7_enginepool_nested", passes=["vm"],
+            ann_override=vm_v7_ep_nested,
+            gates=_EP_CORE + ["vm_nestedvm_helper_virtualized"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_enginepool_program(vm_v7_ep_nested))
 
     # ── preset=<light|medium|high|max> config-surface shortcut ──
     # Resolved in VMPassConfig::fromPassConfig before the explicit-knob getBool/

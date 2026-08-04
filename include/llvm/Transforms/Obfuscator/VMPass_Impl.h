@@ -517,11 +517,13 @@ namespace llvm {
 			SuperOps(Cfg.superOps),
 			BindAntiDebug(Cfg.bindAntiDebug),
 			RandISA(Cfg.randISA),
-			// P10: the plain layer is pooled across PoolIdxIn (0..N-1); nestedVM
-			// builds pin to pool 0's nest engine (EngineId 1) so the single shared
-			// __vm_h_* helper is virtualized exactly once (nest-layer pooling is a
-			// later phase). PoolIdxIn 0 + nestedVM?1:0 reproduces the pre-pool id.
-			EngineId(VMEngine::makeEngineId(NestedVM ? 0u : PoolIdxIn, NestedVM ? 1u : 0u)),
+			// P10: both layers are pooled across PoolIdxIn (0..N-1). A plain
+			// function in pool p targets @__vm_engine[.pp]; a nestedVM function in
+			// pool p targets @__vm_engine.nest[.pp], whose eligible handlers call
+			// the single shared __vm_h_* helper set (itself virtualized once
+			// against the plain pool-0 engine -- see virtualizeNestedHelpersOnce).
+			// PoolIdxIn 0 + nestedVM?1:0 reproduces the pre-pool id (0 or 1).
+			EngineId(VMEngine::makeEngineId(PoolIdxIn, NestedVM ? 1u : 0u)),
 			EnginePoolSize(Cfg.enginePoolSize ? Cfg.enginePoolSize : 1u),
 			SaltConst(R.u32()),
 			// IMPORTANT: indices are only XOR-salted when obfRegIdx=1.

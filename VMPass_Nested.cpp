@@ -547,7 +547,14 @@ Function* VMImpl::getOrCreateNestedBinopFHelper() {
 // the fixed nesting order; a helper not found by name was never referenced
 // (opcodeNests() excluded it, e.g. via the nestedVMOpcodes cap).
 void VMImpl::virtualizeNestedHelpersOnce() {
-	VMEngine::SharedState* SS = VMEngine::getSharedState(M, EngineId);
+	// There is one shared set of __vm_h_* helpers per module, all virtualized
+	// against the plain pool-0 engine (EngineId 0). With a pooled nest layer the
+	// module can hold several nest engines (@__vm_engine.nest[.pN], one per pool
+	// member a nestedVM function landed in), and each would otherwise re-enter
+	// here and virtualize the same helpers again -- wrapping an already-wrapped
+	// helper. Key the once-guard on the plain pool-0 engine's state, which every
+	// nest engine shares, so the helpers are virtualized exactly once per module.
+	VMEngine::SharedState* SS = VMEngine::getSharedState(M, VMEngine::makeEngineId(0, 0));
 	if (SS->NestedHelpersBuilt) return;
 	SS->NestedHelpersBuilt = true;
 

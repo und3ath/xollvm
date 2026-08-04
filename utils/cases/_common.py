@@ -216,6 +216,9 @@ EXTRA_ANN: Dict[str, str] = {
     "vm_v7_enginepool_stack":    "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,useAES=1,"
                                  "enginePoolSize=4,superOps=1,threadedDispatch=1,"
                                  "keyedDispatch=1,encDispatch=1,lazyDecrypt=1,constInStream=1)",
+    # nestedVM + pool: the nest layer is pooled too (@__vm_engine.nest.pN); the
+    # one shared __vm_h_* helper set stays virtualized exactly once (plain pool 0).
+    "vm_v7_enginepool_nested":   "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,nestedVM=1,enginePoolSize=4)",
     # preset=<name>: config-surface shortcut resolved in VMPassConfig::fromPassConfig
     # before explicit knobs (which still override). medium == today's defaults.
     "vm_v7_preset_light":  "vm(minBlocks=1,preset=light)",
