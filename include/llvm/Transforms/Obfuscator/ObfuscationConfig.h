@@ -347,6 +347,14 @@ namespace llvm {
 		// byte-identical.
 		bool     metamorphicEngines = false;
 
+		// perFnEngine: give THIS function its own dedicated shared engine instead
+		// of hashing it into the enginePoolSize pool. Because annotations are
+		// per-function, setting it on selected (critical) functions gives them
+		// private engines while the rest share the pool (annotation-selective);
+		// setting it everywhere gives a full per-function engine build. Highest
+		// structural resilience, highest .text cost. Off = use enginePoolSize.
+		bool     perFnEngine = false;
+
 		static VMPassConfig fromPassConfig(const PassConfig& PC);
 		bool validate() const;
 	};

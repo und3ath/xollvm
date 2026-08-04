@@ -1007,6 +1007,31 @@ def register(reg: Registry, **_opts) -> None:
             extra_opts=_DBG, gates=["seed_determinism"], category="vm",
             src_override=render_vm_v7_enginepool_program(vm_v7_mm))
 
+    # ── per-function engine (perFnEngine, annotation-selective P10-B/C) ──
+    # Every virtualized function gets its own dedicated engine; vm_perfn_engine
+    # asserts >= one distinct engine per function's handler table. Name-agnostic
+    # gate hygiene as with the pool cases (base @__vm_engine is never emitted --
+    # per-function ids all carry a .pN suffix).
+    vm_v7_pf = ann_extra("vm_v7_perfn")
+    vm_v7_pf_stack = ann_extra("vm_v7_perfn_stack")
+    reg.add(name="rt_vm_v7_perfn_multi_fn", passes=["vm"],
+            ann_override=vm_v7_pf,
+            gates=_EP_CORE + ["vm_perfn_engine"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_enginepool_program(vm_v7_pf))
+    # Full-stack composition (minus nestedVM): perFnEngine + metamorph + the rest.
+    # Threaded build drops the central vm.dispatch, so use VM_THREADED_CORE_GATES.
+    reg.add(name="rt_vm_v7_perfn_stack", passes=["vm"],
+            ann_override=vm_v7_pf_stack,
+            gates=VM_THREADED_CORE_GATES + VM_ENGINEPOOL_GATES + VM_METAMORPH_GATES
+                + ["vm_perfn_engine", "vm_enc_ctor", "vm_wrapper_is_thin"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_enginepool_program(vm_v7_pf_stack))
+    reg.add(name="rt_vm_v7_perfn_determinism", passes=["vm"],
+            ann_override=vm_v7_pf,
+            extra_opts=_DBG, gates=["seed_determinism"], category="vm",
+            src_override=render_vm_v7_enginepool_program(vm_v7_pf))
+
     # ── preset=<light|medium|high|max> config-surface shortcut ──
     # Resolved in VMPassConfig::fromPassConfig before the explicit-knob getBool/
     # getUInt calls, so this is a pure config-resolution convenience, not a new

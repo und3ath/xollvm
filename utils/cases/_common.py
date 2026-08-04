@@ -230,6 +230,14 @@ EXTRA_ANN: Dict[str, str] = {
                              "enginePoolSize=4,metamorphicEngines=1,superOps=1,"
                              "threadedDispatch=1,keyedDispatch=1,encDispatch=1,"
                              "lazyDecrypt=1,constInStream=1)",
+    # perFnEngine: every virtualized function gets its own dedicated engine.
+    "vm_v7_perfn":       "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,perFnEngine=1)",
+    # Full composition (minus nestedVM): perFnEngine + metamorph + superOps +
+    # threaded + keyed + encDispatch + lazy + const + useAES.
+    "vm_v7_perfn_stack": "vm(minBlocks=1,obfRegIdx=1,encBytecode=1,useAES=1,"
+                         "perFnEngine=1,metamorphicEngines=1,superOps=1,"
+                         "threadedDispatch=1,keyedDispatch=1,encDispatch=1,"
+                         "lazyDecrypt=1,constInStream=1)",
     # preset=<name>: config-surface shortcut resolved in VMPassConfig::fromPassConfig
     # before explicit knobs (which still override). medium == today's defaults.
     "vm_v7_preset_light":  "vm(minBlocks=1,preset=light)",

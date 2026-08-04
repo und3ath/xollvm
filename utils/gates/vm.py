@@ -578,3 +578,19 @@ def vm_no_metamorph_engines(ir: str) -> Optional[str]:
     if n:
         return f"found {n} me.noise marker(s) but metamorphicEngines=0 — leaked when off"
     return None
+
+
+@register("vm_perfn_engine")
+def vm_perfn_engine(ir: str) -> Optional[str]:
+    # perFnEngine gives every virtualized function its own dedicated engine, so
+    # the number of distinct @__vm_engine* definitions is at least the number of
+    # per-function handler tables (@<fn>.vm.ophandlers, excluding the shared
+    # __vm_h_* nested helpers). A pooled build has far fewer engines than
+    # functions, so this only holds under perFnEngine.
+    engines = set(re.findall(r"^define\b[^\n]*@(__vm_engine(?:\.nest)?(?:\.p\d+)?)\(", ir, re.M))
+    tables = set(re.findall(r"@(\w+)\.vm\.ophandlers\b", ir))
+    userfns = {t for t in tables if not t.startswith("__vm_h_")}
+    if len(engines) < len(userfns):
+        return (f"{len(engines)} distinct engines for {len(userfns)} virtualized "
+                "functions — not a per-function engine build")
+    return None

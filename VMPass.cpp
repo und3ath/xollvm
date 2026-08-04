@@ -127,6 +127,7 @@ VMPassConfig VMPassConfig::fromPassConfig(const PassConfig& PC) {
 	getBool("randISA", Cfg.randISA);
 	getUInt("enginePoolSize", Cfg.enginePoolSize);
 	getBool("metamorphicEngines", Cfg.metamorphicEngines);
+	getBool("perFnEngine", Cfg.perFnEngine);
 
 	// lazyDecrypt requires encBytecode — nothing to defer if bytecode isn't encrypted.
 	if (!Cfg.encBytecode) Cfg.lazyDecrypt = false;
@@ -142,8 +143,9 @@ VMPassConfig VMPassConfig::fromPassConfig(const PassConfig& PC) {
 	if (Cfg.handlerVariants < 1) Cfg.handlerVariants = 1;
 	if (Cfg.handlerVariants > kMaxHandlerVariants) Cfg.handlerVariants = kMaxHandlerVariants;
 	if (Cfg.enginePoolSize < 1) Cfg.enginePoolSize = 1;
-	// metamorphicEngines needs a pool of >1 engine to diversify across.
-	if (Cfg.enginePoolSize < 2) Cfg.metamorphicEngines = false;
+	// metamorphicEngines needs >1 engine to diversify across -- either an
+	// explicit pool or per-function engines.
+	if (Cfg.enginePoolSize < 2 && !Cfg.perFnEngine) Cfg.metamorphicEngines = false;
 	return Cfg;
 }
 

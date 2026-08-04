@@ -483,6 +483,16 @@ namespace llvm {
 		// single-engine build keeps EngineId = NestedVM?1:0 exactly (byte-identical).
 		static unsigned computePoolIdx(const Function& Fn, const VMPassConfig& Cfg,
 			uint64_t MasterSeed) {
+			// perFnEngine: dedicate a private engine to this function via a wide
+			// per-function hash (collision probability ~ n^2 / 2^30, negligible).
+			// Bit 30 is set so these ids never overlap the small [0,enginePoolSize)
+			// pool range, letting per-function and pooled functions coexist in one
+			// module (annotation-selective use). EngineId = poolIdx*2 + layer stays
+			// within 32 bits (max poolIdx 0x7FFFFFFF -> EngineId 0xFFFFFFFF).
+			if (Cfg.perFnEngine) {
+				uint64_t H = obf::mix64(MasterSeed ^ obf::fnv1a64(Fn.getName()));
+				return (unsigned)(H & 0x3FFFFFFFu) | 0x40000000u;
+			}
 			unsigned N = Cfg.enginePoolSize ? Cfg.enginePoolSize : 1u;
 			if (N <= 1) return 0;
 			uint64_t H = obf::mix64(MasterSeed ^ obf::fnv1a64(Fn.getName()));
