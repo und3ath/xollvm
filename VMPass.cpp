@@ -86,6 +86,8 @@ VMPassConfig VMPassConfig::fromPassConfig(const PassConfig& PC) {
 			Cfg.rollingRegKey = true;
 			Cfg.bindAntiDebug = true;
 			Cfg.randISA = true;
+			Cfg.perFnEngine = true;         // dedicated engine per virtualized fn
+			Cfg.metamorphicEngines = true;  // distinct handler body per engine
 		}
 		// Unknown preset name: silently ignore, falls through to defaults +
 		// explicit knobs.

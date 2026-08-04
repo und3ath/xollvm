@@ -1065,10 +1065,20 @@ def register(reg: Registry, **_opts) -> None:
             gates=VM_THREADED_SHARED_GATES + VM_THREADED_GATES,
             extra_opts=_DBG, category="vm",
             src_override=render_vm_v7_multi_fn_aes_program(vm_v7_preset_high))
+    # preset=max now also sets perFnEngine + metamorphicEngines, so the build
+    # holds many distinct engines (one dedicated engine per function, each with a
+    # per-clone-diversified body) instead of a single shared one. Drop the
+    # singleton engine gate and nestedVM's dual-engine gate (which hard-code the
+    # single base @__vm_engine[.nest] names that no longer describe a per-function
+    # pooled build) and add the pool / per-function / metamorphic feature gates.
+    _MAX_ENGINE_GATES = [g for g in VM_THREADED_ENGINE_GATES if g != "vm_engine_singleton"]
     reg.add(name="rt_vm_v7_preset_max_multi_fn", passes=["vm"],
             ann_override=vm_v7_preset_max,
-            gates=VM_THREADED_SHARED_GATES + VM_LAZYDECRYPT_GATES + VM_CONSTINSTREAM_GATES
-                + VM_NESTEDVM_GATES + VM_SUPEROPS_GATES + VM_KEYEDDISP_GATES
+            gates=VM_THREADED_CORE_GATES + _MAX_ENGINE_GATES
+                + VM_ENGINEPOOL_GATES + VM_METAMORPH_GATES + ["vm_perfn_engine"]
+                + VM_LAZYDECRYPT_GATES + VM_CONSTINSTREAM_GATES
+                + ["vm_nestedvm_helper_virtualized"]
+                + VM_SUPEROPS_GATES + VM_KEYEDDISP_GATES
                 + VM_BINDADEB_GATES + VM_THREADED_GATES,
             extra_opts=_DBG, category="vm",
             src_override=render_vm_v7_multi_fn_aes_program(vm_v7_preset_max))
