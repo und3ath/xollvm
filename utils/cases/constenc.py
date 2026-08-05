@@ -13,8 +13,9 @@ import programs
 from ._common import Registry
 
 
-_ANN       = "obf: constenc(prob=100,minAbs=2)"
-_ANN_FP0   = "obf: constenc(prob=100,minAbs=2,encFP=0)"
+_ANN         = "obf: constenc(prob=100,minAbs=2)"
+_ANN_FP0     = "obf: constenc(prob=100,minAbs=2,encFP=0)"
+_ANN_WRAPMBA = "obf: constenc(prob=100,minAbs=2,wrapMBA=1)"
 _ANN_COMBO = ("obf: constenc(prob=100,minAbs=2), "
               "mba(prob=100,depth=2,maxSites=200), "
               "bcf(prob=100,loop=1)")
@@ -61,3 +62,16 @@ def register(reg: Registry, **_opts) -> None:
             ann_override=_ANN,
             src_override=programs.render("constenc.basic", annotation=_ANN),
             gates=["seed_divergence"], category="constenc")
+
+    # ── wrapMBA=1: materialized constants additionally routed through
+    #    MBA linear inflation. Correctness (differential harness) + the
+    #    same materialization gate as constenc_basic. ────────────────
+    reg.add(name="constenc_wrapmba", passes=["constenc"],
+            ann_override=_ANN_WRAPMBA,
+            src_override=programs.render("constenc.basic", annotation=_ANN_WRAPMBA),
+            gates=["constenc_materialized"],
+            category="constenc")
+    reg.add(name="constenc_wrapmba_seed_determinism", passes=["constenc"],
+            ann_override=_ANN_WRAPMBA,
+            src_override=programs.render("constenc.basic", annotation=_ANN_WRAPMBA),
+            gates=["seed_determinism"], category="constenc")

@@ -357,7 +357,7 @@ and `double`. Trivial small-magnitude constants (below `minAbs`) are left alone.
 | `minAbs` | 2 | ≥ 0 | Skip constants whose magnitude is below this (e.g. `0`/`1`/`-1`). |
 | `encInt` | 1 | 0/1 | Encode integer constants. |
 | `encFP` | 1 | 0/1 | Encode `float`/`double` constants. |
-| `wrapMBA` | 0 | 0/1 | Reserved: additionally MBA-wrap the materialization (not yet implemented). |
+| `wrapMBA` | 0 | 0/1 | Route materialized constants through MBA (linear inflation). |
 
 Example:
 
