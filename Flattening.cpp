@@ -1,5 +1,6 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Module.h"
@@ -1091,22 +1092,14 @@ namespace {
 		Function& F = PCtx.F;
 		FunctionObfContext& Ctx = PCtx.FOC;
 
-		Ctx.StatVar = createStateVariable(F);
-		Ctx.NumDispatchers = computeNumDispatchers(Ctx);
-		// State encoding keys
-		Ctx.StateXorKey = PCtx.KeysRng.u32();
-		Ctx.StateAddKey = PCtx.KeysRng.u32();
-		// Router hash keys (pick non-trivial values)
-		Ctx.RouterXorKey = PCtx.KeysRng.u32();
-		Ctx.RouterMulKey = (PCtx.KeysRng.u32() | 1u); // make it odd
-		Ctx.RouterAddKey = PCtx.KeysRng.u32();
-		createDispatchers(F, Ctx);
-		// Collect flattened blocks (exclude entry, dispatchers, EH pads, EH regions)
+		// Collect flattened blocks FIRST (exclude entry, EH pads, EH regions).
+		// Dispatchers/router don't exist yet, so no need to exclude them here.
+		// Collecting before we create any structural block lets us validate the
+		// candidate set and bail cleanly — without leaving half-built dispatcher
+		// blocks behind — if the CFG isn't fully flattenable.
 		Ctx.FlattenedBlocks.clear();
 		for (BasicBlock& BB : F) {
 			if (&BB == &F.getEntryBlock())
-				continue;
-			if (llvm::is_contained(Ctx.Dispatchers, &BB))
 				continue;
 			// Exclude ALL EH pads (landingpad, catchswitch, catchpad, cleanuppad)
 			// and blocks that are reachable only through EH pads (EH regions).
@@ -1117,6 +1110,44 @@ namespace {
 				continue;
 			Ctx.FlattenedBlocks.push_back(&BB);
 		}
+
+		// Validate: every plain-branch successor of the entry block and of each
+		// flattened block must itself be flattened. If it isn't, the rewrite
+		// logic would encode Ctx.BlockIDs.lookup(Succ) == 0 (a state that maps to
+		// no switch case) and route that edge into the exit trampoline
+		// (unreachable/trap) — a silent miscompile. This can only happen if a
+		// *normal* branch targets a block excluded above (e.g. an EH-region
+		// block), which valid EH shape does not produce, but guard it rather than
+		// emit broken IR. Invoke normal-dest edges are self-guarding (the rewrite
+		// leaves the invoke untouched when its normal dest isn't flattened) and
+		// need no check here.
+		SmallPtrSet<BasicBlock*, 32> FlatSet(Ctx.FlattenedBlocks.begin(),
+			Ctx.FlattenedBlocks.end());
+		auto branchTargetsAllFlattened = [&](BasicBlock& BB) {
+			auto* Br = dyn_cast<BranchInst>(BB.getTerminator());
+			if (!Br)
+				return true; // ret/unreachable/invoke handled elsewhere
+			for (BasicBlock* Succ : Br->successors())
+				if (!FlatSet.contains(Succ))
+					return false;
+			return true;
+			};
+		if (!branchTargetsAllFlattened(F.getEntryBlock()))
+			return false;
+		for (BasicBlock* BB : Ctx.FlattenedBlocks)
+			if (!branchTargetsAllFlattened(*BB))
+				return false;
+
+		Ctx.StatVar = createStateVariable(F);
+		Ctx.NumDispatchers = computeNumDispatchers(Ctx);
+		// State encoding keys
+		Ctx.StateXorKey = PCtx.KeysRng.u32();
+		Ctx.StateAddKey = PCtx.KeysRng.u32();
+		// Router hash keys (pick non-trivial values)
+		Ctx.RouterXorKey = PCtx.KeysRng.u32();
+		Ctx.RouterMulKey = (PCtx.KeysRng.u32() | 1u); // make it odd
+		Ctx.RouterAddKey = PCtx.KeysRng.u32();
+		createDispatchers(F, Ctx);
 		// Create router AFTER collection so it won't be included
 		createRouter(F, Ctx);
 
@@ -1457,8 +1488,11 @@ namespace {
 		llvm::SmallVector<llvm::AllocaInst*, 64> DemotedAllocas;
 		llvm::obf::demoteForCFGChange(F, DemotedAllocas);
 
-		if (!prepareFlattening(PCtx))
+		if (!prepareFlattening(PCtx)) {
+			// Restore SSA — we demoted above but built nothing.
+			llvm::obf::promoteDemotedAllocas(F, DemotedAllocas);
 			return false;
+		}
 		assignBlockIDs(PCtx);
 		assignDispatcherGroupsFromEncodedState(Ctx);
 		rewriteEntryBlockRouter(F, Ctx, PCtx);

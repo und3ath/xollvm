@@ -328,6 +328,16 @@ namespace {
 		const ObfuscationConfig& obfConfig = getObfConfig(F, AM);
 		auto passConfig = obfConfig.getPassConfig("bcf");
 
+		// The BCF pass is added module-wide (see ObfuscationPipeline::buildPipeline)
+		// and runs on every function. A function whose annotation omits `bcf` has
+		// no pass config here — deref of the empty optional would be UB. Mirror the
+		// guard every other pass uses and disable cleanly.
+		if (!passConfig.has_value()) {
+			BCFConfig cfg;
+			cfg.enable = false;
+			return cfg;
+		}
+
 		BCFConfig cfg = BCFConfig::fromPassConfig(*passConfig);
 
 		if (!cfg.validate()) {
