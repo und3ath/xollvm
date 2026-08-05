@@ -136,7 +136,7 @@
  *   minAbs                (2)    skip constants with |C| < minAbs
  *   encInt    [0/1]       (1)    encrypt integer constants
  *   encFP     [0/1]       (1)    encrypt floating-point constants
- *   wrapMBA   [0/1]       (0)    wrap the decrypt expr in MBA for extra hardness
+ *   wrapMBA|wrapMba [0/1] (0)    wrap materialized constants with MBA
  *
  *   e.g.  OBF("constenc(prob=80, encFP=0)")
  *--------------------------------------------------------------------------*/

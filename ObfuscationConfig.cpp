@@ -549,6 +549,8 @@ ConstEncConfig ConstEncConfig::fromPassConfig(const PassConfig& pc) {
 			cfg.encFP = (pc.params.at("encFP") != "0");
 		if (pc.params.count("wrapMBA"))
 			cfg.wrapMBA = (pc.params.at("wrapMBA") != "0");
+		if (pc.params.count("wrapMba"))
+			cfg.wrapMBA = (pc.params.at("wrapMba") != "0");
 	}
 	catch (const std::exception& e) {
 		errs() << "Error parsing ConstEnc parameters: " << e.what() << "\n";

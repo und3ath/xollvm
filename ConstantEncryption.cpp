@@ -18,6 +18,7 @@
 #include "llvm/Transforms/Obfuscator/ObfuscationOptions.h"
 #include "llvm/Transforms/Obfuscator/Utils.h"
 #include "llvm/Transforms/Obfuscator/OpaqueUtils.h"
+#include "llvm/Transforms/Obfuscator/MBAUtils.h"
 
 
 #include <algorithm>
@@ -58,9 +59,12 @@ namespace {
 
 		llvm::obf::Rng SelectRng; // per-site apply-probability gate
 		llvm::obf::Rng SaltRng;   // feeds OpaqueUtils' volatile anchor / mixing
-		// Factory: owns per-function opaque-const anchor. Constructed AFTER
-		// SaltRng so the reference stays stable (mirrors MbaCtx ordering).
+		llvm::obf::Rng MbaRng;    // feeds MbaUtils' volatile noise slot / term shape
+		// Factories: own per-function opaque-const / MBA-noise anchors.
+		// Constructed AFTER their Rngs so the references stay stable (mirrors
+		// MbaCtx ordering).
 		llvm::obf::OpaqueUtils OU;
+		llvm::obf::MbaUtils MBA;
 
 		ConstEncCtx(Function& F, FunctionAnalysisManager& AM)
 			: FuncPassCtx(F, AM, "constenc"),
@@ -68,7 +72,14 @@ namespace {
 			FOC(*AM.getResult<FunctionObfContextAnalysis>(F)),
 			SelectRng(R.fork("select")),
 			SaltRng(R.fork("salt")),
-			OU(*F.getParent(), SaltRng, "obf.constenc.salt.i32", llvm::obf::OpaqueUtils::Options{}) {
+			MbaRng(R.fork("mba")),
+			OU(*F.getParent(), SaltRng, "obf.constenc.salt.i32", llvm::obf::OpaqueUtils::Options{}),
+			MBA(*F.getParent(), MbaRng, "obf.constenc.mba.noise.i32", [](){
+				llvm::obf::MbaUtils::Options O;
+				O.LinearTermsMin = 3;
+				O.LinearTermsMax = 6;
+				return O;
+			}()) {
 		}
 	};
 
@@ -113,12 +124,20 @@ namespace {
 
 	// Returns a Value equal to C but opaque to the optimizer, or nullptr if C's
 	// type/width isn't supported (caller must skip the site in that case).
-	static Value* materializeConst(IRBuilder<>& B, llvm::obf::OpaqueUtils& OU, Constant* C) {
+	// When `wrap` is set (and MBA non-null), the materialized integer value is
+	// additionally routed through MbaUtils::inflateLinear before being handed
+	// back (and, for FP, before the bitcast) — same type, same runtime value,
+	// just harder to optimize/pattern-match away.
+	static Value* materializeConst(IRBuilder<>& B, llvm::obf::OpaqueUtils& OU, Constant* C,
+		llvm::obf::MbaUtils* MBA, bool wrap) {
 		if (auto* CI = dyn_cast<ConstantInt>(C)) {
 			unsigned W = CI->getBitWidth();
 			if (!(W >= 1 && W <= 32) && W != 64)
 				return nullptr;
-			return materializeIntBits(B, OU, CI->getValue(), W);
+			Value* IntV = materializeIntBits(B, OU, CI->getValue(), W);
+			if (wrap && MBA && IntV)
+				IntV = MBA->inflateLinear(B, IntV, /*DepthHint=*/1);
+			return IntV;
 		}
 		if (auto* CF = dyn_cast<ConstantFP>(C)) {
 			Type* Ty = CF->getType();
@@ -134,6 +153,8 @@ namespace {
 			Value* IntV = materializeIntBits(B, OU, Bits, W);
 			if (!IntV)
 				return nullptr;
+			if (wrap && MBA)
+				IntV = MBA->inflateLinear(B, IntV, 1);
 			return B.CreateBitCast(IntV, Ty);
 		}
 		return nullptr;
@@ -269,7 +290,7 @@ namespace {
 		// Budget-aware site cap. Each site is a small, bounded materialization
 		// (a handful of insts for W<=32, roughly double for W==64) — simpler
 		// and cheaper than MBA's recursive expansion, so a flat estimate is fine.
-		unsigned InstsPerSiteEst = 6;
+		unsigned InstsPerSiteEst = Cfg.wrapMBA ? 24u : 6u;
 		if (Ctx.BudgetRemaining != UINT_MAX) {
 			unsigned budgetSites = Ctx.BudgetRemaining / std::max(1u, InstsPerSiteEst);
 			budgetSites = std::max(1u, budgetSites);
@@ -317,14 +338,9 @@ namespace {
 				continue;
 
 			IRBuilder<> B(Site.I);
-			Value* NV = materializeConst(B, PCtx.OU, Site.C);
+			Value* NV = materializeConst(B, PCtx.OU, Site.C, &PCtx.MBA, Cfg.wrapMBA);
 			if (!NV)
 				continue;
-
-			// TODO(wrapMBA): optionally route NV through MbaUtils-style linear
-			// wrapping for extra hardness (cfg.wrapMBA). Left unimplemented —
-			// needs its own opaque-const-safe MBA entry point to stay correct;
-			// not worth the correctness risk for v1.
 
 			Site.I->setOperand(Site.OpIdx, NV);
 			++SitesDone;
