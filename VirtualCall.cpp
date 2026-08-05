@@ -15,6 +15,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/MD5.h"
+#include "llvm/Transforms/Utils/ModuleUtils.h"
 
 #include "llvm/Transforms/Obfuscator/PassCtx.h"
 #include "llvm/Transforms/Obfuscator/Utils.h"
@@ -88,6 +89,11 @@ namespace {
 		static Function* getOrCreateDecoyThunk(Module& M, Function* Callee, unsigned ThunkIdx);
 		static uint32_t getOrCreateRealSlot(Module& M, Function* Callee, llvm::obf::Rng& TableRng);
 		static GlobalVariable* getOrCreateVTable(Module& M, Function* Callee, llvm::obf::Rng& TableRng, uint32_t& RealSlotOut);
+		// Encrypted, runtime-initialized vtable (non-merged path only). Returns the
+		// mutable [kTableSize x i64] global; RealSlotOut/KeyOut are the stable
+		// per-callee slot and XOR key used both by the ctor and the callsite.
+		static GlobalVariable* getOrCreateEncVTable(Module& M, Function* Callee, VCallCtx& Ctx,
+			uint32_t& RealSlotOut, uint64_t& KeyOut);
 
 		// merged mode
 		static MergedVTableInfo & getMergedInfo(Module & M);
@@ -144,6 +150,7 @@ namespace {
 		llvm::obf::Rng PickRng;   // shuffle candidate order (stable)
 		llvm::obf::Rng TableRng;  // vtable layout + real slot
 		llvm::obf::Rng IndexRng;  // volatile-delta masking salt
+		llvm::obf::Rng KeyRng;    // encrypted-vtable XOR key material (encryptTable)
 
 		llvm::obf::Rng NameRng;   // vtable naming salt
 		llvm::obf::Rng DecoyRng;  // decoy selection
@@ -159,6 +166,7 @@ namespace {
 			PickRng(R.fork("pick")),
 			TableRng(R.fork("table")),
 			IndexRng(R.fork("index")),
+			KeyRng(R.fork("enckey")),
 			NameRng(R.fork("names")),
 			DecoyRng(R.fork("decoys")),
 			SiteRng(R.fork("site")) {
@@ -376,6 +384,83 @@ namespace {
 
 		VTable->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
 		VTable->setAlignment(M.getDataLayout().getABITypeAlign(FuncPtrTy));
+
+		return VTable;
+	}
+
+	// ----------------------------------------------------------------------------
+	// Encrypted, runtime-initialized vtable (non-merged path only)
+	// ----------------------------------------------------------------------------
+	GlobalVariable* VCallImpl::getOrCreateEncVTable(Module& M, Function* Callee, VCallCtx& Ctx,
+		uint32_t& RealSlotOut, uint64_t& KeyOut) {
+		std::string Name = (Twine(".vtable.enc.") + Callee->getName()).str();
+
+		// Always resolve real slot + key deterministically (even if the table
+		// already exists) -- both are forked purely from stable seeds, so
+		// recomputing them is cheap and side-effect free.
+		RealSlotOut = getOrCreateRealSlot(M, Callee, Ctx.TableRng);
+
+		llvm::obf::Rng KLocal = Ctx.KeyRng.fork(Callee->getName());
+		uint64_t K = ((uint64_t)KLocal.u32() << 32) | KLocal.u32();
+		if (K == 0)
+			K = 0x9e3779b97f4a7c15ull;
+		KeyOut = K;
+
+		if (GlobalVariable* Existing = M.getGlobalVariable(Name, /*AllowInternal=*/true))
+			return Existing;
+
+		LLVMContext& C = M.getContext();
+		Type* I64 = Type::getInt64Ty(C);
+		auto* TableTy = ArrayType::get(I64, kTableSize);
+
+		auto* VTable = new GlobalVariable(
+			M, TableTy,
+			/*isConstant=*/false,
+			GlobalValue::PrivateLinkage,
+			ConstantAggregateZero::get(TableTy),
+			Name);
+
+		VTable->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
+		VTable->setAlignment(Align(8));
+
+		// Entry functions per slot -- mirrors the plaintext vtable layout.
+		SmallVector<Function*, kTableSize> Entries;
+		Entries.reserve(kTableSize);
+		for (unsigned i = 0; i < kTableSize; ++i) {
+			if (i == RealSlotOut)
+				Entries.push_back(Callee);
+			else
+				Entries.push_back(getOrCreateThunk(M, Callee, i));
+		}
+
+		// Ctor that fills the table at runtime: enc[i] = ptrtoint(entry_i) ^ K.
+		// Dedup by name so re-entry (shouldn't happen given the GV existence
+		// check above, but keep it robust) is safe.
+		std::string CtorName = (Twine("__vcall_init.") + Callee->getName()).str();
+		Function* CtorFn = M.getFunction(CtorName);
+		if (!CtorFn) {
+			FunctionType* CtorTy = FunctionType::get(Type::getVoidTy(C), /*isVarArg=*/false);
+			CtorFn = Function::Create(CtorTy, GlobalValue::PrivateLinkage, CtorName, M);
+			CtorFn->addFnAttr(Attribute::NoInline);
+			CtorFn->addFnAttr(Attribute::NoUnwind);
+
+			BasicBlock* Entry = BasicBlock::Create(C, "entry", CtorFn);
+			IRBuilder<> B(Entry);
+
+			for (unsigned i = 0; i < kTableSize; ++i) {
+				Value* Pi = B.CreatePtrToInt(Entries[i], I64, "vcall.init.p2i");
+				Value* Enc = B.CreateXor(Pi, ConstantInt::get(I64, K), "vcall.init.enc");
+				Value* Gep = B.CreateConstInBoundsGEP2_64(TableTy, VTable, 0, i, "vcall.init.slot");
+				// Volatile: stops GlobalOpt from evaluating this ctor and folding
+				// the mutable table back into a static [N x i64] constant of
+				// encrypted values (which would re-expose the entries). Pairs with
+				// the volatile load at the callsite.
+				B.CreateStore(Enc, Gep)->setVolatile(true);
+			}
+			B.CreateRetVoid();
+
+			appendToGlobalCtors(M, CtorFn, /*Priority=*/0, nullptr);
+		}
 
 		return VTable;
 	}
@@ -622,20 +707,10 @@ namespace {
 		Module& M = *CI->getModule();
 		LLVMContext& C = M.getContext();
 
-		uint32_t RealSlot = 0;
-		uint32_t BaseOff = 0;
-		GlobalVariable* VTable = nullptr;
-
 		const bool Merged = Ctx.Cfg.mergeVTables;
-		if (Merged) {
-			VTable = getOrCreateMergedVTable(M, Callee, Ctx, BaseOff, RealSlot);
-		}
-		else {
-			VTable = getOrCreateVTable(M, Callee, Ctx.TableRng, RealSlot);
-			if (Ctx.Cfg.opaqueVTableNames) {
-				// (optional, safe to leave empty for now)
-			}
-		}
+		// Encryption only supported in non-merged mode; when merged is also on,
+		// fall through to the existing plaintext behavior below.
+		const bool UseEnc = Ctx.Cfg.encryptTable && !Merged;
 
 		IRBuilder<> B(CI);
 		B.SetCurrentDebugLocation(CI->getDebugLoc());
@@ -643,34 +718,81 @@ namespace {
 		Type* I32 = Type::getInt32Ty(C);
 		Value* Mask = ConstantInt::get(I32, kTableSize - 1);
 
-		// Compute Idx = BaseOff + ((RealSlot + delta0) & mask).
-		// The mask keeps the lookup inside this callee's kTableSize-sized segment;
-		// in merged mode BaseOff is the segment start and must not be masked away.
-		Value* Delta0 = makeRuntimeZeroDelta(B, Ctx.VolSlot, Ctx.IndexRng);
-		Value* RealSlotV = ConstantInt::get(I32, (uint32_t)RealSlot);
-		Value* InSeg = B.CreateAnd(B.CreateAdd(RealSlotV, Delta0, "vcall.idx.add"), Mask, "vcall.idx.seg");
-		Value* BaseV = ConstantInt::get(I32, (uint32_t)BaseOff);
-		Value* Idx = Merged ? B.CreateAdd(BaseV, InSeg, "vcall.idx") : InSeg;
-		Idx = obfuscateIndexPerCallsite(B, Idx, Ctx);
+		Value* CalleePtr = nullptr;
 
-		Value* GEPIdx[] = { ConstantInt::get(I32, 0), Idx };
-		Value* SlotPtr = B.CreateGEP(VTable->getValueType(), VTable, GEPIdx, "vcall.slot");
+		if (UseEnc) {
+			uint32_t RealSlot = 0;
+			uint64_t Key = 0;
+			GlobalVariable* EncGV = getOrCreateEncVTable(M, Callee, Ctx, RealSlot, Key);
 
-		// Volatile load prevents folding/devirtualization.
-		Value* LoadedFunc = nullptr;
-		if (Merged) {
-			// merged table stores opaque ptr entries
-			Type* PtrTy = PointerType::get(C, 0);
-			auto* L = B.CreateLoad(PtrTy, SlotPtr, "vcall.fn.ptr");
-			L->setVolatile(true);
+			// Same index math as the non-merged plaintext path (no BaseOff: encrypted
+			// tables are never merged).
+			Value* Delta0 = makeRuntimeZeroDelta(B, Ctx.VolSlot, Ctx.IndexRng);
+			Value* RealSlotV = ConstantInt::get(I32, (uint32_t)RealSlot);
+			Value* Idx = B.CreateAnd(B.CreateAdd(RealSlotV, Delta0, "vcall.idx.add"), Mask, "vcall.idx.seg");
+			Idx = obfuscateIndexPerCallsite(B, Idx, Ctx);
 
-			// Bitcast opaque ptr to the callee's pointer type (still 'ptr' in LLVM 21, but IR keeps the intent)
-			LoadedFunc = B.CreateBitCast(L, Callee->getType(), "vcall.fn");
+			Value* GEPIdx[] = { ConstantInt::get(I32, 0), Idx };
+			Value* SlotPtr = B.CreateGEP(EncGV->getValueType(), EncGV, GEPIdx, "vcall.slot");
+
+			Type* I64 = Type::getInt64Ty(C);
+			auto* Raw = B.CreateLoad(I64, SlotPtr, "vcall.enc");
+			Raw->setVolatile(true);
+
+			Value* Dec = B.CreateXor(Raw, ConstantInt::get(I64, Key), "vcall.dec");
+			CalleePtr = B.CreateIntToPtr(Dec, PointerType::get(C, 0), "vcall.fn.dec");
 		}
 		else {
-			auto* L = B.CreateLoad(Callee->getType(), SlotPtr, "vcall.fn");
-			L->setVolatile(true);
-			LoadedFunc = L;
+			uint32_t RealSlot = 0;
+			uint32_t BaseOff = 0;
+			GlobalVariable* VTable = nullptr;
+
+			if (Merged) {
+				VTable = getOrCreateMergedVTable(M, Callee, Ctx, BaseOff, RealSlot);
+			}
+			else {
+				VTable = getOrCreateVTable(M, Callee, Ctx.TableRng, RealSlot);
+				if (Ctx.Cfg.opaqueVTableNames) {
+					// (optional, safe to leave empty for now)
+				}
+			}
+
+			// Compute Idx = BaseOff + ((RealSlot + delta0) & mask).
+			// The mask keeps the lookup inside this callee's kTableSize-sized segment;
+			// in merged mode BaseOff is the segment start and must not be masked away.
+			Value* Delta0 = makeRuntimeZeroDelta(B, Ctx.VolSlot, Ctx.IndexRng);
+			Value* RealSlotV = ConstantInt::get(I32, (uint32_t)RealSlot);
+			Value* InSeg = B.CreateAnd(B.CreateAdd(RealSlotV, Delta0, "vcall.idx.add"), Mask, "vcall.idx.seg");
+			Value* BaseV = ConstantInt::get(I32, (uint32_t)BaseOff);
+			Value* Idx = Merged ? B.CreateAdd(BaseV, InSeg, "vcall.idx") : InSeg;
+			Idx = obfuscateIndexPerCallsite(B, Idx, Ctx);
+
+			Value* GEPIdx[] = { ConstantInt::get(I32, 0), Idx };
+			Value* SlotPtr = B.CreateGEP(VTable->getValueType(), VTable, GEPIdx, "vcall.slot");
+
+			// Volatile load prevents folding/devirtualization.
+			Value* LoadedFunc = nullptr;
+			if (Merged) {
+				// merged table stores opaque ptr entries
+				Type* PtrTy = PointerType::get(C, 0);
+				auto* L = B.CreateLoad(PtrTy, SlotPtr, "vcall.fn.ptr");
+				L->setVolatile(true);
+
+				// Bitcast opaque ptr to the callee's pointer type (still 'ptr' in LLVM 21, but IR keeps the intent)
+				LoadedFunc = B.CreateBitCast(L, Callee->getType(), "vcall.fn");
+			}
+			else {
+				auto* L = B.CreateLoad(Callee->getType(), SlotPtr, "vcall.fn");
+				L->setVolatile(true);
+				LoadedFunc = L;
+			}
+
+			// Opaque pointers: expected callee pointer type is just ptr (addrspace 0).
+			Type* ExpectedPtrTy = PointerType::get(C, 0);
+
+			CalleePtr = LoadedFunc;
+			if (CalleePtr->getType() != ExpectedPtrTy)
+				CalleePtr = B.CreateBitCast(CalleePtr, ExpectedPtrTy, "vcall.callee.cast");
 		}
 
 		SmallVector<Value*, 8> Args;
@@ -683,13 +805,6 @@ namespace {
 
 		// Use the *callsite* function type (robust).
 		FunctionType* CallFTy = CI->getFunctionType();
-
-		// Opaque pointers: expected callee pointer type is just ptr (addrspace 0).
-		Type* ExpectedPtrTy = PointerType::get(C, 0);
-
-		Value* CalleePtr = LoadedFunc;
-		if (CalleePtr->getType() != ExpectedPtrTy)
-			CalleePtr = B.CreateBitCast(CalleePtr, ExpectedPtrTy, "vcall.callee.cast");
 
 		CallInst* NewCall = B.CreateCall(CallFTy, CalleePtr, Args, Bundles);
 

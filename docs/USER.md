@@ -438,6 +438,7 @@ entries and per-callsite index-expression variation.
 | `varyIndexPerCallsite` | 1 | 0/1 | Vary the index expression per call site. |
 | `indexStrength` | 2 | 0–3 | Index obfuscation strength level. |
 | `mergeVTables` | 0 | 0/1 | Opt-in vtable merging across compatible callees (experimental). |
+| `encryptTable` / `encTable` | 0 | 0/1 | Encrypt vtable entries, filled at runtime by a ctor (non-merged only). |
 
 Example:
 

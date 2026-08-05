@@ -1047,6 +1047,9 @@ VirtualCallConfig VirtualCallConfig::fromPassConfig(const PassConfig& pc) {
 
 		if (pc.params.count("mergeVTables")) cfg.mergeVTables = (pc.params.at("mergeVTables") != "0");
 		if (pc.params.count("merge")) cfg.mergeVTables = (pc.params.at("merge") != "0");
+
+		if (pc.params.count("encryptTable")) cfg.encryptTable = (pc.params.at("encryptTable") != "0");
+		if (pc.params.count("encTable")) cfg.encryptTable = (pc.params.at("encTable") != "0");
 	}
 	catch (const std::exception& e) {
 		errs() << "Error parsing VirtualCall parameters: " << e.what() << "\n";
