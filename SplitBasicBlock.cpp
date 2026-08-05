@@ -266,11 +266,10 @@ namespace {
 				toSplit = toSplit->splitBasicBlock(it, toSplit->getName() + ".split");
 
 				++TotalSplits;
+				++Split; // count actual splits, not candidate blocks visited
 				if (TotalSplits >= MaxSplitsPerFunction)
 					break;
 			}
-
-			++Split;
 		}
 	}
 } // namespace
