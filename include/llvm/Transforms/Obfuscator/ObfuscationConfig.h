@@ -269,6 +269,12 @@ namespace llvm {
 		// Optional (opt-in) vtable merging across callees sharing a FunctionType.
 		// Default off for safety until you validate it in your tests.
 		bool mergeVTables = false;
+		// Encrypted, runtime-initialized vtable (non-merged path only): entries
+		// are stored as ptrtoint(entry) XOR K in a mutable [kTableSize x i64]
+		// global, filled by a global constructor. Default off (byte-identical
+		// plaintext vtable when false). Falls back to plaintext when
+		// mergeVTables is also on (not supported together yet).
+		bool encryptTable = false;
 
 		static VirtualCallConfig fromPassConfig(const PassConfig& pc);
 		bool validate() const;

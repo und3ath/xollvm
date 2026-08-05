@@ -201,6 +201,8 @@
  *   varyIndex|varyIndexPerCallsite [0/1] vary the dispatch index per site
  *   indexStrength                       index-obfuscation strength
  *   merge|mergeVTables  [0/1]           merge vtables across functions
+ *   encTable|encryptTable [0/1]         encrypt vtable entries, filled at runtime
+ *                                       by a ctor (non-merged only)
  *
  *   e.g.  OBF("vcall(prob=60, decoys=1)")
  *--------------------------------------------------------------------------*/
