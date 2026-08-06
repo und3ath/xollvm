@@ -74,10 +74,11 @@
  * peeling the disguise back off.                                            */
 #define OBF_AGGRESSIVE  OBF("flattening, mba, bcf, split, strenc, adec, shield")
 
-/* Maximum: routes the function through the bytecode VM (hardened profile)
- * and stacks the static passes on top. Largest + slowest; reserve for the
- * few functions that truly warrant it (license/root-of-trust checks).      */
-#define OBF_MAX         OBF("vm(hardened=1), mba, bcf, flattening, strenc, adec, shield")
+/* Maximum: routes the function through the bytecode VM at its strongest tier
+ * (preset=max — a private, metamorphic engine per function) and stacks the
+ * static passes on top. Largest + slowest; reserve for the few functions that
+ * truly warrant it (license/root-of-trust checks).                          */
+#define OBF_MAX         OBF("vm(preset=max), mba, bcf, flattening, strenc, adec, shield")
 
 /* Convenience one-liners for a single technique at its defaults. */
 #define OBF_VM          OBF("vm")
@@ -305,26 +306,47 @@
  *   Compiles the function to bytecode run by an embedded interpreter. The
  *   strongest (and heaviest) technique.
  *
+ *   preset  [light|medium|high|max]  canned knob bundle, applied before the
+ *                            explicit knobs below (which still override it).
+ *                            max = full stack + a private metamorphic engine
+ *                            per function.
  *   minBlocks        (1)     don't virtualize below this many blocks
  *   maxBlocks        (400)   don't virtualize above this (0 = no limit)
  *   handlerVariants  [1-K] (3)  polymorphic handler-body variants (1 = off)
- *   useAES           (1)     AES-128-CTR bytecode cipher (needs encBytecode)
  *   obfRegIdx        (1)     XOR register indices with a compile-time salt
  *   encDispatch      (1)     encrypt the opcode->handler dispatch table
- *   encBytecode      (1)     encrypt the bytecode stream at load
+ *   encBytecode      (1)     AES-128-CTR-encrypt the bytecode stream at load
+ *   lazyDecrypt      (0)     decrypt bytecode per-fetch (ciphertext at rest)
+ *   constInStream    (0)     carry constants inside the encrypted bytecode
  *   strongBytecode   (1)     per-position PRF keystream (0 = weak salt^idx)
  *   blindTargets     (1)     XOR-blind bytecode branch targets
  *   hardened         (0)     MBA + opaque predicates + engine hardening;
  *                            implies regEncrypt, gates the anti-debug traps
  *   regEncrypt       (0)     XOR-encrypt the register file at rest
  *   rollingRegKey    (0)     evolve the per-slot register key on each store
+ *   nestedVM         (0)     virtualize hot arithmetic against a 2nd engine
+ *   nestedVMOpcodes  (0)     cap on how many opcodes nest (0 = all eligible)
+ *   threadedDispatch (0)     inline dispatch into every handler (no central loop)
+ *   keyedDispatch    (0)     key each opcode byte by instruction pointer
+ *   superOps         (0)     fuse mul+add chains into one opcode
+ *   randISA          (0)     per-build permutation of operand-field encodings
+ *   enginePoolSize   (1)     spread functions across N distinct engines
+ *   perFnEngine      (0)     give this function its own dedicated engine
+ *   metamorphicEngines (0)   diversify each engine's handler bodies
+ *                            (needs a pool or perFnEngine)
  *   antiDebug        (1)     anti-debug traps (active only when hardened=1)
+ *   bindAntiDebug    (0)     fold debugger detection into the AES key
+ *                            (needs hardened + antiDebug)
  *   adDispatchThreshold  (5000)  rdtsc cycle delta for the dispatch gate
  *   adHandlerThreshold   (5000)  rdtsc cycle delta for handler spot-checks (debounced)
  *   adDispatchInterval   (64)    check every N fetches (power of 2)
  *   adHandlerProb        [0-100] (10)  % of handlers that carry a trap
  *
+ *   (the removed useAES knob is accepted but ignored; AES is the only cipher)
+ *
+ *   e.g.  OBF("vm(preset=max)")
  *   e.g.  OBF("vm(hardened=1, handlerVariants=4, rollingRegKey=1)")
+ *   e.g.  OBF("vm(enginePoolSize=4, metamorphicEngines=1, randISA=1)")
  *--------------------------------------------------------------------------*/
 
 /*===----------------------------------------------------------------------===*\

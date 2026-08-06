@@ -344,6 +344,54 @@ for _prog_label, _prog in (("loops", "edge.loops_nested"), ("switch", "edge.swit
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+#  Attack 8b — latopq opaque-predicate SMT proof: the same tautology-proof
+#  technique as the bcf attack above, pointed at latopq's LWR guard. Direct
+#  comparison — bcf's guard is a provable tautology (prunable), latopq's is a
+#  genuine input-dependent lattice projection (no tautology to prove).
+# ═════════════════════════════════════════════════════════════════════════════
+
+_LATOPQ_TIERS = {
+    "d8":  ann_specs([pass_spec("latopq", {"prob": 100, "dim": 8})]),
+    "d12": ann_specs([pass_spec("latopq", {"prob": 100, "dim": 12})]),
+}
+
+for _prog_label, _prog in (("loops", "edge.loops_nested"), ("switch", "edge.switch_jumptable")):
+    for _tier, _ann in _LATOPQ_TIERS.items():
+        register(BenchCase(
+            name=f"latopq_{_prog_label}_{_tier}",
+            program=_prog,
+            passes=["latopq"],
+            attack="latopq_opaque",
+            annotation=_ann,
+            ground_truth={},
+        ))
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  Attack 8c — real DSE coverage (angr symbolic execution): the metric the
+#  Z3 tautology attack can't provide. Same branchy programs, one case per
+#  defense, so bcf / latopq (/ future pathexp) are directly comparable on how
+#  much of obf_target angr can still cover under a wall-clock budget.
+# ═════════════════════════════════════════════════════════════════════════════
+
+_DSE_DEFENSES = {
+    "bcf":       ann_specs([pass_spec("bcf", {"prob": 100, "loop": 2})]),
+    "latopq":    ann_specs([pass_spec("latopq", {"prob": 100, "dim": 8})]),
+}
+
+for _prog_label, _prog in (("loops", "edge.loops_nested"), ("switch", "edge.switch_jumptable")):
+    for _defense, _ann in _DSE_DEFENSES.items():
+        register(BenchCase(
+            name=f"dse_{_defense}_{_prog_label}",
+            program=_prog,
+            passes=[_defense],
+            attack="dse",
+            annotation=_ann,
+            ground_truth={},
+        ))
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 #  Attack 9 — sdiff (semantic diffusion): reuses attacks/mba_smt.py's Z3
 #  equivalence-proof machinery, same as substitution above. Confirmed by
 #  inspecting real -obf-verbose'd IR before writing this: sdiff diffuses an
