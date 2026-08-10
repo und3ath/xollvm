@@ -184,6 +184,12 @@ namespace llvm {
 		// their result is computed inline by the fused OP_MULADD instead.
 		DenseSet<Instruction*> SkippedMuls;
 
+		// superOps: `add` -> the `shl` fused into it (OP_SHLADD). Same
+		// position/dominance argument as FusedAddToMul.
+		DenseMap<Instruction*, Instruction*> FusedAddToShl;
+		// superOps: `shl` folded away -- no vreg slot, emits no bytes.
+		DenseSet<Instruction*> SkippedShls;
+
 		// superOps: identify fusion candidates in F -- `%m = mul i32 %a,%b`
 		// with exactly one use, that use being a direct `%d = add i32 %m,%c`
 		// (i32, any block). No availability check is needed for %c: since

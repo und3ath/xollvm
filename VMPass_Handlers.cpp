@@ -175,6 +175,22 @@ void VMImpl::buildHandlersIntArith() {
 		nextInsn(B);
 	}
 
+	//  OP_SHLADD -- [dst:u8 a:u8 b:u8 c:u8] -- dst = (a<<b) + c (i32, superOps fusion)
+	{
+		auto B = mkOpc(OP_SHLADD, "shladd");
+		Value* IP = advIP(B, 4);
+		Value* Dst = rdVR(B, IP, 0, "vm.sa.d");
+		Value* AIdx = rdVR(B, IP, 1, "vm.sa.a");
+		Value* BIdx = rdVR(B, IP, 2, "vm.sa.b");
+		Value* CIdx = rdVR(B, IP, 3, "vm.sa.c");
+		Value* AV = ldVR(B, AIdx);
+		Value* BV = ldVR(B, BIdx);
+		Value* CV = ldVR(B, CIdx);
+		Value* R = B.CreateAdd(B.CreateShl(AV, BV, "vm.sa.s"), CV, "vm.sa.r");
+		stVR(B, Dst, R);
+		nextInsn(B);
+	}
+
 
 	//  OP_BINOP64 -- [dst64:u8 a64:u8 b64:u8 subop:u8]
 	// NOTE: must not speculatively execute div/rem for other subops (would trap on BV==0).

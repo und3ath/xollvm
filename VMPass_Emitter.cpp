@@ -308,6 +308,25 @@ void BytecodeEmitter::scanSuperOps(Function& F) {
 			SkippedMuls.insert(&I);
 		}
 	}
+
+	// superOps: `%s = shl i32 %a,%b; %d = add i32 %s,%c` with %s single-use
+	// (the add). OP_SHLADD is emitted at the add's own position, so %c -- and
+	// %a/%b, which dominate the shl and therefore the add -- is always
+	// resolvable there (same argument as the mul+add fusion above).
+	for (BasicBlock& BB : F) {
+		for (Instruction& I : BB) {
+			if (I.getOpcode() != Instruction::Shl) continue;
+			if (!I.getType()->isIntegerTy(32)) continue;
+			if (!I.hasOneUse()) continue;
+			auto* Add = dyn_cast<Instruction>(I.user_back());
+			if (!Add || Add->getOpcode() != Instruction::Add) continue;
+			if (!Add->getType()->isIntegerTy(32)) continue;
+			if (FusedAddToMul.count(Add)) continue;   // add already fused by a mul
+			if (FusedAddToShl.count(Add)) continue;   // add already claimed by another shl
+			FusedAddToShl[Add] = &I;
+			SkippedShls.insert(&I);
+		}
+	}
 }
 
 
@@ -318,6 +337,11 @@ void BytecodeEmitter::emit(Instruction* I) {
 	// superOps: this mul's result is computed inline by its fused add's
 	// OP_MULADD (below) instead of its own OP_BINOP.
 	if (SuperOps && SkippedMuls.count(I))
+		return;
+
+	// superOps: this shl's result is computed inline by its fused add's
+	// OP_SHLADD (below) instead of its own OP_BINOP.
+	if (SuperOps && SkippedShls.count(I))
 		return;
 
 	unsigned Op = I->getOpcode();
@@ -336,6 +360,23 @@ void BytecodeEmitter::emit(Instruction* I) {
 			b8(xorSalt(vr(Mul->getOperand(0))));  // a
 			b8(xorSalt(vr(Mul->getOperand(1))));  // b
 			b8(xorSalt(vr(C)));                   // c
+			return;
+		}
+	}
+
+	// superOps: this add is fused with a preceding shl -- emit one
+	// OP_SHLADD here (at the add's own position) instead of the shl's
+	// OP_BINOP + this add's OP_BINOP.
+	if (SuperOps && Op == Instruction::Add) {
+		auto SIt = FusedAddToShl.find(I);
+		if (SIt != FusedAddToShl.end()) {
+			Instruction* Shl = SIt->second;
+			Value* C = (I->getOperand(0) == Shl) ? I->getOperand(1) : I->getOperand(0);
+			bop(OP_SHLADD);
+			b8(xorSalt(newVR(I)));                 // dst = this add's own result
+			b8(xorSalt(vr(Shl->getOperand(0))));   // a
+			b8(xorSalt(vr(Shl->getOperand(1))));   // b (shift amount)
+			b8(xorSalt(vr(C)));                    // c
 			return;
 		}
 	}
@@ -887,6 +928,8 @@ bool BytecodeEmitter::run(Function& F, uint8_t S, const DataLayout& D) {
 	NVR = NVR64 = NPR = NFR = 0;
 	FusedAddToMul.clear();
 	SkippedMuls.clear();
+	FusedAddToShl.clear();
+	SkippedShls.clear();
 
 	Unsupported = false;
 	FirstUnsupportedInst = nullptr;
@@ -970,6 +1013,7 @@ bool BytecodeEmitter::run(Function& F, uint8_t S, const DataLayout& D) {
 			// the normal integer-slot assignment just below, exactly as any
 			// other i32-producing instruction would.
 			if (SuperOps && SkippedMuls.count(&I)) continue;
+			if (SuperOps && SkippedShls.count(&I)) continue;
 
 			Type* Ty = I.getType();
 			if (Ty->isVoidTy()) continue;

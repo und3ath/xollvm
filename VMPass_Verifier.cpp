@@ -176,6 +176,14 @@ namespace llvm {
 				if (!chk(IP, "vreg", decIdx(BC[IP + 4]), E.NVR)) return false;
 				IP += 5; break;
 			}
+			case OP_SHLADD: {
+				if (IP + 5 > BC.size()) return fail(IP, "OP_SHLADD truncated");
+				if (!chk(IP, "vreg", decIdx(BC[IP + 1]), E.NVR)) return false;
+				if (!chk(IP, "vreg", decIdx(BC[IP + 2]), E.NVR)) return false;
+				if (!chk(IP, "vreg", decIdx(BC[IP + 3]), E.NVR)) return false;
+				if (!chk(IP, "vreg", decIdx(BC[IP + 4]), E.NVR)) return false;
+				IP += 5; break;
+			}
 			case OP_ICMP: {
 				if (IP + 5 > BC.size()) return fail(IP, "OP_ICMP truncated");
 				if (!chk(IP, "vreg", decIdx(BC[IP + 1]), E.NVR)) return false;

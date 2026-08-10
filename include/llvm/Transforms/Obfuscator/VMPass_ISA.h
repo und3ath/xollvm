@@ -111,7 +111,12 @@ namespace llvm {
 		// opcode so lifting the handler doesn't recover a lone mul or add.
 		OP_MULADD = 0x34,  // dst:u8 a:u8 b:u8 c:u8  (5 bytes) -- dst = a*b + c (i32)
 
-		OP_COUNT = 0x35
+		// superOps: fused shift-add super-operator. Replaces `%s = shl i32
+		// %a,%b; %d = add i32 %s,%c` (shl single-use, consumed by the add)
+		// with one opcode so lifting recovers neither a lone shl nor add.
+		OP_SHLADD = 0x35,  // dst:u8 a:u8 b:u8 c:u8  (5 bytes) -- dst = (a<<b) + c (i32)
+
+		OP_COUNT = 0x36
 	};
 
 	// Max handler-body variants per opcode in the shared __vm_engine.
