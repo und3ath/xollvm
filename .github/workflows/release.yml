@@ -218,6 +218,18 @@ jobs:
           echo "secret: $before -> $after"
           [ "$after" -gt "$before" ] || { echo "obfuscation did not transform"; exit 1; }
           "$OPT" -passes=verify ann_obf.ll -disable-output
+          # --- EP hook: obfuscation runs inside a normal clang compile ---
+          "$CLANG" -O2 -mllvm -enable-obfuscation -emit-llvm -S ann.c -o ann_ep.ll
+          ep=$(awk '/define .*@secret\(/,/^}/' ann_ep.ll | wc -l)
+          echo "secret (EP): $before -> $ep"
+          [ "$ep" -gt "$before" ] || { echo "EP hook did not obfuscate"; exit 1; }
+          "$OPT" -passes=verify ann_ep.ll -disable-output
+          # EP flag on un-annotated code must be a no-op (still valid IR)
+          cat > plain.c <<'EOF'
+          int plain(int x){ return x + 1; }
+          EOF
+          "$CLANG" -O2 -mllvm -enable-obfuscation -emit-llvm -S plain.c -o plain_ep.ll
+          "$OPT" -passes=verify plain_ep.ll -disable-output
 
       # ---------- Package ----------
       - name: Package (Linux)

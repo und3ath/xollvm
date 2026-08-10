@@ -153,19 +153,38 @@ opt -passes=obfuscation -S test.ll -o test.obf.ll \
 clang test.obf.ll -O2 -o test.obf
 ```
 
-### Using clang
+### Using clang (in-compiler, no opt round-trip)
 
-Because this is **in-tree**, you can pass the pipeline directly to clang via `-mllvm`:
+The obfuscator can run inside a normal clang compile via an extension point,
+gated by the default-off `-enable-obfuscation` flag. This works with both the
+`clang` and `clang-cl` drivers, so it drops into existing build systems
+(MSBuild/Visual Studio, CMake, Make) that call clang per translation unit.
 
 ```bash
+# clang driver
 clang test.c -O2 \
-  -mllvm -passes=obfuscation \
+  -mllvm -enable-obfuscation \
   -mllvm -obf-seed=1 \
   -mllvm -obf-deterministic \
   -o test.obf
 ```
 
-If your toolchain does not forward `-passes` reliably through `-mllvm`, use the `opt` flow instead.
+```powershell
+# clang-cl driver (MSVC-style; forward LLVM flags with /clang:)
+clang-cl /O2 /c test.cpp `
+  /clang:-mllvm /clang:-enable-obfuscation `
+  /clang:-mllvm /clang:-obf-seed=1 `
+  /clang:-mllvm /clang:-obf-deterministic `
+  /Fotest.obj
+```
+
+Only functions carrying an `obf:` annotation are transformed; without
+annotations the flag is a no-op. Do not combine this with a separate
+`opt -passes=obfuscation` step on the same IR (it would run twice).
+
+**Visual Studio / MSBuild:** set the project's compiler to xollvm's `clang-cl`
+(LLVM toolset), then add the `/clang:-mllvm /clang:-enable-obfuscation` options
+(plus any seed flags) to C/C++ → Command Line → Additional Options.
 
 ### Diagnostic passes
 

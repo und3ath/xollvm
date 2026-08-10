@@ -30,12 +30,25 @@
 #include "llvm/Passes/PassPlugin.h"
 #endif
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/CommandLine.h"
 
 #include "llvm/Transforms/Obfuscator.h"
 #include "llvm/Transforms/Obfuscator/ObfuscationAnnotationAnalysis.h"
 #include "llvm/Transforms/Obfuscator/ObfDebug.h" // ObfDumpConfigPass (not in umbrella)
 
 using namespace llvm;
+
+// When set (e.g. `clang -mllvm -enable-obfuscation`), the obfuscation module
+// pass is injected at the start of clang's compile pipeline so annotated
+// functions are obfuscated during a normal `-c` compile -- no opt round-trip.
+// Default off: the extension point adds nothing, so the pipeline is unchanged.
+// The pass itself is annotation-gated (no `obf:` annotations => no-op), so even
+// with this on, un-annotated code is untouched.
+static llvm::cl::opt<bool> EnableObfuscationEP(
+    "enable-obfuscation",
+    llvm::cl::desc("Auto-run the obfuscation module pass in the compile "
+                   "pipeline (annotation-gated; requires obf: annotations)"),
+    llvm::cl::init(false), llvm::cl::Hidden);
 
 // Canonical registration. Wires every name in ObfPasses.inc into the
 // PassBuilder via the new-PM callback surface. Shared by both build modes.
@@ -64,6 +77,17 @@ static void registerObfuscatorPasses(PassBuilder &PB) {
   }
 #include "ObfPasses.inc"
         return false;
+      });
+
+  // Extension-point hook: when -enable-obfuscation is set, run the module
+  // obfuscation entry at pipeline start (before optimization) for every clang
+  // compile. This mirrors the documented opt-then-optimize flow, fires at all
+  // opt levels including -O0, and sees function annotations before inlining.
+  // Off by default => the pipeline is byte-identical.
+  PB.registerPipelineStartEPCallback(
+      [](ModulePassManager &MPM, OptimizationLevel) {
+        if (EnableObfuscationEP)
+          MPM.addPass(ObfuscationModulePass());
       });
 
   // Module analyses (queried by the module pass, e.g. ObfReportAnalysis).
