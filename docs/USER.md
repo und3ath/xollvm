@@ -655,7 +655,7 @@ Common knobs (see VM.md for the full list):
 | `nestedVM` | 0 | 0/1 | Virtualise hot arithmetic handlers against a second interpreter (depth-2). |
 | `threadedDispatch` | 0 | 0/1 | Inline dispatch into every handler — no single central dispatch loop. |
 | `keyedDispatch` | 0 | 0/1 | Key each opcode byte by instruction pointer; defeats static byte→handler maps. |
-| `superOps` | 0 | 0/1 | Fuse `mul`+`add` into one fused opcode. |
+| `superOps` | 0 | 0/1 | Fuse `mul`+`add`, `shl`+`add`, `icmp`+`select`, and `and`+`icmp==0/!=0` chains into single super-operator opcodes. |
 | `randISA` | 0 | 0/1 | Per-build permutation of operand-field encodings; no cross-build signature. |
 | `enginePoolSize` | 1 | 1–∞ | Spread functions across N structurally-distinct engines. |
 | `perFnEngine` | 0 | 0/1 | Give this function its own dedicated engine. |

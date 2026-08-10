@@ -90,7 +90,7 @@ interpreter (rendered from the obfuscator's own CFG report):
 
 ### Module-level shared engine
 
-All 53 opcode handlers live in a **shared engine function** `__vm_engine()`.
+All 56 opcode handlers live in a **shared engine function** `__vm_engine()`.
 By default a single engine is created once per module and populated on first use, so the
 handler code is **not duplicated** for each virtualised function — only the thin wrapper and
 per-function globals are unique per function.
@@ -251,9 +251,10 @@ After bytecode emission, `VMImpl::run()` calls these builders in order:
 
 ## ISA reference
 
-The ISA has **53 logical opcodes** (`OP_COUNT = 0x35`), variable-width encoding,
-and little-endian multi-byte immediates. (The two most recent additions are
-`OP_LOADI64` = 0x33, used by `constInStream`, and `OP_MULADD` = 0x34, used by `superOps`.)
+The ISA has **56 logical opcodes** (`OP_COUNT = 0x38`), variable-width encoding,
+and little-endian multi-byte immediates. (Recent additions: `OP_LOADI64` = 0x33
+used by `constInStream`, and four fusion opcodes emitted by `superOps` —
+`OP_MULADD` = 0x34, `OP_SHLADD` = 0x35, `OP_CMPSEL` = 0x36, `OP_ANDCMPZ` = 0x37.)
 
 Physical opcode bytes in the bytecode stream are **not** the logical VMOp values — they are
 passed through a per-function permutation (see [Opcode permutation](#opcode-permutation)).
@@ -282,6 +283,9 @@ passed through a per-function permutation (see [Opcode permutation](#opcode-perm
 | `OP_SELECT` | 0x12 | `opc kind:u8 dst:u8 cond:u8 t:u8 f:u8` (6 B) | Ternary select across register files. |
 | `OP_PTRTOINT64` | 0x13 | `opc dst64:u8 srcp:u8` (3 B) | `ptrtoint` preg → vreg64 (i64). |
 | `OP_MULADD` | 0x34 | `opc dst:u8 a:u8 b:u8 c:u8` (5 B) | Fused `dst = a*b + c` (i32). Emitted by `superOps` in place of a `mul`+`add` pair. |
+| `OP_SHLADD` | 0x35 | `opc dst:u8 a:u8 b:u8 c:u8` (5 B) | Fused `dst = (a<<b) + c` (i32). Emitted by `superOps` in place of a `shl`+`add` pair. |
+| `OP_CMPSEL` | 0x36 | `opc dst:u8 a:u8 b:u8 pred:u8 t:u8 f:u8` (7 B) | Fused `dst = (a <pred> b) ? t : f` (i32). Emitted by `superOps` in place of an `icmp`+`select` pair. |
+| `OP_ANDCMPZ` | 0x37 | `opc dst:u8 a:u8 b:u8 pred:u8` (5 B) | Fused `dst = ((a & b) <pred> 0)` as i32 0/1 (`pred` = `eq`/`ne`). Emitted by `superOps` in place of an `and`+`icmp` bit-test. |
 
 </details>
 
@@ -451,6 +455,9 @@ is rounded back to f32 precision via fptrunc→fpext before being stored).
 | `OP_MOVR` | 3 | `opc dst src` |
 | `OP_BINOP` | 5 | `opc dst a b subop` |
 | `OP_MULADD` | 5 | `opc dst a b c` |
+| `OP_SHLADD` | 5 | `opc dst a b c` |
+| `OP_CMPSEL` | 7 | `opc dst a b pred t f` |
+| `OP_ANDCMPZ` | 5 | `opc dst a b pred` |
 | `OP_ICMP` | 5 | `opc dst a b pred` |
 | `OP_CAST` | 4 | `opc dst src kind` |
 | `OP_PTRTOINT` | 3 | `opc dst srcp` |
@@ -476,7 +483,7 @@ is rounded back to f32 precision via fptrunc→fpext before being stored).
 ## Opcode permutation
 
 Each virtualised function gets a **unique logical↔physical opcode bijection** stored in
-`@<fn>.vm.ophandlers`. The bijection is a Fisher-Yates shuffle over all 53 opcodes, seeded
+`@<fn>.vm.ophandlers`. The bijection is a Fisher-Yates shuffle over all 56 opcodes, seeded
 from the per-function RNG:
 
 ```cpp
@@ -660,10 +667,23 @@ splice shifts their IPs.)
 
 ### Super-operators (`superOps`)
 
-Recognises `%m = mul i32 %a,%b; %d = add i32 %m,%c` chains (where the `mul` is consumed only by
-the `add`) and fuses them into a single `OP_MULADD` opcode computing `a*b + c`. Lifting the
-handler no longer recovers a bare `mul` or `add` primitive. Emission is anchored at the `add`'s
-position so SSA dominance guarantees all inputs are available.
+Recognises four two-instruction chains and fuses each into a single opcode. The scanner
+requires the first instruction to be consumed only by the second (single-use, with a
+tolerance for dead side-effect-free extra users so `-O0` builds — where clang emits dead
+`zext i1` copies next to a select cond — still fuse). Emission is anchored at the *second*
+instruction's position so SSA dominance guarantees all inputs are available.
+
+| Fused pattern | Opcode | Semantics |
+|---|---|---|
+| `%m = mul i32 %a,%b; %d = add i32 %m,%c` | `OP_MULADD` (0x34) | `dst = a*b + c` |
+| `%s = shl i32 %a,%b; %d = add i32 %s,%c` | `OP_SHLADD` (0x35) | `dst = (a<<b) + c` |
+| `%c = icmp<pred> i32 %a,%b; %r = select i1 %c,i32 %t,i32 %f` | `OP_CMPSEL` (0x36) | `dst = (a <pred> b) ? t : f` |
+| `%m = and i32 %a,%b; %r = icmp eq/ne i32 %m, 0` | `OP_ANDCMPZ` (0x37) | `dst = ((a & b) <pred> 0)` as i32 0/1 |
+
+Lifting the handlers no longer recovers the bare primitives. When both `CMPSEL` and
+`ANDCMPZ` could apply to the same `icmp`, `CMPSEL` wins (the `and` stays plain), so
+`(a & mask) == 0 ? t : f` always folds into `OP_CMPSEL` while a standalone
+`(a & mask) != 0` folds into `OP_ANDCMPZ`.
 
 ### Per-build ISA randomisation (`randISA`)
 
@@ -731,7 +751,7 @@ A `preset=<light|medium|high|max>` bundle (below) is the easy way in; the indivi
 | `blindTargets` | 1 | 0/1 | Blind branch/switch targets in the stream. |
 | `threadedDispatch` | 0 | 0/1 | Inline fetch/decode/`indirectbr` into every handler; no central dispatch. |
 | `keyedDispatch` | 0 | 0/1 | XOR each opcode byte with a per-IP compile-time key. |
-| `superOps` | 0 | 0/1 | Fuse `mul`+`add` chains into `OP_MULADD`. |
+| `superOps` | 0 | 0/1 | Fuse `mul`+`add`, `shl`+`add`, `icmp`+`select`, and `and`+`icmp==0/!=0` chains into single super-operator opcodes (`OP_MULADD`/`OP_SHLADD`/`OP_CMPSEL`/`OP_ANDCMPZ`). |
 | `randISA` | 0 | 0/1 | Per-build permutation of operand-field byte encodings (5 families). |
 | `nestedVM` | 0 | 0/1 | Virtualise eligible opcode handlers against a second engine. |
 | `nestedVMOpcodes` | 0 | 0–7 | Cap on how many opcodes nest (0 = all eligible). |

@@ -34,7 +34,7 @@
   <text class="core" x="300" y="272" text-anchor="middle">Bytecode interpreter</text>
   <text class="cs" x="300" y="296" text-anchor="middle">fetch &#8594; decode</text>
   <text class="cs" x="300" y="316" text-anchor="middle">&#8594; execute &#8594; dispatch</text>
-  <text class="cs" x="300" y="340" text-anchor="middle">53-opcode private ISA</text>
+  <text class="cs" x="300" y="340" text-anchor="middle">56-opcode private ISA</text>
 
   <!-- legend -->
   <text class="h" x="610" y="70">Default state</text>

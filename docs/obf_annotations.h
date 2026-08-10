@@ -328,7 +328,8 @@
  *   nestedVMOpcodes  (0)     cap on how many opcodes nest (0 = all eligible)
  *   threadedDispatch (0)     inline dispatch into every handler (no central loop)
  *   keyedDispatch    (0)     key each opcode byte by instruction pointer
- *   superOps         (0)     fuse mul+add chains into one opcode
+ *   superOps         (0)     fuse mul+add / shl+add / icmp+select /
+ *                            and+icmp==0 chains into single super-op opcodes
  *   randISA          (0)     per-build permutation of operand-field encodings
  *   enginePoolSize   (1)     spread functions across N distinct engines
  *   perFnEngine      (0)     give this function its own dedicated engine
