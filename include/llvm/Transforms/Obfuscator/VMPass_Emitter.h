@@ -191,9 +191,16 @@ namespace llvm {
 		DenseSet<Instruction*> SkippedShls;
 
 		// superOps: `select` -> the `icmp` fused into it as its condition
-		// (OP_CMPSEL). The icmp is folded away (no slot, no bytes).
+		// (OP_CMPSEL). The icmp (and any dead extra users of it) is folded
+		// away (no slot, no bytes).
 		DenseMap<Instruction*, Instruction*> FusedSelToCmp;
 		DenseSet<Instruction*> SkippedCmps;
+
+		// superOps: `icmp eq|ne %m,0` -> the `and` fused into it (OP_ANDCMPZ).
+		// The `and` is folded away (no slot, no bytes); OP_ANDCMPZ is emitted
+		// at the compare's position and yields the compare's i32 0/1 result.
+		DenseMap<Instruction*, Instruction*> FusedCmpToAnd;
+		DenseSet<Instruction*> SkippedAnds;
 
 		// superOps: identify fusion candidates in F -- `%m = mul i32 %a,%b`
 		// with exactly one use, that use being a direct `%d = add i32 %m,%c`

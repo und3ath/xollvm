@@ -376,6 +376,37 @@ void BytecodeEmitter::scanSuperOps(Function& F) {
 			for (Instruction* D : DeadExtra) SkippedCmps.insert(D);
 		}
 	}
+
+	// superOps: `%m = and i32 %a,%b; %r = icmp eq|ne i32 %m, 0` with %m
+	// single-use (the compare) and the compare's other operand a constant 0.
+	// OP_ANDCMPZ is emitted at the compare's own position (yielding the
+	// compare's i32 0/1 result); the `and` is folded away. Runs AFTER the
+	// cmpsel scan so an icmp already claimed by a select (SkippedCmps) yields
+	// to CMPSEL -- an `icmp ne (and a,b), 0` feeding a select matches both.
+	for (BasicBlock& BB : F) {
+		for (Instruction& I : BB) {
+			auto* Cmp = dyn_cast<ICmpInst>(&I);
+			if (!Cmp) continue;
+			if (SkippedCmps.count(Cmp)) continue;   // already folded into a select
+			CmpInst::Predicate P = Cmp->getPredicate();
+			if (P != CmpInst::ICMP_EQ && P != CmpInst::ICMP_NE) continue;
+
+			// One operand must be a single-use i32 `and`, the other constant 0.
+			Value* Op0 = Cmp->getOperand(0), * Op1 = Cmp->getOperand(1);
+			Instruction* And = nullptr;
+			if (auto* C = dyn_cast<ConstantInt>(Op1)) {
+				if (!C->isZero()) continue; And = dyn_cast<Instruction>(Op0);
+			} else if (auto* C = dyn_cast<ConstantInt>(Op0)) {
+				if (!C->isZero()) continue; And = dyn_cast<Instruction>(Op1);
+			} else continue;
+			if (!And || And->getOpcode() != Instruction::And) continue;
+			if (!And->getType()->isIntegerTy(32)) continue;
+			if (!And->hasOneUse()) continue;         // consumed only by this compare
+			if (SkippedAnds.count(And)) continue;    // and already claimed
+			FusedCmpToAnd[Cmp] = And;
+			SkippedAnds.insert(And);
+		}
+	}
 }
 
 
@@ -396,6 +427,10 @@ void BytecodeEmitter::emit(Instruction* I) {
 	// superOps: this icmp (or a dead extra user of it) is folded into its
 	// fused select's OP_CMPSEL below -- emit no bytes for it.
 	if (SuperOps && SkippedCmps.count(I))
+		return;
+
+	// superOps: this `and` is folded into its fused compare's OP_ANDCMPZ.
+	if (SuperOps && SkippedAnds.count(I))
 		return;
 
 	unsigned Op = I->getOpcode();
@@ -549,6 +584,24 @@ void BytecodeEmitter::emit(Instruction* I) {
 		markUnsupported(I); return;
 	}
 
+
+	// superOps: this compare is fused with a preceding `and` against 0 --
+	// emit one OP_ANDCMPZ here (at the compare's own position) instead of the
+	// and's OP_BINOP + this compare's OP_ICMP.
+	if (SuperOps && Op == Instruction::ICmp) {
+		auto AIt = FusedCmpToAnd.find(I);
+		if (AIt != FusedCmpToAnd.end()) {
+			auto* Cmp = cast<ICmpInst>(I);
+			Instruction* And = AIt->second;
+			CmpInst::Predicate P = Cmp->getPredicate();  // ICMP_EQ or ICMP_NE (scan-guaranteed)
+			bop(OP_ANDCMPZ);
+			b8(xorSalt(newVR(I)));                 // dst = this compare's own i32 result
+			b8(xorSalt(vr(And->getOperand(0))));   // a
+			b8(xorSalt(vr(And->getOperand(1))));   // b
+			b8(encIcmpPred((uint8_t)P));           // pred (EQ/NE, randISA-permuted)
+			return;
+		}
+	}
 
 	if (Op == Instruction::ICmp) {
 		auto* CI = cast<ICmpInst>(I);
@@ -1005,6 +1058,8 @@ bool BytecodeEmitter::run(Function& F, uint8_t S, const DataLayout& D) {
 	SkippedShls.clear();
 	FusedSelToCmp.clear();
 	SkippedCmps.clear();
+	FusedCmpToAnd.clear();
+	SkippedAnds.clear();
 
 	Unsupported = false;
 	FirstUnsupportedInst = nullptr;
@@ -1090,6 +1145,7 @@ bool BytecodeEmitter::run(Function& F, uint8_t S, const DataLayout& D) {
 			if (SuperOps && SkippedMuls.count(&I)) continue;
 			if (SuperOps && SkippedShls.count(&I)) continue;
 			if (SuperOps && SkippedCmps.count(&I)) continue;
+			if (SuperOps && SkippedAnds.count(&I)) continue;
 
 			Type* Ty = I.getType();
 			if (Ty->isVoidTy()) continue;

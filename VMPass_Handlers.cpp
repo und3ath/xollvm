@@ -221,6 +221,26 @@ void VMImpl::buildHandlersIntArith() {
 		nextInsn(B);
 	}
 
+	//  OP_ANDCMPZ -- [dst:u8 a:u8 b:u8 pred:u8] -- dst = ((a&b) <eq|ne> 0) (i32 0/1, superOps fusion)
+	{
+		auto B = mkOpc(OP_ANDCMPZ, "andcmpz");
+		Value* IP = advIP(B, 4);
+		Value* Dst = rdVR(B, IP, 0, "vm.ac.d");
+		Value* AIdx = rdVR(B, IP, 1, "vm.ac.a");
+		Value* BIdx = rdVR(B, IP, 2, "vm.ac.b");
+		Value* Pred = rdByte(B, IP, 3, "vm.ac.p");
+		Value* AV = ldVR(B, AIdx), * BV = ldVR(B, BIdx);
+		Value* M = B.CreateAnd(AV, BV, "vm.ac.m");
+		// pred is EQ or NE only; select the compare-to-zero accordingly.
+		Value* IsEq = B.CreateICmpEQ(
+			Pred, B.getInt32(IsaEnc.encIcmpPred((uint8_t)CmpInst::ICMP_EQ)), "vm.ac.iseq");
+		Value* EqZ = B.CreateICmpEQ(M, B.getInt32(0), "vm.ac.eqz");
+		Value* NeZ = B.CreateICmpNE(M, B.getInt32(0), "vm.ac.nez");
+		Value* R = B.CreateSelect(IsEq, EqZ, NeZ, "vm.ac.sel");
+		stVR(B, Dst, B.CreateZExt(R, I32Ty, "vm.ac.r"));
+		nextInsn(B);
+	}
+
 
 	//  OP_BINOP64 -- [dst64:u8 a64:u8 b64:u8 subop:u8]
 	// NOTE: must not speculatively execute div/rem for other subops (would trap on BV==0).

@@ -122,7 +122,13 @@ namespace llvm {
 		// conditional -- a lifter recovers neither a lone icmp nor select.
 		OP_CMPSEL = 0x36,  // dst:u8 a:u8 b:u8 pred:u8 t:u8 f:u8  (7 bytes) -- dst = (a<pred>b)?t:f (i32)
 
-		OP_COUNT = 0x37
+		// superOps: fused and-compare-zero super-operator. Replaces
+		// `%m = and i32 %a,%b; %r = icmp eq|ne i32 %m, 0` (and single-use,
+		// consumed by the compare) with one opcode so lifting recovers neither
+		// a lone `and` nor the bit-test compare. pred byte is EQ or NE only.
+		OP_ANDCMPZ = 0x37,  // dst:u8 a:u8 b:u8 pred:u8  (5 bytes) -- dst = ((a&b) <eq|ne> 0) (i32 0/1)
+
+		OP_COUNT = 0x38
 	};
 
 	// Max handler-body variants per opcode in the shared __vm_engine.

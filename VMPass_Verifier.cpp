@@ -194,6 +194,14 @@ namespace llvm {
 				if (!chk(IP, "vreg", decIdx(BC[IP + 6]), E.NVR)) return false;  // f
 				IP += 7; break;
 			}
+			case OP_ANDCMPZ: {
+				if (IP + 5 > BC.size()) return fail(IP, "OP_ANDCMPZ truncated");
+				if (!chk(IP, "vreg", decIdx(BC[IP + 1]), E.NVR)) return false;  // dst
+				if (!chk(IP, "vreg", decIdx(BC[IP + 2]), E.NVR)) return false;  // a
+				if (!chk(IP, "vreg", decIdx(BC[IP + 3]), E.NVR)) return false;  // b
+				// BC[IP + 4] = pred byte (EQ/NE, not a register index)
+				IP += 5; break;
+			}
 			case OP_ICMP: {
 				if (IP + 5 > BC.size()) return fail(IP, "OP_ICMP truncated");
 				if (!chk(IP, "vreg", decIdx(BC[IP + 1]), E.NVR)) return false;

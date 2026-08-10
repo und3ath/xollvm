@@ -1,0 +1,35 @@
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+/* and+icmp-zero-heavy program for OP_ANDCMPZ (superOps) coverage.
+ *
+ * Each `(a & b) == 0` / `(a & mask) != 0` bit-test lowers (even at the suite's
+ * -O0 compile level) to a single-use `and` feeding an `icmp eq|ne %m, 0` --
+ * exactly the OP_ANDCMPZ fusion shape. Results are cast to i32 and threaded
+ * through `acc` (NOT used as a select condition -- a select would be claimed
+ * by OP_CMPSEL instead), so both the eq and ne handler paths are exercised and
+ * the output depends on every fused compare. */
+__attribute__((noinline, annotate("{annotation}")))
+uint32_t obf_target(uint32_t x, uint32_t y) {{
+    uint32_t acc = x ^ 0x9E3779B9u;
+    for (int i = 0; i < 12; i++) {{
+        uint32_t a = acc + (uint32_t)i;
+        uint32_t b = y ^ (uint32_t)(i * 2654435761u);
+        acc += (uint32_t)((a & b) == 0u);
+        acc ^= (uint32_t)((a & 0x5555u) != 0u);
+        acc += (uint32_t)((a & b & 0xFF00u) == 0u);
+        acc ^= (uint32_t)((b & 0x80000001u) != 0u);
+        acc += (uint32_t)((a & (b | 1u)) == 0u);
+        acc = acc * 31u + 1u;
+    }}
+    return acc;
+}}
+
+int main(int argc, char** argv) {{
+    uint32_t x = (argc > 1) ? (uint32_t)strtoul(argv[1], 0, 0) : 123u;
+    uint32_t y = (argc > 2) ? (uint32_t)strtoul(argv[2], 0, 0) : 456u;
+    uint32_t r = obf_target(x, y);
+    printf("R=%u\n", r);
+    return (int)(r & 0xFFu);
+}}

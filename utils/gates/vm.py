@@ -311,6 +311,18 @@ def vm_superops_cmpsel_present(ir: str) -> Optional[str]:
     return None
 
 
+@register("vm_superops_andcmpz_present")
+def vm_superops_andcmpz_present(ir: str) -> Optional[str]:
+    # superOps: eligible i32 and+icmp-zero bit-tests fuse into a single
+    # OP_ANDCMPZ handler (vm.opc.andcmpz.*). The handler block is always built
+    # (dormant, like every opcode in the shared engine) regardless of the knob,
+    # so its presence only proves the ISA/handler machinery is wired;
+    # differential-output gates prove the fused bytecode computes the answer.
+    if not re.search(r"vm\.opc\.andcmpz\.", ir):
+        return "no vm.opc.andcmpz.* handler block found — OP_ANDCMPZ handler missing"
+    return None
+
+
 @register("vm_keyeddisp_ip_xor")
 def vm_keyeddisp_ip_xor(ir: str) -> Optional[str]:
     # keyedDispatch: VMImpl::opKeyByteIR computes a per-IP XOR key (named
