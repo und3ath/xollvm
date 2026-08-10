@@ -9,9 +9,13 @@ CMakeCache.txt
 CMakeFiles/
 cmake_install.cmake
 
-# run tests dirs 
+# run tests dirs
 obf_reports/
 obf_rt_work/
+deobf_bench_work/
+
+# Local test-runner script (personal, not for public repo)
+run_regression.ps1
 
 # Compiled objects / libs / plugins
 *.o
@@ -42,3 +46,4 @@ CLAUDE.md
 # Private planning docs (never commit)
 .claude/
 docs/VM_GAP_ANALYSIS.md
+docs/design/
