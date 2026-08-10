@@ -450,3 +450,7 @@ def render_vm_v7_superops_muladd_hot_program(annotation: str) -> str:
 
 def render_vm_v7_superops_shladd_hot_program(annotation: str) -> str:
     return programs.render("vm.shladd", annotation=annotation)
+
+
+def render_vm_v7_superops_cmpsel_hot_program(annotation: str) -> str:
+    return programs.render("vm.cmpsel", annotation=annotation)

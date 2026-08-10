@@ -327,6 +327,55 @@ void BytecodeEmitter::scanSuperOps(Function& F) {
 			SkippedShls.insert(&I);
 		}
 	}
+
+	// superOps: `%c = icmp <pred> i32 %a,%b; %r = select i1 %c, i32 %t, i32 %f`
+	// where %c is the select's condition and the select is %c's only "live"
+	// use. OP_CMPSEL is emitted at the select's own position (see dominance
+	// note). The icmp -- and any dead, side-effect-free extra users of it --
+	// are folded away (no slot, no bytes).
+	//
+	// The dead-user tolerance is load-bearing at -O0: for `cond ? a : b` clang
+	// emits a *dead* `zext i1 %c to i64` right next to the select, so the icmp
+	// is not literally single-use. That zext is unused and side-effect-free,
+	// so folding it alongside the icmp is safe and lets the fusion fire on the
+	// -O0 IR the pass actually sees (at -O1+ the zext is already gone).
+	for (BasicBlock& BB : F) {
+		for (Instruction& I : BB) {
+			auto* Cmp = dyn_cast<ICmpInst>(&I);
+			if (!Cmp) continue;
+			if (!Cmp->getOperand(0)->getType()->isIntegerTy(32)) continue;
+			if (!Cmp->getOperand(1)->getType()->isIntegerTy(32)) continue;
+
+			// Walk the icmp's users: exactly one must be a fusible select whose
+			// condition is this icmp; every other user must be a dead
+			// (use-less) side-effect-free instruction we can fold away too.
+			SelectInst* Sel = nullptr;
+			SmallVector<Instruction*, 2> DeadExtra;
+			bool Ok = true;
+			for (User* U : Cmp->users()) {
+				auto* UI = dyn_cast<Instruction>(U);
+				if (!UI) { Ok = false; break; }
+				if (auto* S = dyn_cast<SelectInst>(UI)) {
+					if (!Sel && S->getCondition() == Cmp &&
+						S->getType()->isIntegerTy(32) &&
+						S->getTrueValue()->getType()->isIntegerTy(32) &&
+						S->getFalseValue()->getType()->isIntegerTy(32)) {
+						Sel = S; continue;
+					}
+					Ok = false; break;
+				}
+				if (UI->use_empty() && !UI->mayHaveSideEffects()) {
+					DeadExtra.push_back(UI); continue;
+				}
+				Ok = false; break;
+			}
+			if (!Ok || !Sel) continue;
+			if (FusedSelToCmp.count(Sel)) continue;
+			FusedSelToCmp[Sel] = Cmp;
+			SkippedCmps.insert(Cmp);
+			for (Instruction* D : DeadExtra) SkippedCmps.insert(D);
+		}
+	}
 }
 
 
@@ -342,6 +391,11 @@ void BytecodeEmitter::emit(Instruction* I) {
 	// superOps: this shl's result is computed inline by its fused add's
 	// OP_SHLADD (below) instead of its own OP_BINOP.
 	if (SuperOps && SkippedShls.count(I))
+		return;
+
+	// superOps: this icmp (or a dead extra user of it) is folded into its
+	// fused select's OP_CMPSEL below -- emit no bytes for it.
+	if (SuperOps && SkippedCmps.count(I))
 		return;
 
 	unsigned Op = I->getOpcode();
@@ -579,6 +633,25 @@ void BytecodeEmitter::emit(Instruction* I) {
 		markUnsupported(I); return;
 	}
 
+
+	// superOps: this select is fused with its icmp condition -- emit one
+	// OP_CMPSEL at the select's position instead of a separate OP_ICMP +
+	// OP_SELECT.
+	if (SuperOps && Op == Instruction::Select) {
+		auto CIt = FusedSelToCmp.find(I);
+		if (CIt != FusedSelToCmp.end()) {
+			auto* SI = cast<SelectInst>(I);
+			auto* Cmp = cast<ICmpInst>(CIt->second);
+			bop(OP_CMPSEL);
+			b8(xorSalt(newVR(I)));                          // dst = select result
+			b8(xorSalt(vr(Cmp->getOperand(0))));           // a
+			b8(xorSalt(vr(Cmp->getOperand(1))));           // b
+			b8(encIcmpPred((uint8_t)Cmp->getPredicate())); // pred (randISA-permuted, matches ICMP handler)
+			b8(xorSalt(vr(SI->getTrueValue())));           // t
+			b8(xorSalt(vr(SI->getFalseValue())));          // f
+			return;
+		}
+	}
 
 	if (Op == Instruction::Select) {
 		auto* SI = cast<SelectInst>(I);
@@ -930,6 +1003,8 @@ bool BytecodeEmitter::run(Function& F, uint8_t S, const DataLayout& D) {
 	SkippedMuls.clear();
 	FusedAddToShl.clear();
 	SkippedShls.clear();
+	FusedSelToCmp.clear();
+	SkippedCmps.clear();
 
 	Unsupported = false;
 	FirstUnsupportedInst = nullptr;
@@ -1014,6 +1089,7 @@ bool BytecodeEmitter::run(Function& F, uint8_t S, const DataLayout& D) {
 			// other i32-producing instruction would.
 			if (SuperOps && SkippedMuls.count(&I)) continue;
 			if (SuperOps && SkippedShls.count(&I)) continue;
+			if (SuperOps && SkippedCmps.count(&I)) continue;
 
 			Type* Ty = I.getType();
 			if (Ty->isVoidTy()) continue;

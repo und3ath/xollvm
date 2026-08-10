@@ -190,6 +190,11 @@ namespace llvm {
 		// superOps: `shl` folded away -- no vreg slot, emits no bytes.
 		DenseSet<Instruction*> SkippedShls;
 
+		// superOps: `select` -> the `icmp` fused into it as its condition
+		// (OP_CMPSEL). The icmp is folded away (no slot, no bytes).
+		DenseMap<Instruction*, Instruction*> FusedSelToCmp;
+		DenseSet<Instruction*> SkippedCmps;
+
 		// superOps: identify fusion candidates in F -- `%m = mul i32 %a,%b`
 		// with exactly one use, that use being a direct `%d = add i32 %m,%c`
 		// (i32, any block). No availability check is needed for %c: since

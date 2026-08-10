@@ -299,6 +299,18 @@ def vm_superops_shladd_present(ir: str) -> Optional[str]:
     return None
 
 
+@register("vm_superops_cmpsel_present")
+def vm_superops_cmpsel_present(ir: str) -> Optional[str]:
+    # superOps: eligible i32 icmp+select chains fuse into a single OP_CMPSEL
+    # handler (vm.opc.cmpsel.*). The handler block is always built (dormant,
+    # like every opcode in the shared engine) regardless of the knob, so its
+    # presence only proves the ISA/handler machinery is wired; differential-
+    # output gates prove the fused bytecode computes the right answer.
+    if not re.search(r"vm\.opc\.cmpsel\.", ir):
+        return "no vm.opc.cmpsel.* handler block found — OP_CMPSEL handler missing"
+    return None
+
+
 @register("vm_keyeddisp_ip_xor")
 def vm_keyeddisp_ip_xor(ir: str) -> Optional[str]:
     # keyedDispatch: VMImpl::opKeyByteIR computes a per-IP XOR key (named
