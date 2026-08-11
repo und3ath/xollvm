@@ -184,6 +184,24 @@ namespace llvm {
 		// their result is computed inline by the fused OP_MULADD instead.
 		DenseSet<Instruction*> SkippedMuls;
 
+		// superOps: `add` -> the `shl` fused into it (OP_SHLADD). Same
+		// position/dominance argument as FusedAddToMul.
+		DenseMap<Instruction*, Instruction*> FusedAddToShl;
+		// superOps: `shl` folded away -- no vreg slot, emits no bytes.
+		DenseSet<Instruction*> SkippedShls;
+
+		// superOps: `select` -> the `icmp` fused into it as its condition
+		// (OP_CMPSEL). The icmp (and any dead extra users of it) is folded
+		// away (no slot, no bytes).
+		DenseMap<Instruction*, Instruction*> FusedSelToCmp;
+		DenseSet<Instruction*> SkippedCmps;
+
+		// superOps: `icmp eq|ne %m,0` -> the `and` fused into it (OP_ANDCMPZ).
+		// The `and` is folded away (no slot, no bytes); OP_ANDCMPZ is emitted
+		// at the compare's position and yields the compare's i32 0/1 result.
+		DenseMap<Instruction*, Instruction*> FusedCmpToAnd;
+		DenseSet<Instruction*> SkippedAnds;
+
 		// superOps: identify fusion candidates in F -- `%m = mul i32 %a,%b`
 		// with exactly one use, that use being a direct `%d = add i32 %m,%c`
 		// (i32, any block). No availability check is needed for %c: since

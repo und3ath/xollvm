@@ -111,7 +111,24 @@ namespace llvm {
 		// opcode so lifting the handler doesn't recover a lone mul or add.
 		OP_MULADD = 0x34,  // dst:u8 a:u8 b:u8 c:u8  (5 bytes) -- dst = a*b + c (i32)
 
-		OP_COUNT = 0x35
+		// superOps: fused shift-add super-operator. Replaces `%s = shl i32
+		// %a,%b; %d = add i32 %s,%c` (shl single-use, consumed by the add)
+		// with one opcode so lifting recovers neither a lone shl nor add.
+		OP_SHLADD = 0x35,  // dst:u8 a:u8 b:u8 c:u8  (5 bytes) -- dst = (a<<b) + c (i32)
+
+		// superOps: fused compare-select super-operator. Replaces `%c = icmp
+		// <pred> i32 %a,%b; %r = select i1 %c, i32 %t, i32 %f` (icmp single-use
+		// and IS the select condition) with one opcode, hiding the branchless
+		// conditional -- a lifter recovers neither a lone icmp nor select.
+		OP_CMPSEL = 0x36,  // dst:u8 a:u8 b:u8 pred:u8 t:u8 f:u8  (7 bytes) -- dst = (a<pred>b)?t:f (i32)
+
+		// superOps: fused and-compare-zero super-operator. Replaces
+		// `%m = and i32 %a,%b; %r = icmp eq|ne i32 %m, 0` (and single-use,
+		// consumed by the compare) with one opcode so lifting recovers neither
+		// a lone `and` nor the bit-test compare. pred byte is EQ or NE only.
+		OP_ANDCMPZ = 0x37,  // dst:u8 a:u8 b:u8 pred:u8  (5 bytes) -- dst = ((a&b) <eq|ne> 0) (i32 0/1)
+
+		OP_COUNT = 0x38
 	};
 
 	// Max handler-body variants per opcode in the shared __vm_engine.

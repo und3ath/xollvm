@@ -446,3 +446,15 @@ def render_vm_v7_i64_ret_highslot_program(annotation: str) -> str:
 
 def render_vm_v7_superops_muladd_hot_program(annotation: str) -> str:
     return programs.render("vm.superops_muladd", annotation=annotation)
+
+
+def render_vm_v7_superops_shladd_hot_program(annotation: str) -> str:
+    return programs.render("vm.shladd", annotation=annotation)
+
+
+def render_vm_v7_superops_cmpsel_hot_program(annotation: str) -> str:
+    return programs.render("vm.cmpsel", annotation=annotation)
+
+
+def render_vm_v7_superops_andcmpz_hot_program(annotation: str) -> str:
+    return programs.render("vm.andcmpz", annotation=annotation)

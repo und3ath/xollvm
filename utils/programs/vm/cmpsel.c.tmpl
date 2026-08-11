@@ -1,0 +1,38 @@
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+/* icmp+select-heavy program for OP_CMPSEL (superOps) coverage.
+ *
+ * At the runtime suite's compile level (-O0 -disable-O0-optnone) a C ternary
+ * with CONSTANT arms is the reliable way to make clang emit an `icmp`+`select`
+ * pair (variable arms lower to branch diamonds; min/max arms lower to
+ * llvm.smin/smax intrinsics -- neither produces a fusible SelectInst). Each
+ * `(cond) ? C1 : C2` below is therefore a single-use icmp feeding a select
+ * whose condition IS that icmp -- exactly the OP_CMPSEL fusion shape -- and
+ * the six predicates (ult/ugt/eq/ne/slt/sge) exercise the handler's predicate
+ * decode. Results thread through `acc` so output depends on every fused select. */
+__attribute__((noinline, annotate("{annotation}")))
+uint32_t obf_target(uint32_t x, uint32_t y) {{
+    uint32_t acc = x ^ 0x9E3779B9u;
+    for (int i = 0; i < 12; i++) {{
+        uint32_t a = acc + (uint32_t)i;
+        uint32_t b = y ^ (uint32_t)(i * 2654435761u);
+        acc += (a <  b) ? 0x11u : 0x22u;
+        acc ^= (a >  b) ? 0x33u : 0x44u;
+        acc += (a == b) ? 0x55u : 0x66u;
+        acc ^= (a != b) ? 0x77u : 0x88u;
+        acc += ((int32_t)a <  (int32_t)b) ? 0x99u : 0xAAu;
+        acc ^= ((int32_t)a >= (int32_t)b) ? 0xBBu : 0xCCu;
+        acc = acc * 31u + 1u;
+    }}
+    return acc;
+}}
+
+int main(int argc, char** argv) {{
+    uint32_t x = (argc > 1) ? (uint32_t)strtoul(argv[1], 0, 0) : 123u;
+    uint32_t y = (argc > 2) ? (uint32_t)strtoul(argv[2], 0, 0) : 456u;
+    uint32_t r = obf_target(x, y);
+    printf("R=%u\n", r);
+    return (int)(r & 0xFFu);
+}}

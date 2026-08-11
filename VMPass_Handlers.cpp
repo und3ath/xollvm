@@ -175,6 +175,72 @@ void VMImpl::buildHandlersIntArith() {
 		nextInsn(B);
 	}
 
+	//  OP_SHLADD -- [dst:u8 a:u8 b:u8 c:u8] -- dst = (a<<b) + c (i32, superOps fusion)
+	{
+		auto B = mkOpc(OP_SHLADD, "shladd");
+		Value* IP = advIP(B, 4);
+		Value* Dst = rdVR(B, IP, 0, "vm.sa.d");
+		Value* AIdx = rdVR(B, IP, 1, "vm.sa.a");
+		Value* BIdx = rdVR(B, IP, 2, "vm.sa.b");
+		Value* CIdx = rdVR(B, IP, 3, "vm.sa.c");
+		Value* AV = ldVR(B, AIdx);
+		Value* BV = ldVR(B, BIdx);
+		Value* CV = ldVR(B, CIdx);
+		Value* R = B.CreateAdd(B.CreateShl(AV, BV, "vm.sa.s"), CV, "vm.sa.r");
+		stVR(B, Dst, R);
+		nextInsn(B);
+	}
+
+	//  OP_CMPSEL -- [dst:u8 a:u8 b:u8 pred:u8 t:u8 f:u8] -- dst = (a <pred> b) ? t : f  (i32, superOps fusion)
+	{
+		auto B = mkOpc(OP_CMPSEL, "cmpsel");
+		Value* IP = advIP(B, 6);
+		Value* Dst = rdVR(B, IP, 0, "vm.cs.d");
+		Value* AIdx = rdVR(B, IP, 1, "vm.cs.a");
+		Value* BIdx = rdVR(B, IP, 2, "vm.cs.b");
+		Value* Pred = rdByte(B, IP, 3, "vm.cs.p");
+		Value* TIdx = rdVR(B, IP, 4, "vm.cs.t");
+		Value* FIdx = rdVR(B, IP, 5, "vm.cs.f");
+		Value* AV = ldVR(B, AIdx), * BV = ldVR(B, BIdx);
+		using P = CmpInst::Predicate;
+		Value* Cs[] = {
+		  B.CreateICmpEQ(AV,BV), B.CreateICmpNE(AV,BV),
+		  B.CreateICmpUGT(AV,BV), B.CreateICmpUGE(AV,BV),
+		  B.CreateICmpULT(AV,BV), B.CreateICmpULE(AV,BV),
+		  B.CreateICmpSGT(AV,BV), B.CreateICmpSGE(AV,BV),
+		  B.CreateICmpSLT(AV,BV), B.CreateICmpSLE(AV,BV),
+		};
+		P Ps[] = { P::ICMP_EQ,P::ICMP_NE,P::ICMP_UGT,P::ICMP_UGE,P::ICMP_ULT,
+				P::ICMP_ULE,P::ICMP_SGT,P::ICMP_SGE,P::ICMP_SLT,P::ICMP_SLE };
+		Value* Cond = B.getInt1(false);
+		for (unsigned i = 0; i < 10; i++)
+			Cond = B.CreateSelect(B.CreateICmpEQ(Pred, B.getInt32(IsaEnc.encIcmpPred((uint8_t)Ps[i]))), Cs[i], Cond);
+		Value* TV = ldVR(B, TIdx), * FV = ldVR(B, FIdx);
+		Value* R = B.CreateSelect(Cond, TV, FV, "vm.cs.r");
+		stVR(B, Dst, R);
+		nextInsn(B);
+	}
+
+	//  OP_ANDCMPZ -- [dst:u8 a:u8 b:u8 pred:u8] -- dst = ((a&b) <eq|ne> 0) (i32 0/1, superOps fusion)
+	{
+		auto B = mkOpc(OP_ANDCMPZ, "andcmpz");
+		Value* IP = advIP(B, 4);
+		Value* Dst = rdVR(B, IP, 0, "vm.ac.d");
+		Value* AIdx = rdVR(B, IP, 1, "vm.ac.a");
+		Value* BIdx = rdVR(B, IP, 2, "vm.ac.b");
+		Value* Pred = rdByte(B, IP, 3, "vm.ac.p");
+		Value* AV = ldVR(B, AIdx), * BV = ldVR(B, BIdx);
+		Value* M = B.CreateAnd(AV, BV, "vm.ac.m");
+		// pred is EQ or NE only; select the compare-to-zero accordingly.
+		Value* IsEq = B.CreateICmpEQ(
+			Pred, B.getInt32(IsaEnc.encIcmpPred((uint8_t)CmpInst::ICMP_EQ)), "vm.ac.iseq");
+		Value* EqZ = B.CreateICmpEQ(M, B.getInt32(0), "vm.ac.eqz");
+		Value* NeZ = B.CreateICmpNE(M, B.getInt32(0), "vm.ac.nez");
+		Value* R = B.CreateSelect(IsEq, EqZ, NeZ, "vm.ac.sel");
+		stVR(B, Dst, B.CreateZExt(R, I32Ty, "vm.ac.r"));
+		nextInsn(B);
+	}
+
 
 	//  OP_BINOP64 -- [dst64:u8 a64:u8 b64:u8 subop:u8]
 	// NOTE: must not speculatively execute div/rem for other subops (would trap on BV==0).

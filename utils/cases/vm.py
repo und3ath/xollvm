@@ -26,6 +26,9 @@ from ._common import (
     render_vm_v7_i64_ret_highslot_program,
     render_vm_v7_multiblock_program,
     render_vm_v7_superops_muladd_hot_program,
+    render_vm_v7_superops_shladd_hot_program,
+    render_vm_v7_superops_cmpsel_hot_program,
+    render_vm_v7_superops_andcmpz_hot_program,
 )
 
 
@@ -102,7 +105,7 @@ VM_KEYEDDISP_GATES = ["vm_keyeddisp_ip_xor"]
 # check that the ISA/handler wiring exists, not proof fusion fired. That
 # proof is the differential-output correctness gate every case below
 # already carries (mismatched fusion would produce a wrong answer).
-VM_SUPEROPS_GATES = ["vm_superops_muladd_present"]
+VM_SUPEROPS_GATES = ["vm_superops_muladd_present", "vm_superops_shladd_present", "vm_superops_cmpsel_present", "vm_superops_andcmpz_present"]
 
 # bindAntiDebug: folds debugger detection into the AES round-key mask global
 # via a dedicated .init_array ctor instead of salt-poisoning traps. Purely a
@@ -785,6 +788,137 @@ def register(reg: Registry, **_opts) -> None:
             ann_override=vm_v7_so,
             extra_opts=_DBG, gates=["seed_determinism"], category="vm",
             src_override=render_vm_v7_superops_muladd_hot_program(vm_v7_so))
+
+    # ── superOps (eligible i32 `shl`+`add` chains fuse into one OP_SHLADD
+    # opcode instead of two OP_BINOP opcodes) -- mirrors the muladd cluster
+    # above exactly, against a shl+add-heavy program so fusion is actually
+    # exercised. Same correctness argument: differential output proves the
+    # fused handler (dst = (a<<b) + c) matches the original two-instruction
+    # sequence; VM_SUPEROPS_GATES is a smoke check only.
+    reg.add(name="rt_vm_v7_superops_shladd_hot", passes=["vm"],
+            ann_override=vm_v7_so,
+            gates=VM_CORE_GATES + VM_SUPEROPS_GATES + ["vm_enc_ctor"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_superops_shladd_hot_program(vm_v7_so))
+    reg.add(name="rt_vm_v7_superops_shladd_multi_fn", passes=["vm"],
+            ann_override=vm_v7_so_multi,
+            gates=VM_SHARED_GATES + VM_SUPEROPS_GATES + [
+                "vm_enc_ctor", "vm_callees_global", "vm_multi_fn_shared",
+            ],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_multi_fn_aes_program(vm_v7_so_multi))
+    reg.add(name="rt_vm_v7_superops_shladd_hardened", passes=["vm"],
+            ann_override=vm_v7_so_hard,
+            gates=VM_CORE_GATES + VM_SUPEROPS_GATES + [
+                "vm_enc_ctor", "vm_hardened_mba", "vm_hardened_dead_blocks",
+                "vm_hardened_dispatch_guard", "vm_hardened_handler_guards",
+            ],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_superops_shladd_hot_program(vm_v7_so_hard))
+    # Full-stack composition: superOps + threadedDispatch + keyedDispatch +
+    # encDispatch + lazyDecrypt + constInStream + nestedVM together, proven
+    # against the shladd-heavy program so fusion is actually exercised under
+    # every other hardening layer at once.
+    reg.add(name="rt_vm_v7_superops_shladd_stack", passes=["vm"],
+            ann_override=vm_v7_so_stack,
+            gates=VM_THREADED_SHARED_GATES + VM_THREADED_GATES + VM_KEYEDDISP_GATES
+                + VM_SUPEROPS_GATES + VM_AES_GATES + VM_LAZYDECRYPT_GATES
+                + VM_CONSTINSTREAM_GATES + VM_NESTEDVM_GATES
+                + ["vm_enc_ctor"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_superops_shladd_hot_program(vm_v7_so_stack))
+    reg.add(name="rt_vm_v7_superops_shladd_determinism", passes=["vm"],
+            ann_override=vm_v7_so,
+            extra_opts=_DBG, gates=["seed_determinism"], category="vm",
+            src_override=render_vm_v7_superops_shladd_hot_program(vm_v7_so))
+
+    # ── superOps (eligible i32 `icmp`+`select` chains -- icmp single-use and
+    # IS the select's own condition -- fuse into one OP_CMPSEL opcode instead
+    # of a separate OP_ICMP + OP_SELECT) -- mirrors the muladd/shladd
+    # clusters above exactly, against an icmp+select-heavy program so fusion
+    # is actually exercised. Same correctness argument: differential output
+    # proves the fused handler (dst = (a<pred>b) ? t : f) matches the
+    # original two-instruction sequence; VM_SUPEROPS_GATES is a smoke check
+    # only.
+    reg.add(name="rt_vm_v7_superops_cmpsel_hot", passes=["vm"],
+            ann_override=vm_v7_so,
+            gates=VM_CORE_GATES + VM_SUPEROPS_GATES + ["vm_enc_ctor"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_superops_cmpsel_hot_program(vm_v7_so))
+    reg.add(name="rt_vm_v7_superops_cmpsel_multi_fn", passes=["vm"],
+            ann_override=vm_v7_so_multi,
+            gates=VM_SHARED_GATES + VM_SUPEROPS_GATES + [
+                "vm_enc_ctor", "vm_callees_global", "vm_multi_fn_shared",
+            ],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_multi_fn_aes_program(vm_v7_so_multi))
+    reg.add(name="rt_vm_v7_superops_cmpsel_hardened", passes=["vm"],
+            ann_override=vm_v7_so_hard,
+            gates=VM_CORE_GATES + VM_SUPEROPS_GATES + [
+                "vm_enc_ctor", "vm_hardened_mba", "vm_hardened_dead_blocks",
+                "vm_hardened_dispatch_guard", "vm_hardened_handler_guards",
+            ],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_superops_cmpsel_hot_program(vm_v7_so_hard))
+    # Full-stack composition: superOps + threadedDispatch + keyedDispatch +
+    # encDispatch + lazyDecrypt + constInStream + nestedVM together, proven
+    # against the cmpsel-heavy program so fusion is actually exercised under
+    # every other hardening layer at once.
+    reg.add(name="rt_vm_v7_superops_cmpsel_stack", passes=["vm"],
+            ann_override=vm_v7_so_stack,
+            gates=VM_THREADED_SHARED_GATES + VM_THREADED_GATES + VM_KEYEDDISP_GATES
+                + VM_SUPEROPS_GATES + VM_AES_GATES + VM_LAZYDECRYPT_GATES
+                + VM_CONSTINSTREAM_GATES + VM_NESTEDVM_GATES
+                + ["vm_enc_ctor"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_superops_cmpsel_hot_program(vm_v7_so_stack))
+    reg.add(name="rt_vm_v7_superops_cmpsel_determinism", passes=["vm"],
+            ann_override=vm_v7_so,
+            extra_opts=_DBG, gates=["seed_determinism"], category="vm",
+            src_override=render_vm_v7_superops_cmpsel_hot_program(vm_v7_so))
+
+    # ── superOps (eligible i32 `and`+`icmp eq|ne ...,0` bit-tests fuse into one
+    # OP_ANDCMPZ opcode instead of a separate OP_BINOP + OP_ICMP) -- mirrors the
+    # muladd/shladd/cmpsel clusters against an and+compare-zero-heavy program so
+    # fusion is actually exercised. Same correctness argument: differential
+    # output proves the fused handler (dst = (a&b) <eq|ne> 0) matches the
+    # original two-instruction sequence; VM_SUPEROPS_GATES is a smoke check only.
+    reg.add(name="rt_vm_v7_superops_andcmpz_hot", passes=["vm"],
+            ann_override=vm_v7_so,
+            gates=VM_CORE_GATES + VM_SUPEROPS_GATES + ["vm_enc_ctor"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_superops_andcmpz_hot_program(vm_v7_so))
+    reg.add(name="rt_vm_v7_superops_andcmpz_multi_fn", passes=["vm"],
+            ann_override=vm_v7_so_multi,
+            gates=VM_SHARED_GATES + VM_SUPEROPS_GATES + [
+                "vm_enc_ctor", "vm_callees_global", "vm_multi_fn_shared",
+            ],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_multi_fn_aes_program(vm_v7_so_multi))
+    reg.add(name="rt_vm_v7_superops_andcmpz_hardened", passes=["vm"],
+            ann_override=vm_v7_so_hard,
+            gates=VM_CORE_GATES + VM_SUPEROPS_GATES + [
+                "vm_enc_ctor", "vm_hardened_mba", "vm_hardened_dead_blocks",
+                "vm_hardened_dispatch_guard", "vm_hardened_handler_guards",
+            ],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_superops_andcmpz_hot_program(vm_v7_so_hard))
+    # Full-stack composition: superOps + threadedDispatch + keyedDispatch +
+    # encDispatch + lazyDecrypt + constInStream + nestedVM together, proven
+    # against the andcmpz-heavy program so fusion is actually exercised under
+    # every other hardening layer at once.
+    reg.add(name="rt_vm_v7_superops_andcmpz_stack", passes=["vm"],
+            ann_override=vm_v7_so_stack,
+            gates=VM_THREADED_SHARED_GATES + VM_THREADED_GATES + VM_KEYEDDISP_GATES
+                + VM_SUPEROPS_GATES + VM_AES_GATES + VM_LAZYDECRYPT_GATES
+                + VM_CONSTINSTREAM_GATES + VM_NESTEDVM_GATES
+                + ["vm_enc_ctor"],
+            extra_opts=_DBG, category="vm",
+            src_override=render_vm_v7_superops_andcmpz_hot_program(vm_v7_so_stack))
+    reg.add(name="rt_vm_v7_superops_andcmpz_determinism", passes=["vm"],
+            ann_override=vm_v7_so,
+            extra_opts=_DBG, gates=["seed_determinism"], category="vm",
+            src_override=render_vm_v7_superops_andcmpz_hot_program(vm_v7_so))
 
     # ── bindAntiDebug (fold debugger detection into the AES round-key mask
     # global via a dedicated .init_array ctor at priority 100, instead of
