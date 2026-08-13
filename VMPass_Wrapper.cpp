@@ -567,7 +567,8 @@ void VMImpl::buildWrapper() {
 	}
 
 	// Call vm_engine (indirect via handler table)
-	// the engine pointer is stored in GVHandlers[OP_COUNT].
+	// the engine pointer is stored in GVHandlers[OP_COUNT*K] (M1: base table
+	// holds K variant slots per opcode -- see VMImpl::buildHandlerTable()).
 	// We load it and make an indirect call.  This eliminates every direct
 	// call-site xref from wrappers to @__vm_engine, breaking static
 	// cross-reference analysis in IDA/Ghidra.
@@ -604,9 +605,13 @@ void VMImpl::buildWrapper() {
 	};
 	if (LazyActive) Args.push_back(LazyCtxArg);              // lazyctx
 
-	// Load engine function pointer from handler table slot [OP_COUNT]
+	// Load engine function pointer from handler table slot [OP_COUNT*K]
+	// (M1: base table now holds K variant slots per opcode -- see
+	// VMImpl::buildHandlerTable(). K is the shared engine's variant count,
+	// not this function's own NumVariants member, which only reflects the
+	// founding function's build.)
 	Value* EngSlot = B.CreateGEP(PtrTy, GVHandlers,
-		blindI32(OP_COUNT), "vm.eng.slot");
+		blindI32(OP_COUNT * SS->NumVariants), "vm.eng.slot");
 	Value* EngPtr = B.CreateLoad(PtrTy, EngSlot, "vm.eng.ptr");
 
 	FunctionType* EngFTy = VMEngine::getVMEngineFunctionType(Ctx, LazyActive);

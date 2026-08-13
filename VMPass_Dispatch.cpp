@@ -34,14 +34,17 @@ using namespace llvm;
 
 
 void VMImpl::buildHandlerTable() {
-	// table is [OP_COUNT+1 x ptr].  Slots 0..OP_COUNT-1 hold
-	// permuted BlockAddress entries (existing).  Slot [OP_COUNT] holds the
-	// engine function pointer — the wrapper loads it and makes an indirect
-	// call, breaking static call-site xref analysis.
+	// table is [OP_COUNT*K + 1 x ptr] (+ OP_COUNT more when encDispatch is
+	// on).  Slots [P*K .. P*K+K-1] hold the K variant BlockAddress entries
+	// for physical opcode P (M1: intra-function handler-variant dispatch --
+	// all K variant bodies are reachable per opcode; vm.fetch selects one at
+	// runtime from (ip, salt)).  Slot [OP_COUNT*K] holds the engine function
+	// pointer — the wrapper loads it and makes an indirect call, breaking
+	// static call-site xref analysis.
 	//
 	// NOTE: The pointer is stored unmasked here because LLVM 21 does not
 	// support xor(ptrtoint) in constant-expression global initialisers.
-	// The handler table already contains 51 blockaddress(@__vm_engine,...)
+	// The handler table already contains many blockaddress(@__vm_engine,...)
 	// entries so one more raw ptr adds no new information for the analyst.
 	// (constant blinding) will obfuscate the wrapper's runtime
 	// load path so the connection is not trivially visible in the wrapper.
@@ -53,18 +56,13 @@ void VMImpl::buildHandlerTable() {
 	bool ED = SharedEngineMode ? SS->EncDispatch : EncDispatch;
 
 	// P2: table size grows to hold the encrypted dispatch map (dmap) when
-	// encDispatch is on. Off (default): TableSize == OP_COUNT+1, byte-identical
-	// to pre-P2.
-	unsigned TableSize = ED ? (2u * OP_COUNT + 1u) : (OP_COUNT + 1u);
-	SmallVector<Constant*, 2 * OP_COUNT + 1> Es;
+	// encDispatch is on. M1: base size grows from OP_COUNT+1 to OP_COUNT*K+1.
+	// At K==1 this is byte-identical to pre-M1 (TableSize == OP_COUNT+1).
+	unsigned TableSize = ED ? (OP_COUNT * K + 1u + OP_COUNT) : (OP_COUNT * K + 1u);
+	SmallVector<Constant*, 128> Es;
 	Es.resize(TableSize, nullptr);
 
-	// Per-function random variant selection: fork does NOT consume the
-	// parent RNG stream, so at K==1 (vsel always 0, .range() never called)
-	// this is fully dormant and byte-identical to pre-variant behavior.
-	auto VarRng = R.fork("vm.handler.variant");
-
-	// P2: secondary Fisher-Yates permutation of handler table slots.
+	// P2: secondary Fisher-Yates permutation of handler table slots (P-space).
 	// Identity when encDispatch is off (dormant, no RNG consumption).
 	uint8_t DispPerm[OP_COUNT];
 	for (unsigned i = 0; i < OP_COUNT; ++i) DispPerm[i] = (uint8_t)i;
@@ -77,43 +75,47 @@ void VMImpl::buildHandlerTable() {
 	}
 
 	for (unsigned L = 0; L < OP_COUNT; ++L) {
-		unsigned vsel = (K > 1) ? VarRng.range(K) : 0;
+		unsigned P = (unsigned)OpMap.encode((VMOp)L);
+		assert(P < OP_COUNT && "opcode map out of range");
+		unsigned PermP = DispPerm[P];               // identity when ED off
 		// CALL handlers wire the module-shared SS->CallSW[RK] switch, which
 		// keeps only the LAST-built variant's switch; ensureCallFTyCases()
 		// extends only that one as later functions register new FunctionTypes.
-		// Selecting any earlier CALL variant would route through a switch that
-		// never received those cases -> default (vm.cl.ur, unreachable) -> UB.
-		// Pin CALL opcodes to the last variant (K-1); all other opcodes keep
-		// full per-function variant diversity.
-		if (K > 1 && (L == OP_CALL_VOID || L == OP_CALL_INT || L == OP_CALL_PTR ||
-					  L == OP_CALL_INT64 || L == OP_CALL_F))
-			vsel = K - 1;
-		BasicBlock* HB = SharedEngineMode ? SS->OpcBB[L][vsel]
-										   : OpcBB[L][vsel];
-		assert(HB && "missing opcode handler variant");
-		unsigned P = (unsigned)OpMap.encode((VMOp)L);
-		assert(P < OP_COUNT && "opcode map out of range");
-		unsigned slot = DispPerm[P];               // identity when ED off
-		Es[slot] = BlockAddress::get(BAFn, HB);
+		// Routing to any earlier CALL variant would hit a switch that never
+		// received those cases -> default (vm.cl.ur, unreachable) -> UB.
+		// Pin ALL K slots for CALL opcodes to the last variant (K-1) so
+		// runtime vsel can never select an unwired CALL variant; all other
+		// opcodes keep full intra-function variant diversity.
+		bool IsCall = (L == OP_CALL_VOID || L == OP_CALL_INT || L == OP_CALL_PTR ||
+					   L == OP_CALL_INT64 || L == OP_CALL_F);
+		for (unsigned v = 0; v < K; ++v) {
+			unsigned VB = (K > 1 && IsCall) ? (K - 1) : v;
+			BasicBlock* HB = SharedEngineMode ? SS->OpcBB[L][VB]
+											   : OpcBB[L][VB];
+			assert(HB && "missing opcode handler variant");
+			Es[PermP * K + v] = BlockAddress::get(BAFn, HB);
+		}
 	}
-	for (unsigned P = 0; P < OP_COUNT; ++P)
-		assert(Es[P] && "unfilled handler table slot");
+	for (unsigned i = 0; i < OP_COUNT * K; ++i)
+		assert(Es[i] && "unfilled handler table slot");
 
-	// engine pointer in slot [OP_COUNT]
+	// engine pointer in slot [OP_COUNT*K]
 	{
 		Function* EngFn = M.getFunction(VMEngine::vmEngineName(EngineId));
 		assert(EngFn && "vm_engine must exist before building handler table");
-		Es[OP_COUNT] = EngFn;
+		Es[OP_COUNT * K] = EngFn;
 	}
 
-	// P2: encrypted dispatch map (dmap) occupies slots [OP_COUNT+1 .. 2*OP_COUNT].
-	// dmap[P] = DispPerm[P] XOR SaltConst, stored as an inttoptr constant expr
-	// (LLVM allows ConstantExpr::getIntToPtr in global initializers; ptrtoint
-	// recovers the integer at runtime).
+	// P2: encrypted dispatch map (dmap) occupies slots
+	// [OP_COUNT*K+1 .. OP_COUNT*K+OP_COUNT]. dmap[P] = DispPerm[P] XOR
+	// SaltConst (semantics UNCHANGED from pre-M1 -- still indexed per-P;
+	// vm.fetch multiplies the decoded value by K after decrypt), stored as
+	// an inttoptr constant expr (LLVM allows ConstantExpr::getIntToPtr in
+	// global initializers; ptrtoint recovers the integer at runtime).
 	if (ED) {
 		for (unsigned P = 0; P < OP_COUNT; ++P) {
 			uint64_t enc = (uint64_t)((uint32_t)DispPerm[P] ^ SaltConst);
-			Es[OP_COUNT + 1 + P] =
+			Es[OP_COUNT * K + 1 + P] =
 				ConstantExpr::getIntToPtr(ConstantInt::get(I64Ty, enc), PtrTy);
 		}
 	}
@@ -187,11 +189,14 @@ void VMImpl::buildDispatch() {
 		Value* P = B.CreateURem(OIdx, B.getInt32(OP_COUNT), "vm.safe");
 
 		// P2: route through the encrypted dispatch map (dmap) when encDispatch
-		// is on. dmap lives at handlers[OP_COUNT+1 + P]; decrypt with the
-		// runtime salt to recover the permuted table slot.
+		// is on. dmap lives at handlers[OP_COUNT*K+1 + P] (M1: base table grew
+		// to OP_COUNT*K slots); decrypt with the runtime salt to recover the
+		// permuted P-space slot (semantics unchanged -- runtime multiplies by
+		// NumVariants below, after decode).
 		Value* FinalSlot;
 		if (EncDispatch) {
-			Value* DmIdx  = B.CreateAdd(P, B.getInt32(OP_COUNT + 1), "vm.dm.i");
+			Value* DmIdx  = B.CreateAdd(P,
+				B.getInt32(OP_COUNT * NumVariants + 1), "vm.dm.i");
 			Value* DmPtr  = B.CreateGEP(PtrTy, EffHandlers, DmIdx, "vm.dm.p");
 			Value* DmRaw  = B.CreateLoad(PtrTy, DmPtr, "vm.dm.raw");
 			Value* DmInt  = B.CreateTrunc(
@@ -205,8 +210,38 @@ void VMImpl::buildDispatch() {
 			FinalSlot = P;
 		}
 
-		// GEP into handler table[final_slot]
-		Value* Slot = B.CreateGEP(PtrTy, EffHandlers, FinalSlot, "vm.ohsl");
+		// M1: intra-function handler-variant dispatch. Table is now laid
+		// out [P*K + v] per opcode; select v at runtime from (ip, salt) so
+		// different dispatches of the same opcode can reach different
+		// variant bodies. Guarded on NumVariants > 1 -- emits no new IR and
+		// leaves the GEP consuming FinalSlot verbatim when K==1 (identity,
+		// byte-identical to pre-M1).
+		//
+		// Uses the raw incoming "salt" ARGUMENT (HFn->getArg(kParamSalt)),
+		// not a load from EffSalt/SS->EngineSalt: hardenVMEngine()'s RDTSC
+		// handler-timing traps XOR-poison that alloca on a suspected debugger
+		// (a documented, load-sensitive false-positive risk). Pre-M1, nothing
+		// in this code path read that alloca unless keyedDispatch/encDispatch
+		// (opt-in, off by default) were on, so a false trip was control-flow
+		// inert here. Reading it for vsel would make EVERY default VM build
+		// (handlerVariants=3) newly control-flow-sensitive to that flake.
+		// The argument SSA value is immutable and dominates the whole
+		// function, so it is never affected by the poison store.
+		Value* TableSlot = FinalSlot;
+		if (NumVariants > 1) {
+			Value* SaltL = HFn->getArg(VMEngine::kParamSalt);
+			Value* Mix = B.CreateXor(
+				B.CreateMul(IP, B.getInt32(0x9E3779B1u), "vm.vs.mul"),
+				B.CreateLShr(SaltL, B.getInt32(3), "vm.vs.shr"),
+				"vm.vs.mix");
+			Value* VSel = B.CreateURem(Mix, B.getInt32(NumVariants), "vm.vs.sel");
+			TableSlot = B.CreateAdd(
+				B.CreateMul(FinalSlot, B.getInt32(NumVariants), "vm.vs.base"),
+				VSel, "vm.vs.slot");
+		}
+
+		// GEP into handler table[table_slot]
+		Value* Slot = B.CreateGEP(PtrTy, EffHandlers, TableSlot, "vm.ohsl");
 		Value* Hndl = B.CreateLoad(PtrTy, Slot, "vm.hndl");
 
 		// indirectbr with all opcode blocks (all variants) declared as successors
@@ -270,7 +305,8 @@ void VMImpl::emitThreadedTail(IRBuilder<>& B) {
 	// is on -- mirrors buildDispatch()'s vm.fetch logic exactly.
 	Value* FinalSlot;
 	if (EncDispatch) {
-		Value* DmIdx = FB.CreateAdd(P, FB.getInt32(OP_COUNT + 1), "vm.dm.i");
+		Value* DmIdx = FB.CreateAdd(P,
+			FB.getInt32(OP_COUNT * NumVariants + 1), "vm.dm.i");
 		Value* DmPtr = FB.CreateGEP(PtrTy, EffHandlers, DmIdx, "vm.dm.p");
 		Value* DmRaw = FB.CreateLoad(PtrTy, DmPtr, "vm.dm.raw");
 		Value* DmInt = FB.CreateTrunc(
@@ -284,8 +320,27 @@ void VMImpl::emitThreadedTail(IRBuilder<>& B) {
 		FinalSlot = P;
 	}
 
-	// GEP into handler table[final_slot]
-	Value* Slot = FB.CreateGEP(PtrTy, EffHandlers, FinalSlot, "vm.ohsl");
+	// M1: intra-function handler-variant dispatch -- mirrors buildDispatch()'s
+	// vm.fetch logic exactly. Guarded on NumVariants > 1; identity (no new
+	// IR, GEP consumes FinalSlot verbatim) when K==1. Uses the raw incoming
+	// "salt" ARGUMENT, not a load from EffSalt/SS->EngineSalt -- see the
+	// comment in buildDispatch()'s vm.fetch for why (RDTSC handler-trap
+	// false-positive poisoning of that alloca).
+	Value* TableSlot = FinalSlot;
+	if (NumVariants > 1) {
+		Value* SaltL = HFn->getArg(VMEngine::kParamSalt);
+		Value* Mix = FB.CreateXor(
+			FB.CreateMul(IP2, FB.getInt32(0x9E3779B1u), "vm.vs.mul"),
+			FB.CreateLShr(SaltL, FB.getInt32(3), "vm.vs.shr"),
+			"vm.vs.mix");
+		Value* VSel = FB.CreateURem(Mix, FB.getInt32(NumVariants), "vm.vs.sel");
+		TableSlot = FB.CreateAdd(
+			FB.CreateMul(FinalSlot, FB.getInt32(NumVariants), "vm.vs.base"),
+			VSel, "vm.vs.slot");
+	}
+
+	// GEP into handler table[table_slot]
+	Value* Slot = FB.CreateGEP(PtrTy, EffHandlers, TableSlot, "vm.ohsl");
 	Value* Hndl = FB.CreateLoad(PtrTy, Slot, "vm.hndl");
 
 	// indirectbr with all opcode blocks (all variants) declared as successors
