@@ -8,14 +8,28 @@
 //   - All methods take an IRBuilder<>& at their insertion point
 //
 // Intended callers
-//   - MBAObfuscation.cpp  (MbaCtx constructs one; runMBA() uses it)
+//   - MBAObfuscation.cpp  (MbaCtx constructs one; runMBA() uses it — 5-opcode)
 //   - VMPass_Impl.cpp     (hardenVMEngine() creates one to replace inline helpers)
+//   - VMPass handler-variant diversification (indexed pool, 7-opcode)
 //
 // Rng conventions
 //   - R (stored by reference, passed at construction) is the "noise Rng" used for
 //     inflation, slot seed, and zero-term shape.
 //   - applyMBARecursive / applyLayeredWindow accept an explicit Rng& RecRng so the
 //     caller can forward its dedicated "recursion Rng" and preserve determinism.
+//
+// Identity pool (23 total; queryable via poolSize/applyByIndex)
+//   Add: 4  (add, addAlt, addAlt2, addAlt3)
+//   Sub: 4  (sub, subAlt, subAlt2, subAlt3)
+//   And: 3  (bitwiseAnd, bitwiseAndAlt, bitwiseAndAlt2)
+//   Or : 3  (bitwiseOr,  bitwiseOrAlt,  bitwiseOrAlt2)
+//   Xor: 3  (bitwiseXor, bitwiseXorAlt, bitwiseXorAlt2)
+//   Mul: 3  (mul, mulAlt, mulAlt2 — indexed pool only; not dispatched by MBA pass)
+//   Shl: 3  (shl, shlAlt, shlAlt2 — const-RHS only; indexed pool only)
+//
+// Only Add/Sub/And/Or/Xor participate in isTargetOpcode /
+// applyPrimary / applyAlternate. Mul and Shl are indexed-pool-only,
+// intended for VM handler-variant diversification.
 // ============================================================================
 
 #include "llvm/ADT/SmallVector.h"
