@@ -36,20 +36,17 @@ VMPassConfig VMPassConfig::fromPassConfig(const PassConfig& PC) {
 	VMPassConfig Cfg;
 	Cfg.enable = PC.enabled;
 
-	// preset=<light|medium|high|max>: shortcut bundle applied before explicit
-	// knobs below, so any explicit knob in the annotation overrides the preset.
+	// preset=<medium|high|max>: shortcut bundle applied before explicit knobs
+	// below, so any explicit knob in the annotation overrides the preset.
+	// (The former `light` preset was removed: real-lift resilience bench on
+	// v0.8.0 showed it produced NEGATIVE resilience on straight-line code --
+	// attacker's opt-O3 folded the light-preset VM output smaller than the
+	// unobfuscated baseline it was hiding. Anyone who wants the same bundle
+	// can spell it out explicitly.)
 	auto It = PC.params.find("preset");
 	if (It != PC.params.end()) {
 		const std::string& P = It->second;
-		if (P == "light") {
-			// always-on baseline + K=1, no other hardening
-			Cfg.obfRegIdx = true;
-			Cfg.encBytecode = true;
-			Cfg.handlerVariants = 1;
-			Cfg.encDispatch = false;
-			Cfg.strongBytecode = false;
-			Cfg.blindTargets = false;
-		} else if (P == "medium") {
+		if (P == "medium") {
 			// current defaults; explicit for readability + stability
 			Cfg.obfRegIdx = true;
 			Cfg.encBytecode = true;
