@@ -59,9 +59,12 @@ IDENTITIES = {
 }
 """,
     "mulAlt2": """define i32 @f(i32 %x, i32 %y) {
-  %ny = sub i32 0, %y
-  %m = mul i32 %x, %ny
-  %r = sub i32 0, %m
+  %ylo = and i32 %y, 65535
+  %yhi = lshr i32 %y, 16
+  %mlo = mul i32 %x, %ylo
+  %mhi = mul i32 %x, %yhi
+  %mhis = shl i32 %mhi, 16
+  %r = add i32 %mlo, %mhis
   ret i32 %r
 }
 """,

@@ -107,7 +107,7 @@ namespace llvm::obf {
 		// ---- Mul: x * y ----
 		Value* mul(IRBuilder<>& B, Value* A, Value* V);      ///< x * y
 		Value* mulAlt(IRBuilder<>& B, Value* A, Value* V);   ///< -((-x) * y)
-		Value* mulAlt2(IRBuilder<>& B, Value* A, Value* V);  ///< -(x * (-y))
+		Value* mulAlt2(IRBuilder<>& B, Value* A, Value* V);  ///< x*(y&0xFFFF) + (x*(y>>>16))<<16  (split-mul; i32+)
 
 		// ---- Shl: x << n (const n only) ----
 		// For these three, @p N MUST be a ConstantInt (compile-time shift amount).

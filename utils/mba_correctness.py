@@ -61,7 +61,13 @@ def i_bitwiseXorAlt2(x, y): return I32((x | y) & I32(~(x & y)))
 
 def i_mul(x, y):     return I32(x * y)
 def i_mulAlt(x, y):  return I32(-((I32(0) - x) * y))
-def i_mulAlt2(x, y): return I32(-(x * (I32(0) - y)))
+def i_mulAlt2(x, y):
+    y_lo = I32(np.uint32(y) & np.uint32(0xFFFF))
+    y_hi = I32(np.uint32(y) >> np.uint32(16))  # LShr: zero-fill via uint32 view
+    m_lo = I32(x * y_lo)
+    m_hi = I32(x * y_hi)
+    m_hi_shift = I32(np.uint32(m_hi) << np.uint32(16))
+    return I32(np.uint32(m_lo) + np.uint32(m_hi_shift))
 
 # ---------------------------------------------------------------------------
 # Shl identities — const-RHS only. n ranges over a fixed set of shift amounts

@@ -270,11 +270,23 @@ Value* MbaUtils::mulAlt(IRBuilder<>& B, Value* A, Value* V) {
 	return B.CreateNeg(Mul, "mba.mul.alt");
 }
 
-// x * y  =>  -(x * (-y))
+// x * y  =>  x*(y & 0xFFFF) + (x * (y >>> 16)) << 16    (16-bit split-mul; mod 2^32)
+// Distinct from mulAlt: reconstructs y from its low/high 16-bit halves so the
+// per-half products differ structurally instead of being a Neg-Mul-Neg mirror.
+// Only meaningful for i32 (or wider); if you call this with i8/i16, the shift
+// amount of 16 would be UB — assert bitwidth >= 32.
 Value* MbaUtils::mulAlt2(IRBuilder<>& B, Value* A, Value* V) {
-	Value* NegV = B.CreateNeg(V, "mba.mul.alt2.negy");
-	Value* Mul = B.CreateMul(A, NegV, "mba.mul.alt2.mul");
-	return B.CreateNeg(Mul, "mba.mul.alt2");
+	Type* T = A->getType();
+	unsigned BW = T->getScalarSizeInBits();
+	assert(BW >= 32 && "mulAlt2 split-mul requires bitwidth >= 32");
+	Constant* LoMask = ConstantInt::get(T, 0xFFFFu);
+	Constant* Sixteen = ConstantInt::get(T, 16);
+	Value* YLo = B.CreateAnd(V, LoMask, "mba.mul.alt2.ylo");
+	Value* YHi = B.CreateLShr(V, Sixteen, "mba.mul.alt2.yhi");
+	Value* MLo = B.CreateMul(A, YLo, "mba.mul.alt2.mlo");
+	Value* MHi = B.CreateMul(A, YHi, "mba.mul.alt2.mhi");
+	Value* MHiShift = B.CreateShl(MHi, Sixteen, "mba.mul.alt2.mhishl");
+	return B.CreateAdd(MLo, MHiShift, "mba.mul.alt2");
 }
 
 // ============================================================================
