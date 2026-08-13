@@ -256,6 +256,58 @@ Value* MbaUtils::applyAlternate(IRBuilder<>& B, BinaryOperator* BO) {
 	}
 }
 
+// ============================================================================
+// Indexed pool access (handler-variant diversification)
+// ============================================================================
+// Value-level dispatch only — deliberately bypasses applyPrimary/applyAlternate
+// so the MBAAdd/Sub/And/Or/Xor STATISTIC counters stay untouched.
+
+unsigned MbaUtils::poolSize(Instruction::BinaryOps Op) const {
+	switch (Op) {
+	case Instruction::Add: return 3; // add, addAlt, addAlt2
+	case Instruction::Sub: return 3; // sub, subAlt, subAlt2
+	case Instruction::And: return 2; // bitwiseAnd, bitwiseAndAlt
+	case Instruction::Or:  return 3; // bitwiseOr, bitwiseOrAlt, bitwiseOrAlt2
+	case Instruction::Xor: return 2; // bitwiseXor, bitwiseXorAlt
+	default:               return 0;
+	}
+}
+
+Value* MbaUtils::applyByIndex(IRBuilder<>& B, Instruction::BinaryOps Op,
+	Value* A, Value* V, unsigned K) {
+	unsigned Size = poolSize(Op);
+	if (Size == 0)
+		return nullptr;
+
+	unsigned Idx = K % Size;
+	switch (Op) {
+	case Instruction::Add:
+		switch (Idx) {
+		case 0: return add(B, A, V);
+		case 1: return addAlt(B, A, V);
+		default: return addAlt2(B, A, V);
+		}
+	case Instruction::Sub:
+		switch (Idx) {
+		case 0: return sub(B, A, V);
+		case 1: return subAlt(B, A, V);
+		default: return subAlt2(B, A, V);
+		}
+	case Instruction::And:
+		return (Idx == 0) ? bitwiseAnd(B, A, V) : bitwiseAndAlt(B, A, V);
+	case Instruction::Or:
+		switch (Idx) {
+		case 0: return bitwiseOr(B, A, V);
+		case 1: return bitwiseOrAlt(B, A, V);
+		default: return bitwiseOrAlt2(B, A, V);
+		}
+	case Instruction::Xor:
+		return (Idx == 0) ? bitwiseXor(B, A, V) : bitwiseXorAlt(B, A, V);
+	default:
+		return nullptr;
+	}
+}
+
 // Recursive MBA: picks primary vs alternate per level using RecRng,
 // recurses into newly produced BinaryOperators.
 // RecRng is passed explicitly so MbaCtx::RecRng sequence is preserved 1:1.

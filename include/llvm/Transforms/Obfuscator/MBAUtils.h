@@ -114,6 +114,26 @@ namespace llvm::obf {
 		/// Returns nullptr if opcode is not supported.
 		Value* applyAlternate(IRBuilder<>& B, BinaryOperator* BO);
 
+		// =========================================================================
+		// Indexed pool access (handler-variant diversification)
+		// =========================================================================
+		// Unlike applyPrimary/applyAlternate, these give positional access into the
+		// full identity pool for a given opcode and do NOT bump STATISTIC counters
+		// (callers like VM handler-variant diversification churn through many
+		// indices per opcode and must not inflate the MBA pass's own stats).
+
+		/// Number of distinct identities available for opcode @p Op
+		/// (e.g. 3 for Add: add/addAlt/addAlt2). Returns 0 if @p Op is not a
+		/// target opcode (see isTargetOpcode).
+		unsigned poolSize(Instruction::BinaryOps Op) const;
+
+		/// Apply the @p K-th identity from @p Op's pool to (A op V).
+		/// @p K is folded modulo poolSize(Op), so any unsigned K is valid and
+		/// cycles through the pool. Returns nullptr if @p Op is not a target
+		/// opcode. Does NOT bump STATISTIC counters (see above).
+		Value* applyByIndex(IRBuilder<>& B, Instruction::BinaryOps Op,
+			Value* A, Value* V, unsigned K);
+
 		/// Recursively apply MBA up to @p depth levels.
 		/// @p RecRng  Caller's dedicated recursion RNG (e.g. MbaCtx::RecRng).
 		///            Forwarding a separate RecRng preserves the exact per-pass
