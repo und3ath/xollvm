@@ -30,6 +30,7 @@ def p_sub(x, y): return I32(x - y)
 def p_and(x, y): return I32(x & y)
 def p_or(x, y):  return I32(x | y)
 def p_xor(x, y): return I32(x ^ y)
+def p_mul(x, y): return I32(x * y)
 
 
 # ---------------------------------------------------------------------------
@@ -58,6 +59,10 @@ def i_bitwiseXor(x, y):     return I32((x | y) - (x & y))
 def i_bitwiseXorAlt(x, y):  return I32((I32(~x) & y) | (x & I32(~y)))
 def i_bitwiseXorAlt2(x, y): return I32((x | y) & I32(~(x & y)))
 
+def i_mul(x, y):     return I32(x * y)
+def i_mulAlt(x, y):  return I32(-((I32(0) - x) * y))
+def i_mulAlt2(x, y): return I32(-(x * (I32(0) - y)))
+
 
 IDENTITIES = [
     ("add",             i_add,             p_add),
@@ -77,6 +82,9 @@ IDENTITIES = [
     ("bitwiseXor",      i_bitwiseXor,      p_xor),
     ("bitwiseXorAlt",   i_bitwiseXorAlt,   p_xor),
     ("bitwiseXorAlt2",  i_bitwiseXorAlt2,  p_xor),
+    ("mul",             i_mul,             p_mul),
+    ("mulAlt",          i_mulAlt,          p_mul),
+    ("mulAlt2",         i_mulAlt2,         p_mul),
 ]
 
 
@@ -93,6 +101,7 @@ def build_value_set():
 
 
 def main():
+    np.seterr(over="ignore")
     values = build_value_set()
     # Full cross-product of the combined value set (both operands).
     X, Y = np.meshgrid(values, values, indexing="ij")

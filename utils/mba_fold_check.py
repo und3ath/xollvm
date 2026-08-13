@@ -51,11 +51,25 @@ IDENTITIES = {
   ret i32 %r
 }
 """,
+    "mulAlt": """define i32 @f(i32 %x, i32 %y) {
+  %nx = sub i32 0, %x
+  %m = mul i32 %nx, %y
+  %r = sub i32 0, %m
+  ret i32 %r
+}
+""",
+    "mulAlt2": """define i32 @f(i32 %x, i32 %y) {
+  %ny = sub i32 0, %y
+  %m = mul i32 %x, %ny
+  %r = sub i32 0, %m
+  ret i32 %r
+}
+""",
 }
 
 # A single primitive binop directly on %x/%y (either operand order).
 PRIMITIVE_RE = re.compile(
-    r"=\s*(add|sub|and|xor)\s+i32\s+(%x, %y|%y, %x)\b")
+    r"=\s*(add|sub|and|xor|mul)\s+i32\s+(%x, %y|%y, %x)\b")
 
 
 def classify(ll_out):

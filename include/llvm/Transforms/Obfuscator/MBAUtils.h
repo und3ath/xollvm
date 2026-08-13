@@ -104,6 +104,11 @@ namespace llvm::obf {
 		Value* bitwiseXorAlt(IRBuilder<>& B, Value* A, Value* V);  ///< (~x & y) | (x & ~y)
 		Value* bitwiseXorAlt2(IRBuilder<>& B, Value* A, Value* V); ///< (x|y) & ~(x&y)
 
+		// ---- Mul: x * y ----
+		Value* mul(IRBuilder<>& B, Value* A, Value* V);      ///< x * y
+		Value* mulAlt(IRBuilder<>& B, Value* A, Value* V);   ///< -((-x) * y)
+		Value* mulAlt2(IRBuilder<>& B, Value* A, Value* V);  ///< -(x * (-y))
+
 		// =========================================================================
 		// BinaryOperator-level wrappers  (MBAPass primary interface)
 		// =========================================================================

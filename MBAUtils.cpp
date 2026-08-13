@@ -254,6 +254,29 @@ Value* MbaUtils::bitwiseXorAlt2(IRBuilder<>& B, Value* A, Value* V) {
 }
 
 // ============================================================================
+// Core Value-level transforms — Mul
+// ============================================================================
+
+// x * y
+Value* MbaUtils::mul(IRBuilder<>& B, Value* A, Value* V) {
+	return B.CreateMul(A, V, "mba.mul");
+}
+
+// x * y  =>  -((-x) * y)
+Value* MbaUtils::mulAlt(IRBuilder<>& B, Value* A, Value* V) {
+	Value* NegA = B.CreateNeg(A, "mba.mul.alt.negx");
+	Value* Mul = B.CreateMul(NegA, V, "mba.mul.alt.mul");
+	return B.CreateNeg(Mul, "mba.mul.alt");
+}
+
+// x * y  =>  -(x * (-y))
+Value* MbaUtils::mulAlt2(IRBuilder<>& B, Value* A, Value* V) {
+	Value* NegV = B.CreateNeg(V, "mba.mul.alt2.negy");
+	Value* Mul = B.CreateMul(A, NegV, "mba.mul.alt2.mul");
+	return B.CreateNeg(Mul, "mba.mul.alt2");
+}
+
+// ============================================================================
 // BinaryOperator-level wrappers (bump STATISTIC counters)
 // ============================================================================
 
@@ -298,6 +321,7 @@ unsigned MbaUtils::poolSize(Instruction::BinaryOps Op) const {
 	case Instruction::And: return 3; // bitwiseAnd, bitwiseAndAlt, bitwiseAndAlt2
 	case Instruction::Or:  return 3; // bitwiseOr, bitwiseOrAlt, bitwiseOrAlt2
 	case Instruction::Xor: return 3; // bitwiseXor, bitwiseXorAlt, bitwiseXorAlt2
+	case Instruction::Mul: return 3; // mul, mulAlt, mulAlt2
 	default:               return 0;
 	}
 }
@@ -341,6 +365,12 @@ Value* MbaUtils::applyByIndex(IRBuilder<>& B, Instruction::BinaryOps Op,
 		case 0: return bitwiseXor(B, A, V);
 		case 1: return bitwiseXorAlt(B, A, V);
 		default: return bitwiseXorAlt2(B, A, V);
+		}
+	case Instruction::Mul:
+		switch (Idx) {
+		case 0: return mul(B, A, V);
+		case 1: return mulAlt(B, A, V);
+		default: return mulAlt2(B, A, V);
 		}
 	default:
 		return nullptr;
