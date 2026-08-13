@@ -130,6 +130,13 @@ Value* MbaUtils::addAlt2(IRBuilder<>& B, Value* A, Value* V) {
 	return B.CreateSub(Shl, Xor, "mba.add.alt2");
 }
 
+// x + y  =>  (x - ~y) - 1
+Value* MbaUtils::addAlt3(IRBuilder<>& B, Value* A, Value* V) {
+	Value* NotV = B.CreateNot(V, "mba.add.alt3.not");
+	Value* Sub = B.CreateSub(A, NotV, "mba.add.alt3.sub");
+	return B.CreateSub(Sub, ConstantInt::get(A->getType(), 1), "mba.add.alt3");
+}
+
 // ============================================================================
 // Core Value-level transforms — Sub
 // ============================================================================
@@ -159,6 +166,13 @@ Value* MbaUtils::subAlt2(IRBuilder<>& B, Value* A, Value* V) {
 	return B.CreateAdd(Add1, ConstantInt::get(A->getType(), 1), "mba.sub.alt2");
 }
 
+// x - y  =>  ~(~x + y)
+Value* MbaUtils::subAlt3(IRBuilder<>& B, Value* A, Value* V) {
+	Value* NotA = B.CreateNot(A, "mba.sub.alt3.not");
+	Value* Add = B.CreateAdd(NotA, V, "mba.sub.alt3.add");
+	return B.CreateNot(Add, "mba.sub.alt3");
+}
+
 // ============================================================================
 // Core Value-level transforms — And
 // ============================================================================
@@ -176,6 +190,13 @@ Value* MbaUtils::bitwiseAndAlt(IRBuilder<>& B, Value* A, Value* V) {
 	Value* Nb = B.CreateNot(V, "mba.nb");
 	Value* Or = B.CreateOr(Na, Nb, "mba.nor");
 	return B.CreateNot(Or, "mba.and");
+}
+
+// x & y  =>  (x | y) - (x ^ y)  (bit-disjoint identity)
+Value* MbaUtils::bitwiseAndAlt2(IRBuilder<>& B, Value* A, Value* V) {
+	Value* Or = B.CreateOr(A, V, "mba.and.alt2.or");
+	Value* Xor = B.CreateXor(A, V, "mba.and.alt2.xor");
+	return B.CreateSub(Or, Xor, "mba.and.alt2");
 }
 
 // ============================================================================
@@ -224,6 +245,14 @@ Value* MbaUtils::bitwiseXorAlt(IRBuilder<>& B, Value* A, Value* V) {
 	return B.CreateOr(And1, And2, "mba.xor.alt");
 }
 
+// x ^ y  =>  (x | y) & ~(x & y)
+Value* MbaUtils::bitwiseXorAlt2(IRBuilder<>& B, Value* A, Value* V) {
+	Value* Or = B.CreateOr(A, V, "mba.xor.alt2.or");
+	Value* And = B.CreateAnd(A, V, "mba.xor.alt2.and");
+	Value* NotAnd = B.CreateNot(And, "mba.xor.alt2.not");
+	return B.CreateAnd(Or, NotAnd, "mba.xor.alt2");
+}
+
 // ============================================================================
 // BinaryOperator-level wrappers (bump STATISTIC counters)
 // ============================================================================
@@ -264,11 +293,11 @@ Value* MbaUtils::applyAlternate(IRBuilder<>& B, BinaryOperator* BO) {
 
 unsigned MbaUtils::poolSize(Instruction::BinaryOps Op) const {
 	switch (Op) {
-	case Instruction::Add: return 3; // add, addAlt, addAlt2
-	case Instruction::Sub: return 3; // sub, subAlt, subAlt2
-	case Instruction::And: return 2; // bitwiseAnd, bitwiseAndAlt
+	case Instruction::Add: return 4; // add, addAlt, addAlt2, addAlt3
+	case Instruction::Sub: return 4; // sub, subAlt, subAlt2, subAlt3
+	case Instruction::And: return 3; // bitwiseAnd, bitwiseAndAlt, bitwiseAndAlt2
 	case Instruction::Or:  return 3; // bitwiseOr, bitwiseOrAlt, bitwiseOrAlt2
-	case Instruction::Xor: return 2; // bitwiseXor, bitwiseXorAlt
+	case Instruction::Xor: return 3; // bitwiseXor, bitwiseXorAlt, bitwiseXorAlt2
 	default:               return 0;
 	}
 }
@@ -285,16 +314,22 @@ Value* MbaUtils::applyByIndex(IRBuilder<>& B, Instruction::BinaryOps Op,
 		switch (Idx) {
 		case 0: return add(B, A, V);
 		case 1: return addAlt(B, A, V);
-		default: return addAlt2(B, A, V);
+		case 2: return addAlt2(B, A, V);
+		default: return addAlt3(B, A, V);
 		}
 	case Instruction::Sub:
 		switch (Idx) {
 		case 0: return sub(B, A, V);
 		case 1: return subAlt(B, A, V);
-		default: return subAlt2(B, A, V);
+		case 2: return subAlt2(B, A, V);
+		default: return subAlt3(B, A, V);
 		}
 	case Instruction::And:
-		return (Idx == 0) ? bitwiseAnd(B, A, V) : bitwiseAndAlt(B, A, V);
+		switch (Idx) {
+		case 0: return bitwiseAnd(B, A, V);
+		case 1: return bitwiseAndAlt(B, A, V);
+		default: return bitwiseAndAlt2(B, A, V);
+		}
 	case Instruction::Or:
 		switch (Idx) {
 		case 0: return bitwiseOr(B, A, V);
@@ -302,7 +337,11 @@ Value* MbaUtils::applyByIndex(IRBuilder<>& B, Instruction::BinaryOps Op,
 		default: return bitwiseOrAlt2(B, A, V);
 		}
 	case Instruction::Xor:
-		return (Idx == 0) ? bitwiseXor(B, A, V) : bitwiseXorAlt(B, A, V);
+		switch (Idx) {
+		case 0: return bitwiseXor(B, A, V);
+		case 1: return bitwiseXorAlt(B, A, V);
+		default: return bitwiseXorAlt2(B, A, V);
+		}
 	default:
 		return nullptr;
 	}

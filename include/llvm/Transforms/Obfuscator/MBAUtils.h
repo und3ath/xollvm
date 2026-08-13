@@ -81,15 +81,18 @@ namespace llvm::obf {
 		Value* add(IRBuilder<>& B, Value* A, Value* V);     ///< (x^y) + 2*(x&y)
 		Value* addAlt(IRBuilder<>& B, Value* A, Value* V);  ///< (x|y) + (x&y)
 		Value* addAlt2(IRBuilder<>& B, Value* A, Value* V); ///< 2*(x|y) - (x^y)   [VM variant]
+		Value* addAlt3(IRBuilder<>& B, Value* A, Value* V); ///< (x - ~y) - 1
 
 		// ---- Sub: x - y ----
 		Value* sub(IRBuilder<>& B, Value* A, Value* V);     ///< (x^y) - 2*(~x & y)
 		Value* subAlt(IRBuilder<>& B, Value* A, Value* V);  ///< (x & ~y) - (~x & y)
 		Value* subAlt2(IRBuilder<>& B, Value* A, Value* V); ///< x + ~y + 1  [VM variant]
+		Value* subAlt3(IRBuilder<>& B, Value* A, Value* V); ///< ~(~x + y)
 
 		// ---- And: x & y ----
-		Value* bitwiseAnd(IRBuilder<>& B, Value* A, Value* V);    ///< (x+y) - (x|y)
-		Value* bitwiseAndAlt(IRBuilder<>& B, Value* A, Value* V); ///< ~(~x | ~y)  De Morgan
+		Value* bitwiseAnd(IRBuilder<>& B, Value* A, Value* V);     ///< (x+y) - (x|y)
+		Value* bitwiseAndAlt(IRBuilder<>& B, Value* A, Value* V);  ///< ~(~x | ~y)  De Morgan
+		Value* bitwiseAndAlt2(IRBuilder<>& B, Value* A, Value* V); ///< (x|y) - (x^y)  (bit-disjoint identity)
 
 		// ---- Or: x | y ----
 		Value* bitwiseOr(IRBuilder<>& B, Value* A, Value* V);     ///< (x&y) + (x^y)
@@ -97,8 +100,9 @@ namespace llvm::obf {
 		Value* bitwiseOrAlt2(IRBuilder<>& B, Value* A, Value* V); ///< (x^y) | (x&y)  [VM variant]
 
 		// ---- Xor: x ^ y ----
-		Value* bitwiseXor(IRBuilder<>& B, Value* A, Value* V);    ///< (x|y) - (x&y)
-		Value* bitwiseXorAlt(IRBuilder<>& B, Value* A, Value* V); ///< (~x & y) | (x & ~y)
+		Value* bitwiseXor(IRBuilder<>& B, Value* A, Value* V);     ///< (x|y) - (x&y)
+		Value* bitwiseXorAlt(IRBuilder<>& B, Value* A, Value* V);  ///< (~x & y) | (x & ~y)
+		Value* bitwiseXorAlt2(IRBuilder<>& B, Value* A, Value* V); ///< (x|y) & ~(x&y)
 
 		// =========================================================================
 		// BinaryOperator-level wrappers  (MBAPass primary interface)
