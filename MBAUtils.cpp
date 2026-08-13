@@ -11,6 +11,7 @@
 #include "llvm/Transforms/Obfuscator/Rng.h"
 #include "llvm/Transforms/Obfuscator/Utils.h"
 
+#include "llvm/ADT/APInt.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -277,6 +278,39 @@ Value* MbaUtils::mulAlt2(IRBuilder<>& B, Value* A, Value* V) {
 }
 
 // ============================================================================
+// Core Value-level transforms — Shl
+// ============================================================================
+
+// x << n   (n must be ConstantInt)
+Value* MbaUtils::shl(IRBuilder<>& B, Value* A, Value* N) {
+	return B.CreateShl(A, N, "mba.shl");
+}
+
+// x << n  =>  x * (1 << n)     [n const]
+Value* MbaUtils::shlAlt(IRBuilder<>& B, Value* A, Value* N) {
+	auto* CI = cast<ConstantInt>(N);
+	unsigned NVal = (unsigned)CI->getZExtValue();
+	Type* T = A->getType();
+	Constant* Pow = ConstantInt::get(T, APInt(T->getScalarSizeInBits(), 1) << NVal);
+	return B.CreateMul(A, Pow, "mba.shl.alt");
+}
+
+// x << n  =>  ~((~x) << n) - ((1 << n) - 1)   [n const]
+Value* MbaUtils::shlAlt2(IRBuilder<>& B, Value* A, Value* N) {
+	auto* CI = cast<ConstantInt>(N);
+	unsigned NVal = (unsigned)CI->getZExtValue();
+	Type* T = A->getType();
+	unsigned BW = T->getScalarSizeInBits();
+	Value* NotA = B.CreateNot(A, "mba.shl.alt2.notx");
+	Value* Shifted = B.CreateShl(NotA, N, "mba.shl.alt2.shl");
+	Value* NotShifted = B.CreateNot(Shifted, "mba.shl.alt2.not");
+	// (1 << n) - 1 as constant of the same type. For NVal == 0, mask == 0.
+	APInt MaskAP = NVal == 0 ? APInt(BW, 0) : APInt::getLowBitsSet(BW, NVal);
+	Constant* Mask = ConstantInt::get(T, MaskAP);
+	return B.CreateSub(NotShifted, Mask, "mba.shl.alt2");
+}
+
+// ============================================================================
 // BinaryOperator-level wrappers (bump STATISTIC counters)
 // ============================================================================
 
@@ -322,6 +356,7 @@ unsigned MbaUtils::poolSize(Instruction::BinaryOps Op) const {
 	case Instruction::Or:  return 3; // bitwiseOr, bitwiseOrAlt, bitwiseOrAlt2
 	case Instruction::Xor: return 3; // bitwiseXor, bitwiseXorAlt, bitwiseXorAlt2
 	case Instruction::Mul: return 3; // mul, mulAlt, mulAlt2
+	case Instruction::Shl: return 3; // shl, shlAlt, shlAlt2
 	default:               return 0;
 	}
 }
@@ -371,6 +406,13 @@ Value* MbaUtils::applyByIndex(IRBuilder<>& B, Instruction::BinaryOps Op,
 		case 0: return mul(B, A, V);
 		case 1: return mulAlt(B, A, V);
 		default: return mulAlt2(B, A, V);
+		}
+	case Instruction::Shl:
+		if (!isa<ConstantInt>(V)) return nullptr;
+		switch (Idx) {
+		case 0: return shl(B, A, V);
+		case 1: return shlAlt(B, A, V);
+		default: return shlAlt2(B, A, V);
 		}
 	default:
 		return nullptr;

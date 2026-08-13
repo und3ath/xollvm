@@ -109,6 +109,14 @@ namespace llvm::obf {
 		Value* mulAlt(IRBuilder<>& B, Value* A, Value* V);   ///< -((-x) * y)
 		Value* mulAlt2(IRBuilder<>& B, Value* A, Value* V);  ///< -(x * (-y))
 
+		// ---- Shl: x << n (const n only) ----
+		// For these three, @p N MUST be a ConstantInt (compile-time shift amount).
+		// Callers ensure this at their site; passing a non-const shift will trigger
+		// a nullptr return from applyByIndex for opcode Shl.
+		Value* shl(IRBuilder<>& B, Value* A, Value* N);      ///< x << n
+		Value* shlAlt(IRBuilder<>& B, Value* A, Value* N);   ///< x * (1<<n)
+		Value* shlAlt2(IRBuilder<>& B, Value* A, Value* N);  ///< ~((~x) << n) - ((1<<n) - 1)
+
 		// =========================================================================
 		// BinaryOperator-level wrappers  (MBAPass primary interface)
 		// =========================================================================
@@ -140,6 +148,8 @@ namespace llvm::obf {
 		/// @p K is folded modulo poolSize(Op), so any unsigned K is valid and
 		/// cycles through the pool. Returns nullptr if @p Op is not a target
 		/// opcode. Does NOT bump STATISTIC counters (see above).
+		/// For Shl, V must be a ConstantInt (compile-time shift amount);
+		/// nullptr otherwise.
 		Value* applyByIndex(IRBuilder<>& B, Instruction::BinaryOps Op,
 			Value* A, Value* V, unsigned K);
 

@@ -63,6 +63,27 @@ def i_mul(x, y):     return I32(x * y)
 def i_mulAlt(x, y):  return I32(-((I32(0) - x) * y))
 def i_mulAlt2(x, y): return I32(-(x * (I32(0) - y)))
 
+# ---------------------------------------------------------------------------
+# Shl identities — const-RHS only. n ranges over a fixed set of shift amounts
+# (not the full int32 domain like the other opcodes); x still ranges over the
+# full 1035-value set built by build_value_set().
+# ---------------------------------------------------------------------------
+
+def p_shl(x, n): return I32(np.int32(x) << n)
+
+def i_shl(x, n): return p_shl(x, n)
+
+def i_shlAlt(x, n):
+    pow2 = (np.uint32(1) << n).astype(np.int32)
+    return I32(np.int32(x) * pow2)
+
+def i_shlAlt2(x, n):
+    notx = I32(~np.int32(x))
+    shifted = I32(notx << n)
+    notshifted = I32(~shifted)
+    mask = ((np.uint32(1) << n) - np.uint32(1)).astype(np.int32)  # n=0 => mask=0
+    return I32(notshifted - mask)
+
 
 IDENTITIES = [
     ("add",             i_add,             p_add),
@@ -86,6 +107,17 @@ IDENTITIES = [
     ("mulAlt",          i_mulAlt,          p_mul),
     ("mulAlt2",         i_mulAlt2,         p_mul),
 ]
+
+IDENTITIES_SHL = [
+    ("shl",             i_shl,             p_shl),
+    ("shlAlt",          i_shlAlt,          p_shl),
+    ("shlAlt2",         i_shlAlt2,         p_shl),
+]
+
+# Shift amounts exercised for the shl family (const-RHS only in production;
+# the correctness suite tests each amount separately rather than the full
+# int32 domain used for the other opcodes' second operand).
+SHIFT_AMOUNTS = [0, 1, 2, 3, 7, 15, 16, 23, 30, 31]
 
 
 def build_value_set():
@@ -126,6 +158,28 @@ def main():
             first_fail = (int(X[idx]), int(Y[idx]), int(expected[idx]), int(got[idx]))
         rows.append((name, passed, total, status, first_fail))
 
+    # Shl family: x ranges over the full value set, n ranges over a fixed
+    # shift-amount set (const-RHS only), cross-producted.
+    n_vals = np.array(SHIFT_AMOUNTS, dtype=np.int32)
+    Xs, Ns = np.meshgrid(values, n_vals, indexing="ij")
+    Xs = Xs.astype(np.int32).ravel()
+    Ns = Ns.astype(np.int32).ravel()
+    total_shl = Xs.size
+
+    for name, fn, prim in IDENTITIES_SHL:
+        expected = prim(Xs, Ns)
+        got = fn(Xs, Ns)
+        mismatch = expected != got
+        n_fail = int(np.count_nonzero(mismatch))
+        passed = total_shl - n_fail
+        status = "PASS" if n_fail == 0 else "FAIL"
+        first_fail = None
+        if n_fail:
+            overall_fail = True
+            idx = int(np.argmax(mismatch))
+            first_fail = (int(Xs[idx]), int(Ns[idx]), int(expected[idx]), int(got[idx]))
+        rows.append((name, passed, total_shl, status, first_fail))
+
     name_w = max(len(r[0]) for r in rows)
     header = f"{'identity':<{name_w}}  {'passed':>9}  {'total':>9}  status"
     print(header)
@@ -140,7 +194,10 @@ def main():
         print("\nRESULT: FAIL — one or more identities mismatched the primitive.")
         sys.exit(1)
     else:
-        print(f"\nRESULT: PASS — {len(rows)} identities x {total} pairs all matched.")
+        print(
+            f"\nRESULT: PASS — {len(rows)} identities all matched "
+            f"({len(IDENTITIES)} x {total} pairs + {len(IDENTITIES_SHL)} x {total_shl} pairs)."
+        )
         sys.exit(0)
 
 

@@ -65,16 +65,35 @@ IDENTITIES = {
   ret i32 %r
 }
 """,
+    "shlAlt": """define i32 @f(i32 %x, i32 %y) {
+  %r = mul i32 %x, 8
+  ret i32 %r
+}
+""",
+    "shlAlt2": """define i32 @f(i32 %x, i32 %y) {
+  %nx = xor i32 %x, -1
+  %s = shl i32 %nx, 3
+  %ns = xor i32 %s, -1
+  %r = sub i32 %ns, 7
+  ret i32 %r
+}
+""",
 }
 
 # A single primitive binop directly on %x/%y (either operand order).
 PRIMITIVE_RE = re.compile(
     r"=\s*(add|sub|and|xor|mul)\s+i32\s+(%x, %y|%y, %x)\b")
 
+# A single shl on %x by a compile-time-constant literal shift amount
+# (the shl family's fold target — const-RHS only, so operand 1 is a literal).
+SHL_RE = re.compile(r"=\s*shl\s+i32\s+%x,\s*\d+\b")
+
 
 def classify(ll_out):
-    ops = PRIMITIVE_RE.findall(ll_out)
-    if len(ops) == 1:
+    shl_ops = SHL_RE.findall(ll_out)
+    binops = PRIMITIVE_RE.findall(ll_out)
+    total = len(shl_ops) + len(binops)
+    if total == 1:
         return "folded_to_primitive"
     return "preserved"
 
