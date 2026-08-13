@@ -8,14 +8,28 @@
 //   - All methods take an IRBuilder<>& at their insertion point
 //
 // Intended callers
-//   - MBAObfuscation.cpp  (MbaCtx constructs one; runMBA() uses it)
+//   - MBAObfuscation.cpp  (MbaCtx constructs one; runMBA() uses it — 5-opcode)
 //   - VMPass_Impl.cpp     (hardenVMEngine() creates one to replace inline helpers)
+//   - VMPass handler-variant diversification (indexed pool, 7-opcode)
 //
 // Rng conventions
 //   - R (stored by reference, passed at construction) is the "noise Rng" used for
 //     inflation, slot seed, and zero-term shape.
 //   - applyMBARecursive / applyLayeredWindow accept an explicit Rng& RecRng so the
 //     caller can forward its dedicated "recursion Rng" and preserve determinism.
+//
+// Identity pool (23 total; queryable via poolSize/applyByIndex)
+//   Add: 4  (add, addAlt, addAlt2, addAlt3)
+//   Sub: 4  (sub, subAlt, subAlt2, subAlt3)
+//   And: 3  (bitwiseAnd, bitwiseAndAlt, bitwiseAndAlt2)
+//   Or : 3  (bitwiseOr,  bitwiseOrAlt,  bitwiseOrAlt2)
+//   Xor: 3  (bitwiseXor, bitwiseXorAlt, bitwiseXorAlt2)
+//   Mul: 3  (mul, mulAlt, mulAlt2 — indexed pool only; not dispatched by MBA pass)
+//   Shl: 3  (shl, shlAlt, shlAlt2 — const-RHS only; indexed pool only)
+//
+// Only Add/Sub/And/Or/Xor participate in isTargetOpcode /
+// applyPrimary / applyAlternate. Mul and Shl are indexed-pool-only,
+// intended for VM handler-variant diversification.
 // ============================================================================
 
 #include "llvm/ADT/SmallVector.h"
@@ -81,15 +95,18 @@ namespace llvm::obf {
 		Value* add(IRBuilder<>& B, Value* A, Value* V);     ///< (x^y) + 2*(x&y)
 		Value* addAlt(IRBuilder<>& B, Value* A, Value* V);  ///< (x|y) + (x&y)
 		Value* addAlt2(IRBuilder<>& B, Value* A, Value* V); ///< 2*(x|y) - (x^y)   [VM variant]
+		Value* addAlt3(IRBuilder<>& B, Value* A, Value* V); ///< (x - ~y) - 1
 
 		// ---- Sub: x - y ----
 		Value* sub(IRBuilder<>& B, Value* A, Value* V);     ///< (x^y) - 2*(~x & y)
 		Value* subAlt(IRBuilder<>& B, Value* A, Value* V);  ///< (x & ~y) - (~x & y)
 		Value* subAlt2(IRBuilder<>& B, Value* A, Value* V); ///< x + ~y + 1  [VM variant]
+		Value* subAlt3(IRBuilder<>& B, Value* A, Value* V); ///< ~(~x + y)
 
 		// ---- And: x & y ----
-		Value* bitwiseAnd(IRBuilder<>& B, Value* A, Value* V);    ///< (x+y) - (x|y)
-		Value* bitwiseAndAlt(IRBuilder<>& B, Value* A, Value* V); ///< ~(~x | ~y)  De Morgan
+		Value* bitwiseAnd(IRBuilder<>& B, Value* A, Value* V);     ///< (x+y) - (x|y)
+		Value* bitwiseAndAlt(IRBuilder<>& B, Value* A, Value* V);  ///< ~(~x | ~y)  De Morgan
+		Value* bitwiseAndAlt2(IRBuilder<>& B, Value* A, Value* V); ///< (x|y) - (x^y)  (bit-disjoint identity)
 
 		// ---- Or: x | y ----
 		Value* bitwiseOr(IRBuilder<>& B, Value* A, Value* V);     ///< (x&y) + (x^y)
@@ -97,8 +114,22 @@ namespace llvm::obf {
 		Value* bitwiseOrAlt2(IRBuilder<>& B, Value* A, Value* V); ///< (x^y) | (x&y)  [VM variant]
 
 		// ---- Xor: x ^ y ----
-		Value* bitwiseXor(IRBuilder<>& B, Value* A, Value* V);    ///< (x|y) - (x&y)
-		Value* bitwiseXorAlt(IRBuilder<>& B, Value* A, Value* V); ///< (~x & y) | (x & ~y)
+		Value* bitwiseXor(IRBuilder<>& B, Value* A, Value* V);     ///< (x|y) - (x&y)
+		Value* bitwiseXorAlt(IRBuilder<>& B, Value* A, Value* V);  ///< (~x & y) | (x & ~y)
+		Value* bitwiseXorAlt2(IRBuilder<>& B, Value* A, Value* V); ///< (x|y) & ~(x&y)
+
+		// ---- Mul: x * y ----
+		Value* mul(IRBuilder<>& B, Value* A, Value* V);      ///< x * y
+		Value* mulAlt(IRBuilder<>& B, Value* A, Value* V);   ///< -((-x) * y)
+		Value* mulAlt2(IRBuilder<>& B, Value* A, Value* V);  ///< x*(y&0xFFFF) + (x*(y>>>16))<<16  (split-mul; i32+)
+
+		// ---- Shl: x << n (const n only) ----
+		// For these three, @p N MUST be a ConstantInt (compile-time shift amount).
+		// Callers ensure this at their site; passing a non-const shift will trigger
+		// a nullptr return from applyByIndex for opcode Shl.
+		Value* shl(IRBuilder<>& B, Value* A, Value* N);      ///< x << n
+		Value* shlAlt(IRBuilder<>& B, Value* A, Value* N);   ///< x * (1<<n)
+		Value* shlAlt2(IRBuilder<>& B, Value* A, Value* N);  ///< ~((~x) << n) - ((1<<n) - 1)
 
 		// =========================================================================
 		// BinaryOperator-level wrappers  (MBAPass primary interface)
@@ -113,6 +144,28 @@ namespace llvm::obf {
 		/// Apply the alternate transform for BO's opcode. Bumps statistics.
 		/// Returns nullptr if opcode is not supported.
 		Value* applyAlternate(IRBuilder<>& B, BinaryOperator* BO);
+
+		// =========================================================================
+		// Indexed pool access (handler-variant diversification)
+		// =========================================================================
+		// Unlike applyPrimary/applyAlternate, these give positional access into the
+		// full identity pool for a given opcode and do NOT bump STATISTIC counters
+		// (callers like VM handler-variant diversification churn through many
+		// indices per opcode and must not inflate the MBA pass's own stats).
+
+		/// Number of distinct identities available for opcode @p Op
+		/// (e.g. 3 for Add: add/addAlt/addAlt2). Returns 0 if @p Op is not a
+		/// target opcode (see isTargetOpcode).
+		unsigned poolSize(Instruction::BinaryOps Op) const;
+
+		/// Apply the @p K-th identity from @p Op's pool to (A op V).
+		/// @p K is folded modulo poolSize(Op), so any unsigned K is valid and
+		/// cycles through the pool. Returns nullptr if @p Op is not a target
+		/// opcode. Does NOT bump STATISTIC counters (see above).
+		/// For Shl, V must be a ConstantInt (compile-time shift amount);
+		/// nullptr otherwise.
+		Value* applyByIndex(IRBuilder<>& B, Instruction::BinaryOps Op,
+			Value* A, Value* V, unsigned K);
 
 		/// Recursively apply MBA up to @p depth levels.
 		/// @p RecRng  Caller's dedicated recursion RNG (e.g. MbaCtx::RecRng).
