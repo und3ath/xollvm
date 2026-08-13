@@ -775,10 +775,11 @@ knob still overrides the preset:
 
 | Preset | Bundle |
 |---|---|
-| `light` | Structural virtualisation only — `obfRegIdx`, `encBytecode`, `handlerVariants=1`. |
 | `medium` | Today's defaults — `handlerVariants=3`, `encDispatch`, `strongBytecode`, `blindTargets`. Bit-identical to a bare `vm(...)`. |
 | `high` | `medium` + `hardened` + `threadedDispatch` + `keyedDispatch`. |
 | `max` | `high` + `lazyDecrypt` + `constInStream` + `nestedVM` + `superOps` + `rollingRegKey` + `bindAntiDebug` + `randISA` + `perFnEngine` + `metamorphicEngines`. |
+
+> Note: a former `light` preset was removed. Empirically it produced negative resilience against a binary-lift + `opt -O3` attacker on straight-line code (VM structure folded flatter than the unobfuscated baseline). If you specifically want that knob bundle, spell it out: `vm(obfRegIdx=1, encBytecode=1, handlerVariants=1)`.
 
 **Usage examples:**
 
