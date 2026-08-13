@@ -134,7 +134,18 @@ namespace llvm {
 	// Max handler-body variants per opcode in the shared __vm_engine.
 	// Statically sizes the 2-D OpcBB arrays. Actual count comes from
 	// VMPassConfig.handlerVariants, clamped to [1, kMaxHandlerVariants].
-	static constexpr unsigned kMaxHandlerVariants = 4;
+	// Ceiling grew from 4 -> 64 to enable intra-function variant dispatch
+	// (M1) and hundreds-of-variants polymorphism.
+	static constexpr unsigned kMaxHandlerVariants = 64;
+
+	// Decoy handlers (M3+). Occupy dispatch-table slots but are never emitted in
+	// bytecode; visible to a static lifter, dead on the real execution path (until
+	// M4 hooks them behind opaque-false guards). Count driven by
+	// VMPassConfig.handlerDecoys (0 = off = zero decoys registered).
+	static constexpr unsigned kMaxDecoys      = 32;
+	static constexpr uint8_t  OP_DECOY_BASE   = 0x38;  // == OP_COUNT
+	static constexpr unsigned OP_COUNT_TOTAL  = (unsigned)OP_DECOY_BASE + kMaxDecoys;  // 0x58
+	static_assert((unsigned)OP_DECOY_BASE == (unsigned)OP_COUNT, "OP_DECOY_BASE must sit immediately after real opcodes");
 
 	// ============================================================================
 	// BinSubop — sub-opcode byte for OP_BINOP and OP_BINOP64
