@@ -243,6 +243,13 @@ namespace llvm {
 			AllocaInst* EngineVMIP = nullptr;
 			AllocaInst* EngineSalt = nullptr;
 
+			// M3: static decoy handlers -- blockaddress-taken, never reachable
+			// via the real dispatch path (fetch clamps P = OIdx % OP_COUNT).
+			// Present a static lifter with extra real-handler-shaped opcodes.
+			SmallVector<BasicBlock*, kMaxDecoys> DecoyBB;
+			unsigned    NumDecoys  = 0;      // active decoy count for this engine (0 = off)
+			AllocaInst* EngineJunk = nullptr; // [NJunk x i32] private sink for decoy stores
+
 			SmallVector<FunctionType*, 16> SharedFTys;
 			DenseMap<FunctionType*, uint8_t> FTyToIdx;
 
@@ -455,6 +462,11 @@ namespace llvm {
 		unsigned CurVariant = 0;    // variant index currently being emitted
 		unsigned NumVariants = 1;   // active variant count (from Cfg, clamped)
 		bool EncDispatch = false;   // == SharedState::EncDispatch for this build
+
+		// M3: static decoy handlers -- see SharedState::DecoyBB.
+		SmallVector<BasicBlock*, kMaxDecoys> DecoyBB;
+		unsigned NumDecoys = 0;     // active decoy count (0 = off / nestedVM)
+		AllocaInst* EngineJunk = nullptr; // [NJunk x i32] private sink, built once in vm.entry
 
 		// Maps every block created during buildOpcodeHandlers() to its variant
 		// index (0..NumVariants-1). Populated by the emission loop; consumed by
@@ -897,6 +909,12 @@ namespace llvm {
 		void buildHandlersFloat();     // all float/freg opcodes (LOADI_F .. FNEG)
 		void buildHandlersCall();      // CALL_VOID CALL_INT CALL_PTR CALL_INT64 CALL_F
 		void buildCall2(VMOp Opc, const Twine& Name, llvm::VMEngine::RetKind2 RK);
+
+		// M3: static decoy handlers (VMPass_Decoys.cpp). computeNumDecoys()
+		// returns 0 when handlerDecoys==0 or nestedVM==1 (byte-identical off);
+		// buildDecoyHandlers() is then a no-op that touches no IR.
+		unsigned computeNumDecoys() const;
+		void buildDecoyHandlers();
 
 		// Nested-VM: pure per-opcode helpers authored fresh + virtualized via a
 		// second VMImpl over the shared engine. See VMPass_Impl.cpp for the

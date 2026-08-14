@@ -116,6 +116,7 @@ set(OBF_SOURCES
   VMPass_Harden.cpp
   VMPass_Nested.cpp
   VMPass_Wrapper.cpp
+  VMPass_Decoys.cpp
   EHUtils.cpp
   TargetCompat.cpp
   FunctionObfContextAnalysis.cpp

@@ -54,11 +54,15 @@ void VMImpl::buildHandlerTable() {
 	Function* BAFn = SharedEngineMode ? SS->EngineFn : &F;
 	unsigned K = SharedEngineMode ? SS->NumVariants : NumVariants;
 	bool ED = SharedEngineMode ? SS->EncDispatch : EncDispatch;
+	// M3: decoy slot count for this engine (0 = off / nestedVM, mirrors K).
+	unsigned Nd = SharedEngineMode ? SS->NumDecoys : NumDecoys;
 
 	// P2: table size grows to hold the encrypted dispatch map (dmap) when
 	// encDispatch is on. M1: base size grows from OP_COUNT+1 to OP_COUNT*K+1.
-	// At K==1 this is byte-identical to pre-M1 (TableSize == OP_COUNT+1).
-	unsigned TableSize = ED ? (OP_COUNT * K + 1u + OP_COUNT) : (OP_COUNT * K + 1u);
+	// M3: Nd more slots appended past the dmap (or past the engine-ptr slot
+	// when encDispatch is off) for decoy blockaddresses. At K==1, Nd==0 this
+	// is byte-identical to pre-M1 (TableSize == OP_COUNT+1).
+	unsigned TableSize = OP_COUNT * K + 1u + (ED ? OP_COUNT : 0u) + Nd;
 	SmallVector<Constant*, 128> Es;
 	Es.resize(TableSize, nullptr);
 
@@ -120,8 +124,21 @@ void VMImpl::buildHandlerTable() {
 		}
 	}
 
+	// M3: decoy blockaddresses occupy the tail Nd slots, past the dmap (or
+	// past the engine-ptr slot when encDispatch is off). Never referenced by
+	// vm.fetch/emitThreadedTail (P is clamped mod OP_COUNT before indexing),
+	// so these slots exist purely for a static lifter to trip over.
+	{
+		unsigned DecoyBase = OP_COUNT * K + 1u + (ED ? OP_COUNT : 0u);
+		BasicBlock* const* DBB = SharedEngineMode ? SS->DecoyBB.data() : DecoyBB.data();
+		for (unsigned i = 0; i < Nd; ++i) {
+			assert(DBB[i] && "missing decoy handler block");
+			Es[DecoyBase + i] = BlockAddress::get(BAFn, DBB[i]);
+		}
+	}
+
 	for (unsigned i = 0; i < TableSize; ++i)
-		assert(Es[i] && "unfilled handler table slot (incl. dmap)");
+		assert(Es[i] && "unfilled handler table slot (incl. dmap/decoys)");
 
 	auto* ATy = ArrayType::get(PtrTy, TableSize);
 	GVHandlers = new GlobalVariable(M, ATy, true, GlobalValue::PrivateLinkage,
@@ -598,6 +615,17 @@ void VMImpl::populateVMEngine() {
 	// Make this pool clone's handler bodies distinct from the other engines'
 	// (per-clone MBA, seeded by EngineId). No-op unless metamorphicEngines is on.
 	metamorphRewriteEngine(EF);
+
+	// M3: static decoy handlers. computeNumDecoys() returns 0 when
+	// handlerDecoys==0 or nestedVM==1 -- buildDecoyHandlers() is then a
+	// no-op that touches no IR (byte-identical to pre-M3 output).
+	NumDecoys = computeNumDecoys();
+	buildDecoyHandlers();
+	SS->NumDecoys = NumDecoys;
+	SS->EngineJunk = EngineJunk;
+	SS->DecoyBB.clear();
+	for (unsigned i = 0; i < NumDecoys; ++i)
+		SS->DecoyBB.push_back(DecoyBB[i]);
 
 	SS->NumVariants = NumVariants;
 	SS->EncDispatch = EncDispatch;
