@@ -36,6 +36,12 @@ using namespace llvm;
 // `P = OIdx % OP_COUNT` before indexing the table, so no decoded opcode byte
 // can ever select a decoy slot. Only the blockaddress-taken keeps them alive
 // through DCE.
+//
+// Gated per engine LAYER, not per function request: computeNumDecoys() looks
+// at VMEngine::engineLayer(EngineId), the layer this VMImpl instance is
+// currently populating. The plain engine (layer 0) hosts decoys under
+// preset=max (nestedVM=1) same as always; only the inner nested engine layer
+// (layer 1, its own dispatch loop) skips them.
 // ============================================================================
 
 namespace {
@@ -46,12 +52,17 @@ namespace {
 
 
 unsigned VMImpl::computeNumDecoys() const {
-	// Nested VM has its own engine + inner-virtualization loop; decoys would
-	// interact awkwardly with that second dispatch layer, so skip entirely.
-	if (Cfg.nestedVM) {
+	// populateVMEngine() runs separately per engine layer (plain, then nest
+	// when nestedVM is requested). Decoys are a property of a specific
+	// engine build, not of the function's nestedVM request, so gate on which
+	// layer THIS VMImpl instance is currently populating: the plain engine
+	// (layer 0) always gets decoys per handlerDecoys; only the inner nested
+	// engine layer (layer 1) skips them, since it has its own dispatch loop
+	// that decoys would interact awkwardly with.
+	if (VMEngine::engineLayer(EngineId) != 0) {
 		if (Cfg.handlerDecoys != 0 && ObfVerbose)
 			errs() << "[vm] handlerDecoys=" << Cfg.handlerDecoys
-				   << " skipped: nestedVM engine does not support decoys\n";
+				   << " skipped: nested engine layer does not host decoys\n";
 		return 0;
 	}
 
@@ -168,8 +179,9 @@ void VMImpl::buildDecoyHandlers() {
 // so a lifter/DSE attacker must solve the opaque predicate to prove the
 // decoy edge unreachable.
 //
-// Dormant unless handlerDecoys>=2 AND NumDecoys>0 (nestedVM has NumDecoys==0,
-// see computeNumDecoys()), so handlerDecoys<=1 stays byte-identical to M3.
+// Dormant unless handlerDecoys>=2 AND NumDecoys>0 (the nested engine layer
+// has NumDecoys==0, see computeNumDecoys()), so handlerDecoys<=1 stays
+// byte-identical to M3.
 // ============================================================================
 
 void VMImpl::wireLiveDecoys(Function* EF) {

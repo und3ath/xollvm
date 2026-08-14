@@ -85,10 +85,12 @@ VMPassConfig VMPassConfig::fromPassConfig(const PassConfig& PC) {
 			Cfg.randISA = true;
 			Cfg.perFnEngine = true;         // dedicated engine per virtualized fn
 			Cfg.metamorphicEngines = true;  // distinct handler body per engine
-			// NOTE: handlerVariants=32 / handlerDecoys=2 preset flip deferred
-			// to M6 -- current dispatch materializes K full handler copies per
-			// function (see buildOpcodeHandlers), so K>4 times out `opt` under
-			// preset=max multi-fn until M1 introduces intra-fn variant table.
+			Cfg.handlerVariants = 4;        // M6: preset flip -- benchmarked K=4/8/16;
+			Cfg.handlerDecoys = 2;          // K=4 is the highest that keeps both opt
+			// AND the downstream clang -O0 compile of the resulting IR under the
+			// 180s harness cap (K=8: opt ~65s ok, but 373x-bloat IR blows clang
+			// -O0 past 180s; K=16: opt itself exceeds 180s). See docs/VM.md
+			// "Handler Polymorphism II" for the full writeup.
 		}
 		// Unknown preset name: silently ignore, falls through to defaults +
 		// explicit knobs.

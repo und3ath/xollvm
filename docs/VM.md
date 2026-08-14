@@ -46,6 +46,7 @@ configuration reference, interaction with other passes, debugging, and known lim
   - [Super-operators (superOps)](#super-operators-superops)
   - [Per-build ISA randomisation (randISA)](#per-build-isa-randomisation-randisa)
   - [Engine pool and metamorphic engines](#engine-pool-and-metamorphic-engines)
+  - [Handler Polymorphism II (handlerVariants, handlerDecoys)](#handler-polymorphism-ii-handlervariants-handlerdecoys)
 - [Configuration reference](#configuration-reference)
   - [Presets](#presets)
 - [Interaction with other passes](#interaction-with-other-passes)
@@ -721,6 +722,64 @@ function is understood. These knobs raise that per-lift *multiplier*:
 
 `preset=max` turns on `perFnEngine` + `metamorphicEngines` (see below).
 
+### Handler Polymorphism II (`handlerVariants`, `handlerDecoys`)
+
+`handlerVariants` originally built `K` structurally-distinct copies of each opcode's handler
+body but picked one at *build time* per function — every dispatch of a given opcode inside that
+function landed on the same variant. Four follow-on milestones turned that into genuine
+per-dispatch polymorphism and added decoy handler shapes:
+
+- **Intra-function variant dispatch (M1).** The handler table grows from `OP_COUNT + 1` slots to
+  `OP_COUNT*K + 1` (plus another `OP_COUNT` when `encDispatch` is set for the opcode-index
+  decrypt map), one `blockaddress` per `(opcode, variant)` pair. At runtime `vm.fetch` (and
+  `emitThreadedTail` under `threadedDispatch`) compute `vsel = (ip * 0x9E3779B1 ^ salt >> 3) mod K`
+  and index `handlers[FinalSlot_P*K + vsel]` — so two dispatches of the *same* opcode within one
+  function can land on different handler bodies, not just two different functions. `vsel` reads
+  the engine's immutable incoming salt argument rather than `EffSalt`/`EngineSalt`, which sidesteps
+  `hardened=1`'s RDTSC-driven salt-alloca poisoning. `CALL` opcodes are the one exception: they
+  stay pinned to variant `K-1` across all `K` slots, because the module-shared `CallSW` switch only
+  wires the last-built variant. `K==1` is byte-identical to the pre-M1 output (`mul`/`urem`/`add`
+  for `vsel` are gated out entirely and the table collapses back to `OP_COUNT + 1`).
+- **Strong diversification (M2).** Handler-variant bodies no longer cycle a hand-picked mod-3/
+  mod-2 MBA switch; `diversifyHandlerVariants` now drives `MbaUtils::applyByIndex` over the full
+  23-identity, 7-opcode pool (add/sub/and/or/xor/mul/shl — see `docs/design/MBA_EXT_V2.md`). Two
+  additional structural mutations widen the space further once `K` exceeds the raw pool depth:
+  commutative-swap of the two operands on Add/Mul/And/Or/Xor (bit 3 of the variant index), and
+  ICmp arm-invert via `swapOperands()` on variant-tagged blocks (bit 2 of the variant index). Both
+  are semantics-preserving and dormant at the historical default `handlerVariants=3`; they start
+  firing once `K` is large enough that the pool would otherwise wrap around and repeat.
+- **Static decoys (M3).** `handlerDecoys` ∈ `{0,1,2,3}` registers `{0,14,28,32}` extra
+  handler-shaped basic blocks inside the shared `vm_engine`. Decoy bodies reuse the same
+  instruction primitives real handlers use (`advIP`/`rdVR`/`rdByte`/`ldVR`), so a static lifter
+  sees ordinary-looking opcodes, but every computed result sinks into a private `[8 x i32]
+  vm.junk` alloca that nothing ever reads. Decoys are unreachable via the real fetch path: their
+  `blockaddress`es are appended to the *tail* of the handler table (after real handlers, the
+  engine pointer, and the dmap when `encDispatch` is on), and both dispatch sites clamp the
+  fetched opcode index with `P = OIdx % OP_COUNT` before indexing, so no decoded byte can ever
+  select a decoy slot. `blockaddress`-taken keeps them alive through DCE. Three template shapes
+  (ADD/LOAD/MOV) rotate by `decoyIdx % 3`, each defensively ending in `nextInsn` in case control
+  ever reached one anyway.
+- **Live decoys (M4).** At `handlerDecoys >= 2`, `wireLiveDecoys` instruments ~50% of
+  variant-tagged handler blocks with a conditional branch guarded by an always-false predicate
+  (`OpaqueUtils::randomHardFalse`) targeting one of the M3 decoy blocks — density is driven by a
+  deterministic per-engine RNG fork (`vm.decoy.live`). The static CFG grows a real incoming edge
+  into each targeted decoy; the runtime always takes the real path because the guard resolves to
+  false, so an attacker has to solve the opaque predicate to prove the decoy edge is dead rather
+  than reading it off the CFG. The decoy body still ends in `nextInsn` (M3), so even a
+  successfully-flipped guard loops back into real dispatch instead of hitting UB.
+
+Decoys are gated per engine *layer*, not per function request: `computeNumDecoys()` builds them
+for the plain engine (`__vm_engine`) regardless of whether `nestedVM=1` is also set. Only the
+inner nested engine layer (`__vm_engine.nest`) skips them — it has its own dispatch loop that
+decoys would interact awkwardly with, and that interaction isn't currently validated. So under
+`preset=max` (`nestedVM=1`), `handlerDecoys` still fires: the plain engine gets both static and
+live decoys as normal.
+
+`preset=max` sets `handlerVariants=4, handlerDecoys=2`. Higher `K` was benchmarked and rejected:
+`K=8` keeps `opt` itself under the harness's 180s cap but the resulting ~370x-larger IR then blows
+the downstream `clang -O0` compile past 180s; `K=16` makes `opt` itself exceed 180s. `K=4` is the
+highest value that keeps both steps well inside the cap.
+
 ---
 
 ## Configuration reference
@@ -745,7 +804,8 @@ A `preset=<light|medium|high|max>` bundle (below) is the easy way in; the indivi
 | `regEncrypt` | 0 | 0/1 | Per-slot register-value XOR encryption (layer 3). |
 | `rollingRegKey` | 0 | 0/1 | Evolve the register XOR key as the interpreter runs (with `regEncrypt`). |
 | `hardened` | 0 | 0/1 | Layer-4 structural hardening + layer-5 anti-debug. |
-| `handlerVariants` | 3 | 1–K | Number of structurally-distinct handler-body copies per opcode. |
+| `handlerVariants` | 3 | 1–64 | Number of structurally-distinct handler-body copies per opcode, dispatched per-call via `vsel` (see [Handler Polymorphism II](#handler-polymorphism-ii-handlervariants-handlerdecoys)). |
+| `handlerDecoys` | 0 | 0–3 | Static + live decoy handler blocks (1: 14 static only; 2: 28 static + ~50% opaque-false live guards; 3: reserved). Applies to the plain engine; no effect on the nested engine layer when `nestedVM=1`. |
 | `encDispatch` | 1 | 0/1 | Route dispatch through an encrypted opcode-index map. |
 | `strongBytecode` | 1 | 0/1 | Stronger bytecode obfuscation. |
 | `blindTargets` | 1 | 0/1 | Blind branch/switch targets in the stream. |
@@ -777,7 +837,7 @@ knob still overrides the preset:
 |---|---|
 | `medium` | Today's defaults — `handlerVariants=3`, `encDispatch`, `strongBytecode`, `blindTargets`. Bit-identical to a bare `vm(...)`. |
 | `high` | `medium` + `hardened` + `threadedDispatch` + `keyedDispatch`. |
-| `max` | `high` + `lazyDecrypt` + `constInStream` + `nestedVM` + `superOps` + `rollingRegKey` + `bindAntiDebug` + `randISA` + `perFnEngine` + `metamorphicEngines`. |
+| `max` | `high` + `lazyDecrypt` + `constInStream` + `nestedVM` + `superOps` + `rollingRegKey` + `bindAntiDebug` + `randISA` + `perFnEngine` + `metamorphicEngines` + `handlerVariants=4` + `handlerDecoys=2`. `handlerDecoys` fires on the plain engine as normal alongside `nestedVM` — only the inner nested engine layer skips decoys (see [Handler Polymorphism II](#handler-polymorphism-ii-handlervariants-handlerdecoys)). |
 
 > Note: a former `light` preset was removed. Empirically it produced negative resilience against a binary-lift + `opt -O3` attacker on straight-line code (VM structure folded flatter than the unobfuscated baseline). If you specifically want that knob bundle, spell it out: `vm(obfRegIdx=1, encBytecode=1, handlerVariants=1)`.
 
