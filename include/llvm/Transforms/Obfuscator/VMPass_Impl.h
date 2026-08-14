@@ -916,6 +916,11 @@ namespace llvm {
 		unsigned computeNumDecoys() const;
 		void buildDecoyHandlers();
 
+		// M4: live decoys -- opaque-false-guarded conditional branches from
+		// ~50% of variant-tagged handler blocks into a randomly chosen decoy
+		// (handlerDecoys>=2 only; no-op when NumDecoys==0). See VMPass_Decoys.cpp.
+		void wireLiveDecoys(Function* EF);
+
 		// Nested-VM: pure per-opcode helpers authored fresh + virtualized via a
 		// second VMImpl over the shared engine. See VMPass_Impl.cpp for the
 		// sequencing rationale.

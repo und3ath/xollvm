@@ -627,6 +627,10 @@ void VMImpl::populateVMEngine() {
 	for (unsigned i = 0; i < NumDecoys; ++i)
 		SS->DecoyBB.push_back(DecoyBB[i]);
 
+	// M4: live decoys. No-op unless handlerDecoys>=2 AND NumDecoys>0 (see
+	// wireLiveDecoys' own guard), so handlerDecoys<=1 stays byte-identical.
+	wireLiveDecoys(EF);
+
 	SS->NumVariants = NumVariants;
 	SS->EncDispatch = EncDispatch;
 	SS->LazyMode = LazyDecrypt;
