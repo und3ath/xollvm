@@ -635,7 +635,7 @@ The easiest way in is a **preset** bundle; explicit knobs override it:
 | `light` | Structural virtualisation only. |
 | `medium` | Today's defaults (bit-identical to a bare `vm`). |
 | `high` | `medium` + structural hardening + threaded & IP-keyed dispatch. |
-| `max` | The strongest tier — everything below, plus a private, metamorphic engine per function. |
+| `max` | The strongest tier — everything below, plus a private, metamorphic engine per function, `handlerVariants=4`, and `handlerDecoys=2` (28 static + live decoy handlers on the plain engine; the inner nested engine layer from `nestedVM=1` skips decoys). |
 
 Common knobs (see VM.md for the full list):
 

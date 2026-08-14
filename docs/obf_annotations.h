@@ -312,7 +312,14 @@
  *                            per function.
  *   minBlocks        (1)     don't virtualize below this many blocks
  *   maxBlocks        (400)   don't virtualize above this (0 = no limit)
- *   handlerVariants  [1-K] (3)  polymorphic handler-body variants (1 = off)
+ *   handlerVariants  [1-64] (3)  polymorphic handler-body variants (1 = off);
+ *                            each dispatch of an opcode within a function
+ *                            picks its variant at runtime (vsel), not once
+ *                            per build
+ *   handlerDecoys    [0-3] (0)  static + live decoy handlers (1: 14 static
+ *                              only; 2: 28 static + 50% opaque-false live
+ *                              guards; 3: reserved; applies to the plain
+ *                              engine, nested engine layer skips)
  *   obfRegIdx        (1)     XOR register indices with a compile-time salt
  *   encDispatch      (1)     encrypt the opcode->handler dispatch table
  *   encBytecode      (1)     AES-128-CTR-encrypt the bytecode stream at load
@@ -348,6 +355,8 @@
  *   e.g.  OBF("vm(preset=max)")
  *   e.g.  OBF("vm(hardened=1, handlerVariants=4, rollingRegKey=1)")
  *   e.g.  OBF("vm(enginePoolSize=4, metamorphicEngines=1, randISA=1)")
+ *   e.g.  OBF("vm(handlerVariants=8, handlerDecoys=2)")  -- variant dispatch
+ *                            + 28 static/live decoy handlers, nestedVM off
  *--------------------------------------------------------------------------*/
 
 /*===----------------------------------------------------------------------===*\

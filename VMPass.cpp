@@ -85,6 +85,12 @@ VMPassConfig VMPassConfig::fromPassConfig(const PassConfig& PC) {
 			Cfg.randISA = true;
 			Cfg.perFnEngine = true;         // dedicated engine per virtualized fn
 			Cfg.metamorphicEngines = true;  // distinct handler body per engine
+			Cfg.handlerVariants = 4;        // M6: preset flip -- benchmarked K=4/8/16;
+			Cfg.handlerDecoys = 2;          // K=4 is the highest that keeps both opt
+			// AND the downstream clang -O0 compile of the resulting IR under the
+			// 180s harness cap (K=8: opt ~65s ok, but 373x-bloat IR blows clang
+			// -O0 past 180s; K=16: opt itself exceeds 180s). See docs/VM.md
+			// "Handler Polymorphism II" for the full writeup.
 		}
 		// Unknown preset name: silently ignore, falls through to defaults +
 		// explicit knobs.
@@ -117,6 +123,7 @@ VMPassConfig VMPassConfig::fromPassConfig(const PassConfig& PC) {
 	getUInt("adHandlerProb", Cfg.adHandlerProb);
 	getBool("bindAntiDebug", Cfg.bindAntiDebug);
 	getUInt("handlerVariants", Cfg.handlerVariants);
+	getUInt("handlerDecoys", Cfg.handlerDecoys);
 	getBool("nestedVM", Cfg.nestedVM);
 	getUInt("nestedVMOpcodes", Cfg.nestedVMOpcodes);
 	getBool("nestedVMHardened", Cfg.nestedVMHardened);
@@ -141,6 +148,7 @@ VMPassConfig VMPassConfig::fromPassConfig(const PassConfig& PC) {
 	if (!Cfg.hardened || !Cfg.antiDebug) Cfg.bindAntiDebug = false;
 	if (Cfg.handlerVariants < 1) Cfg.handlerVariants = 1;
 	if (Cfg.handlerVariants > kMaxHandlerVariants) Cfg.handlerVariants = kMaxHandlerVariants;
+	if (Cfg.handlerDecoys > 3) Cfg.handlerDecoys = 3;
 	if (Cfg.enginePoolSize < 1) Cfg.enginePoolSize = 1;
 	// metamorphicEngines needs >1 engine to diversify across -- either an
 	// explicit pool or per-function engines.

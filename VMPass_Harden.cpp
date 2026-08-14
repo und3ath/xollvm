@@ -392,6 +392,7 @@ void VMImpl::diversifyHandlerVariants(Function* EF) {
 
 	// Collect first (cannot rewrite while iterating).
 	SmallVector<std::pair<BinaryOperator*, unsigned>, 256> Cands;
+	SmallVector<std::pair<ICmpInst*, unsigned>, 128> ICands;
 	for (BasicBlock& BB : *EF) {
 		auto It = VariantOf.find(&BB);
 		if (It == VariantOf.end()) continue;      // not a handler-variant block
@@ -399,8 +400,10 @@ void VMImpl::diversifyHandlerVariants(Function* EF) {
 		for (Instruction& I : BB) {
 			if (auto* BO = dyn_cast<BinaryOperator>(&I)) {
 				if (!BO->getType()->isIntegerTy()) continue;
-				if (!llvm::obf::MbaUtils::isTargetOpcode(BO->getOpcode())) continue;
+				if (MBA.poolSize((Instruction::BinaryOps)BO->getOpcode()) == 0) continue;
 				Cands.push_back({ BO, vi });
+			} else if (auto* IC = dyn_cast<ICmpInst>(&I)) {
+				ICands.push_back({ IC, vi });
 			}
 		}
 	}
@@ -411,26 +414,20 @@ void VMImpl::diversifyHandlerVariants(Function* EF) {
 		IRBuilder<> B(BO);
 		Value* A = BO->getOperand(0);
 		Value* V = BO->getOperand(1);
-		Value* R = nullptr;
+
+		// Commutative-swap pre-mutation: for commutative opcodes, swap the
+		// operand order before feeding the MBA identity so bit (3) of the
+		// variant index widens the diversity space beyond poolSize() --
+		// pure SSA reshape (no IR emitted), correctness-preserving.
 		switch (BO->getOpcode()) {
-		case Instruction::Add:
-			switch (vi % 3) { case 0: R = MBA.add(B, A, V); break;
-							  case 1: R = MBA.addAlt(B, A, V); break;
-							  default: R = MBA.addAlt2(B, A, V); } break;
-		case Instruction::Sub:
-			switch (vi % 3) { case 0: R = MBA.sub(B, A, V); break;
-							  case 1: R = MBA.subAlt(B, A, V); break;
-							  default: R = MBA.subAlt2(B, A, V); } break;
-		case Instruction::Or:
-			switch (vi % 3) { case 0: R = MBA.bitwiseOr(B, A, V); break;
-							  case 1: R = MBA.bitwiseOrAlt(B, A, V); break;
-							  default: R = MBA.bitwiseOrAlt2(B, A, V); } break;
-		case Instruction::And:
-			R = (vi % 2) ? MBA.bitwiseAndAlt(B, A, V) : MBA.bitwiseAnd(B, A, V); break;
-		case Instruction::Xor:
-			R = (vi % 2) ? MBA.bitwiseXorAlt(B, A, V) : MBA.bitwiseXor(B, A, V); break;
+		case Instruction::Add: case Instruction::Mul:
+		case Instruction::And: case Instruction::Or: case Instruction::Xor:
+			if ((vi >> 3) & 1u) std::swap(A, V);
+			break;
 		default: break;
 		}
+
+		Value* R = MBA.applyByIndex(B, (Instruction::BinaryOps)BO->getOpcode(), A, V, vi);
 		if (!R) continue;
 
 		// Variant-unique opaque-zero XOR (matches hardenVMEngine's noise pattern,
@@ -448,12 +445,27 @@ void VMImpl::diversifyHandlerVariants(Function* EF) {
 		++Rewrites;
 	}
 
+	// ICmp arm-invert mutation: swap operands (LLVM auto-inverts the predicate
+	// to preserve semantics) for a bit-selected subset of variant-tagged icmps.
+	// No opaque-zero tail here -- result is i1 and this path never wrapped
+	// icmps in noise even before this change.
+	unsigned IcmpFlips = 0;
+	for (auto& [IC, vi] : ICands) {
+		if (!IC->getParent()) continue; // already erased (shouldn't happen, defensive)
+		if ((vi >> 2) & 1u) {
+			IC->swapOperands();
+			++IcmpFlips;
+		}
+	}
+
 	LLVM_DEBUG(dbgs() << "[vm] diversifyHandlerVariants: " << Rewrites
-		<< " per-variant MBA rewrites across "
+		<< " per-variant MBA rewrites, " << IcmpFlips
+		<< " icmp arm-inverts across "
 		<< NumVariants << " variants\n");
 	if (ObfVerbose)
 		errs() << "[vm] variant-diversify: " << Rewrites
-		<< " MBA rewrites (" << NumVariants << " variants)\n";
+		<< " MBA rewrites, " << IcmpFlips
+		<< " icmp flips (" << NumVariants << " variants)\n";
 }
 
 
