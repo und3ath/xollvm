@@ -506,6 +506,15 @@ namespace {
         StubM->setDataLayout(M.getDataLayout());
         StubM->setTargetTriple(M.getTargetTriple());
 
+        // aes_stub.c is fixed-width (uint8_t/uint32_t) only, so the DL/triple
+        // override above is fully safe -- but leftover module-flag metadata
+        // baked in from whatever host triple built the embedded bitcode (e.g.
+        // wchar_size) can still conflict with M's own flags and make
+        // linkModules() fail on cross-target builds. Drop it; the stub needs
+        // none of its own.
+        if (auto *MDFlags = StubM->getModuleFlagsMetadata())
+            MDFlags->eraseFromParent();
+
         // Link — we only need definitions that are referenced.
         // Linker::Flags::LinkOnlyNeeded avoids pulling in unreferenced symbols.
         if (Linker::linkModules(M, std::move(StubM), 0)) {
