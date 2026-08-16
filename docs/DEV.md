@@ -63,23 +63,49 @@ maintaining and extending the in-tree LLVM obfuscation framework.
 
 ### Pass registration
 
-Integration points in the LLVM source tree:
+xollvm is **fork-free** — it registers into stock LLVM entirely from cmake flags, with zero edits
+to any LLVM source file. There is no `PassRegistry.def` entry and no `PassBuilder.cpp` edit for
+this project; that in-tree approach was retired when xollvm split out of the legacy `ollvm` fork
+(see [the port history](../README.md) if you need the "why").
 
-- `llvm/lib/Passes/PassRegistry.def` registers:
-  - module pass: `obfuscation`
-  - function driver: `obfuscation-fn`
-  - diagnostics: `obf-dump-config`, `obf-metrics`
-  - module analyses: `obf-annotations`, `obf-report`
-- `llvm/lib/Passes/PassBuilder.cpp` includes `Obfuscator.h` and wires the pass names.
+The single source of truth for registered names is `registration/ObfPasses.inc` — an x-macro
+table consumed by `registration/PluginEntry.cpp`, which wires every name into `PassBuilder` via
+`registerPipelineParsingCallback` (one callback for module passes, one for function passes) and
+`registerAnalysisRegistrationCallback` (module + function analyses — skipping these makes the
+driver assert at runtime, "analysis pass was not registered prior to being queried"). One
+`PluginEntry.cpp` drives **both** build modes from the same source:
+
+- **Static in-tree extension** (`LLVM_EXTERNAL_PROJECTS=Obfuscator` +
+  `LLVM_OBFUSCATOR_LINK_INTO_TOOLS=ON`) — compiled into `clang`/`opt` directly. LLVM calls
+  `getObfuscatorPluginInfo()` at startup via the generated `HANDLE_EXTENSION(Obfuscator)`. Works
+  on Windows, Linux, macOS.
+- **Loadable plugin** (`Obfuscator.so`, `-fpass-plugin=`/`-load-pass-plugin=`) — Linux/macOS only.
+  `LLVM_OBFUSCATOR_LINK_INTO_TOOLS` is undefined in this mode, so `llvmGetPassPluginInfo()` is
+  compiled in as the loadable entry (compiled *out* in static mode, so the tool never exports two
+  copies).
+
+Current registered names (`ObfPasses.inc`): module analyses `obf-annotations`, `obf-report`;
+function analysis `function-obf-context`; module passes `obfuscation`, `obf-dump-config`,
+`obf-metrics`, `fmerge`; function driver `obfuscation-fn`. Individual sub-passes (`mba`, `bcf`,
+`vm`, ...) are not top-level `-passes=` entries — they're dispatched by `ObfuscationFunctionDriverPass`
+per the pipeline (below), driven by `obf:` annotations, not by name on the `opt` command line.
+
+There is also a clang extension-point hook: `-mllvm -enable-obfuscation` (hidden flag, default
+off) injects `ObfuscationModulePass` at the start of clang's own compile pipeline, so an annotated
+source file obfuscates during a normal `-c` compile with no separate `opt` round-trip. Off by
+default → pipeline byte-identical; still annotation-gated when on, so unannotated code is untouched
+either way.
 
 ### Module entry pass
 
 `ObfuscationModulePass` performs:
 
 1. Fetch `ObfuscationAnnotationAnalysis` (builds `Function* → ObfuscationConfig` map).
-2. Run module-only work (`StringEncryptionPass`) — no-ops if no function enabled `strenc`.
-3. Run the function driver over all definitions.
-4. Optionally write report JSON and artifacts.
+2. Run `FunctionMergingPass` (`fmerge`) — module-only, no-ops if no function opted in. Runs
+   **first** among module-only work so merged super-functions get amplified by everything after.
+3. Run `StringEncryptionPass` (`strenc`) — module-only, no-ops if no function enabled it.
+4. Run the function driver over all definitions.
+5. Optionally write report JSON and artifacts.
 
 ### Annotation cache
 
@@ -116,27 +142,45 @@ The driver is the single place to enforce policy:
 
 ### Pass pipeline ordering
 
-Ordering is expressed as a partial order graph and topologically sorted into a stable sequence
-(Kahn's algorithm with a deterministic tie-break). A canonical set of rules is enforced
-regardless of annotation order:
+Ordering is expressed as a partial order graph (`ObfuscationPipeline::getOrderingRules()`) and
+topologically sorted into a stable sequence (Kahn's algorithm with a deterministic tie-break). A
+canonical set of rules is enforced regardless of annotation order.
 
-| Pass | Must run after | Must run before | Conflicts with |
+> [!WARNING]
+> **Field-semantics gotcha, read before touching this table.** `PassOrderingRules` has fields
+> `before`/`after`/`conflicts` — but the names describe the *listed passes' position relative to
+> this row*, not this row's position. `before = {X, Y}` means **X and Y run before this pass**
+> (this pass depends on them). `after = {X, Y}` means **X and Y run after this pass** (this pass
+> is a prerequisite for them). Reading it as "this pass runs before/after the list" is backwards
+> and is exactly the bug tracked as `NEW-13` (topo-sort had this inverted once already — fixed,
+> but easy to reintroduce). Ground truth is the struct comment in
+> `include/llvm/Transforms/Obfuscator/ObfuscationPipeline.h`; when in doubt, read that, not this
+> table from memory.
+
+| Pass | Runs after (prerequisites) | Runs before (dependents) | Conflicts with |
 |---|---|---|---|
+| `fmerge` | — (module-only, runs before the function pipeline entirely) | display/meta-order only: everything | — |
 | `constenc` | — | `mba`, `substitution`, `vcall`, `split`, `sdiff`, `bcf`, `flattening`, `shield` | — |
-| `mba` | — | `substitution` | — |
-| `substitution` | `mba` | `vcall`, `split` | — |
-| `sdiff` | `mba`, `substitution`, `vcall`, `split` | `bcf`, `flattening` | — |
-| `vcall` | — | `substitution` | — |
-| `split` | — | `sdiff`, `bcf` | — |
-| `bcf` | `mba`, `substitution`, `split`, `sdiff`, `vcall` | `flattening` | — |
-| `flattening` | `mba`, `substitution`, `split`, `sdiff`, `bcf`, `vcall` | `adec` | `vm` |
+| `mba` | — | `substitution`, `split`, `bcf`, `flattening` | — |
+| `substitution` | `mba` | `split`, `bcf`, `flattening` | — |
+| `split` | `mba`, `substitution` | `bcf`, `flattening` | — |
+| `sdiff` | `mba`, `substitution`, `split` | `bcf`, `flattening` | — |
+| `bcf` | `mba`, `substitution`, `split`, `sdiff` | `flattening` | — |
+| `flattening` | `mba`, `substitution`, `split`, `sdiff`, `bcf` | `vcall`, `adec` | `vm` |
+| `vcall` | `mba`, `split`, `sdiff`, `bcf`, `flattening` | — | — |
 | `shield` | `mba`, `substitution`, `split`, `sdiff`, `bcf`, `vcall`, `flattening` | `adec` | — |
-| `adec` | everything else | — | — |
-| `vm` | `mba`, `substitution`, `vcall`, `split`, `sdiff`, `bcf` | `shield`, `adec` | `flattening` |
+| `strenc` | `mba`, `substitution`, `split`, `sdiff`, `bcf`, `vcall`, `flattening`, `shield` (display/meta-order only — actually module-only, runs before the function pipeline) | `adec` | — |
+| `adec` | `mba`, `substitution`, `split`, `sdiff`, `bcf`, `vcall`, `flattening`, `shield`, `strenc` | — | — |
+| `vm` | `mba`, `substitution`, `split`, `sdiff`, `bcf` | `vcall`, `shield`, `adec` | `flattening` |
 
-This avoids known bad interactions and makes the pipeline stable and reproducible.
-`vm` **must not run together with `flattening`** — both restructure the entire CFG.
-The pipeline driver will reject this combination.
+Note the two ordering-sensitive facts most likely to surprise: **`vcall` runs *after*
+`flattening`**, not before (flattening bails out on functions that already contain indirect
+calls, so sequencing flattening first lets both coexist in combo pipelines) — and **`vm` runs
+*before* `vcall`**, because `vm` builds a static callee table at compile time and can't handle
+calls that `vcall` has already turned indirect.
+
+`vm` **must not run together with `flattening`** — both restructure the entire CFG. The pipeline
+driver rejects this combination.
 
 ### Deterministic seeding
 
@@ -363,25 +407,20 @@ The `DebugInfoPreserver` utility should be used by passes that:
 
 ## Adding a new obfuscation pass
 
-Checklist (minimal):
+There are 7 mandatory touch-points (source, CMake, `PassIds.h`, `registration/ObfPasses.inc`,
+`ObfuscationConfig`, `ObfuscationPipeline`, runtime tests) — miss one and the pass either doesn't
+build, builds but never runs, or runs but is unreachable via annotation. The full checklist,
+exact file:function anchors, and the current wiring bugs to grep for afterward live in the
+`xollvm-add-pass` skill (`.claude/skills/xollvm-add-pass/`) rather than duplicated here — that
+copy is the one to trust and update; this doc intentionally doesn't keep a second one.
 
-1. **Implement the pass** as an NPM function pass (or module pass for module-scope work):
-   - Return correct `PreservedAnalyses`.
-2. **Add a config struct** if needed:
-   - Extend `ObfuscationConfig.h/.cpp` with parsing and validation logic.
-3. **Register the pass ID**:
-   - Add the canonical ID string to `PassIds.h` and `allCanonicalPassIds()`.
-   - Optionally add alias resolution in the alias lookup switch.
-4. **Wire into the pipeline**:
-   - Add a `PassOrderingRules` entry in `ObfuscationPipeline.cpp`.
-   - Add a dispatch case in `buildPipeline()` and `getPassEntries()`.
-   - Add ordering constraints relative to existing passes.
-5. **Reporting hooks** (recommended):
-   - Emit `obf.*` instruction names and/or metadata for difficulty scoring.
-   - Per-pass CFG snapshots are automatic (the driver handles them when enabled).
-6. **Tests**:
-   - Add or extend runtime test cases in `llvm/utils/obfuscator/obf_runtime_tests.py`.
-   - Add a report regression when feasible.
+In short: implement as an NPM function pass or module pass with correct `PreservedAnalyses`; add
+a config struct to `ObfuscationConfig.h/.cpp` (model after an existing one — read the field, not
+this sentence, for the current pattern); register the canonical ID + aliases in `PassIds.h`;
+register the pass itself in `registration/ObfPasses.inc`; wire ordering + dispatch in
+`ObfuscationPipeline.cpp` (see the field-semantics warning above — this is the single most common
+place new passes go wrong); extend the runtime suite in `utils/cases/` + `utils/gates/`, never as
+a standalone test file.
 
 ---
 
@@ -393,10 +432,13 @@ reference is in [VM.md](VM.md); this section focuses on the implementation struc
 
 ### Module-level shared engine
 
-To minimise binary size overhead when multiple functions are virtualised, all 51 opcode
-handlers live in a single module-level function `__vm_engine()`. This function is created once
-per module (by `VMEngine::getOrBuildVMEngine`) and populated on first use
-(`VMEngine::populateVMEngine` / `hardenVMEngine`).
+To minimise binary size overhead when multiple functions are virtualised, all opcode handlers
+(56 as of `OP_COUNT = 0x38` in `VMPass_ISA.h` — check that constant directly, it grows with every
+new fused/decoy/stack opcode and this doc will drift again) live in a module-level function
+`__vm_engine()`. With `enginePoolSize > 1` there are `N` structurally-independent engines instead
+of one shared one (see hardening layers below). Each engine is created once per module (by
+`VMEngine::getOrBuildVMEngine`) and populated on first use (`VMEngine::populateVMEngine` /
+`hardenVMEngine`).
 
 `__vm_engine` has a canonical 18-parameter signature (`VMEngine::getVMEngineFunctionType`):
 
@@ -469,22 +511,21 @@ same dispatch-table layout — defeating cross-function opcode signature matchin
 
 ### Hardening layers
 
-Four independent hardening layers stack on top of the base interpreter:
+**The knob set here is large (~20 fields on `VMPassConfig` as of this writing — register-index
+XOR, bytecode encryption, lazy per-fetch decrypt, register-value XOR with optional rolling key,
+handler-body polymorphism + decoys, nested virtualization, threaded/keyed dispatch, opcode
+fusion, per-build ISA randomization, engine pooling + per-engine metamorphism, anti-debug gates,
+integrity hashing, ...) and grows with every shipped hardening arc — do not hand-maintain a copy
+of it here.** Read `struct VMPassConfig` in `ObfuscationConfig.h` directly for the current field
+list with inline comments, and see [VM.md](VM.md) for the user-facing per-knob reference
+(parameters, defaults, presets) — that file is what gets updated at ship time and is the one to
+trust for "what does knob X do today."
 
-| Layer | Knob | Mechanism |
-|---|---|---|
-| Register-index XOR | `obfRegIdx=1` (default) | Every register-index byte in the bytecode is XOR'd with a compile-time salt. Handlers re-XOR with a volatile salt load — correct at runtime, opaque to static analysis. |
-| Bytecode encryption (LCG) | `encBytecode=1, useAES=0` | `.init_array` constructor encrypts the bytecode stream with an LCG keyed by `ptrtoint(@bytecode) XOR SEED` (ASLR-derived). Dispatch also decrypts each opcode byte. |
-| Bytecode encryption (AES-CTR) | `useAES=1` (default) | Replaces LCG with AES-128-CTR. Per-function 128-bit key from the RNG hierarchy; runtime calls `__obf_aes_ctr_decrypt()` (shared with `strenc`). |
-| Register-value XOR | `regEncrypt=1` | Each register file access XOR's the stored value with a per-slot key table. Adds runtime overhead but defeats memory-dump analysis. |
-
-Additional hardening when `hardened=1`:
-
-- MBA expressions on handler control flow.
-- Opaque predicates in the dispatch loop.
-- Anti-debug timing gates (RDTSC) at the dispatch level and on randomly selected handlers.
-- FNV-1a bytecode integrity check in `.init_array`.
-- Callee XOR masking in `.init_array`.
+What's structurally true regardless of which knobs are on: independent hardening layers compose
+(register-index obfuscation, bytecode encryption, register-value encryption, and handler
+polymorphism are each separately toggleable and mostly orthogonal), every knob defaults OFF and
+is byte-identical when off, and `preset=` annotations (e.g. `preset=max`) opt into a curated
+bundle rather than requiring every knob spelled out by hand.
 
 ---
 
