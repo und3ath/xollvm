@@ -41,9 +41,12 @@ using namespace llvm;
 
 #define DEBUG_TYPE "strenc"
 
-STATISTIC(EncryptedStrings, "Number of AES-encrypted strings");
-STATISTIC(DecryptCallsInserted, "Number of __strenc_decrypt calls inserted");
-STATISTIC(StubLinked, "Times AES stub module was linked");
+// ALWAYS_ENABLED_STATISTIC (not STATISTIC): [strenc] prints these via direct
+// (uint64_t) cast every run, not through -stats. Plain STATISTIC compiles to
+// NoopStatistic under NDEBUG (Release), so the printout would always read 0.
+ALWAYS_ENABLED_STATISTIC(EncryptedStrings, "Number of AES-encrypted strings");
+ALWAYS_ENABLED_STATISTIC(DecryptCallsInserted, "Number of __strenc_decrypt calls inserted");
+ALWAYS_ENABLED_STATISTIC(StubLinked, "Times AES stub module was linked");
 
 
 
@@ -435,6 +438,14 @@ namespace {
 
         // ── Per-string helpers ────────────────────────────────────────────────────
 
+        /// True if GV (or a constexpr derived from it, e.g. a GEP) is ever
+        /// converted to an integer (ptrtoint). Such globals must not be
+        /// encrypted: encryptStrings() rewrites every use of GV inside a
+        /// function to the address of a fresh per-call stack buffer, so a
+        /// captured integer address would silently diverge from the address
+        /// other call sites / the original merged-constant address observe.
+        static bool isAddressTakenAsInteger(Constant* C);
+
         /// True if GV should be encrypted (is a non-empty, eligible string).
         static bool shouldEncrypt(GlobalVariable& GV, int minLength);
 
@@ -666,6 +677,19 @@ namespace {
 
     // ── StrEncImpl helpers ────────────────────────────────────────────────────────
 
+    bool StrEncImpl::isAddressTakenAsInteger(Constant* C) {
+        for (User* U : C->users()) {
+            if (isa<PtrToIntInst>(U)) return true;
+            if (auto* CE = dyn_cast<ConstantExpr>(U)) {
+                if (CE->getOpcode() == Instruction::PtrToInt) return true;
+                // Derived constexprs (e.g. GEP-of-GV) can themselves be
+                // ptrtoint'd further downstream — follow them.
+                if (isAddressTakenAsInteger(CE)) return true;
+            }
+        }
+        return false;
+    }
+
     bool StrEncImpl::shouldEncrypt(GlobalVariable& GV, int minLength) {
         if (!GV.hasInitializer() || !GV.isConstant()) return false;
         auto* CDA = dyn_cast<ConstantDataArray>(GV.getInitializer());
@@ -680,6 +704,13 @@ namespace {
 
         // Skip printf-style format strings
         if (S.contains('%')) return false;
+
+        // Skip strings whose address is ever captured as an integer: the
+        // encrypted form replaces every use inside a function with a
+        // per-call stack buffer, which has a different (and non-stable)
+        // address than the original global — breaking pointer-identity
+        // code (e.g. rustc string-literal merging + ptrtoint match tables).
+        if (isAddressTakenAsInteger(&GV)) return false;
 
         return true;
     }
@@ -777,6 +808,18 @@ namespace {
             for (Use* UPtr : Uses) {
                 auto* I = dyn_cast<Instruction>(UPtr->getUser());
                 if (!I) continue;
+                if (auto* PN = dyn_cast<PHINode>(I)) {
+                    // A PHI incoming value is used on the edge from its predecessor,
+                    // not inside the PHI's own block; inserting there would push
+                    // the PHI out of the block's required leading PHI group.
+                    unsigned IVN = PN->getIncomingValueNumForOperand(UPtr->getOperandNo());
+                    BasicBlock* Pred = PN->getIncomingBlock(IVN);
+                    Instruction* NI = CE->getAsInstruction();
+                    NI->insertBefore(Pred->getTerminator());
+                    NI->setDebugLoc(PN->getDebugLoc());
+                    UPtr->set(NI);
+                    continue;
+                }
                 Instruction* NI = CE->getAsInstruction();
                 NI->insertBefore(I);
                 NI->setDebugLoc(I->getDebugLoc());
@@ -785,7 +828,7 @@ namespace {
         }
     }
 
-    // StrEncImpl::encryptStrings 
+    // StrEncImpl::encryptStrings
 
     bool StrEncImpl::encryptStrings(Module& M, StrEncCtx& Ctx) {
         //  link the AES stub
@@ -1431,12 +1474,21 @@ namespace {
                 SmallVector<Use*, 16> Uses;
                 for (Use& U : CE->uses()) Uses.push_back(&U);
                 for (Use* UP : Uses) {
-                    if (auto* I = dyn_cast<Instruction>(UP->getUser())) {
+                    auto* I = dyn_cast<Instruction>(UP->getUser());
+                    if (!I) continue;
+                    if (auto* PN = dyn_cast<PHINode>(I)) {
+                        unsigned IVN = PN->getIncomingValueNumForOperand(UP->getOperandNo());
+                        BasicBlock* Pred = PN->getIncomingBlock(IVN);
                         Instruction* NI = CE->getAsInstruction();
-                        NI->insertBefore(I);
-                        NI->setDebugLoc(I->getDebugLoc());
+                        NI->insertBefore(Pred->getTerminator());
+                        NI->setDebugLoc(PN->getDebugLoc());
                         UP->set(NI);
+                        continue;
                     }
+                    Instruction* NI = CE->getAsInstruction();
+                    NI->insertBefore(I);
+                    NI->setDebugLoc(I->getDebugLoc());
+                    UP->set(NI);
                 }
             }
             };
