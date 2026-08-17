@@ -624,6 +624,18 @@ MBAConfig MBAConfig::fromPassConfig(const PassConfig& pc) {
 			cfg.layeredWindow = (unsigned)std::stoul(pc.params.at("layeredWindow"));
 		if (pc.params.count("layeredBudget"))
 			cfg.layeredBudget = (unsigned)std::stoul(pc.params.at("layeredBudget"));
+
+		// Input-derived zeros (V1)
+		if (pc.params.count("enableInputZero"))
+			cfg.enableInputZero = (pc.params.at("enableInputZero") != "0");
+		if (pc.params.count("inputZero"))
+			cfg.enableInputZero = (pc.params.at("inputZero") != "0");
+		if (pc.params.count("inputZeroWeight"))
+			cfg.inputZeroWeight = (unsigned)std::stoul(pc.params.at("inputZeroWeight"));
+		if (pc.params.count("inputZeroReplace"))
+			cfg.inputZeroReplace = (pc.params.at("inputZeroReplace") != "0");
+		if (pc.params.count("inputZeroCount"))
+			cfg.inputZeroCount = (unsigned)std::stoul(pc.params.at("inputZeroCount"));
 	}
 	catch (const std::exception& e) {
 		errs() << "Error parsing MBA parameters: " << e.what() << "\n";
@@ -676,6 +688,14 @@ bool MBAConfig::validate() const {
 		errs() << "MBA: Invalid layeredBudget " << layeredBudget << " (must be 0-32)\n";
 		return false;
 
+	}
+	if (inputZeroWeight > 100) {
+		errs() << "MBA: Invalid inputZeroWeight " << inputZeroWeight << " (must be 0-100)\n";
+		return false;
+	}
+	if (inputZeroCount < 1 || inputZeroCount > 8) {
+		errs() << "MBA: Invalid inputZeroCount " << inputZeroCount << " (must be 1-8)\n";
+		return false;
 	}
 	return true;
 }

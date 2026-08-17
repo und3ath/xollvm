@@ -196,6 +196,32 @@ namespace llvm::obf {
 			Value* Cur, unsigned DepthHint);
 
 		// =========================================================================
+		// Input-derived zeros (V1) — memory-free runtime zeros
+		// =========================================================================
+		// Unlike the inflation helpers above, these build a runtime zero purely from
+		// in-scope operands (X, Y) — no volatile noise slot. The value is 0 for all
+		// inputs, but the zeroness is a nonlinear-lifted MBA identity engineered to
+		// exceed an SMT solver's time budget: there is no alloca for a value-set
+		// analysis to fold, and the bitwise-inside-multiply structure does not
+		// linearize, so the solver must bit-blast the whole lift (timeout-strong).
+
+		/// Number of distinct input-derived zero forms. Forms use only the two
+		/// InstCombine-resistant MBA spellings (add-form (x^y)+2(x&y), sub-form
+		/// (x&~y)-(~x&y)) under a nonlinear lift, so they survive an attacker's -O2.
+		unsigned inputZeroPoolSize() const;
+
+		/// Build an input-derived runtime zero from @p X, @p Y. @p K selects the form
+		/// modulo inputZeroPoolSize(). Result has X's type. Returns nullptr if the
+		/// operand types are unusable (non-integer, mismatched, or width < 2).
+		Value* inputDerivedZero(IRBuilder<>& B, Value* X, Value* Y, unsigned K);
+
+		/// Add an input-derived zero (built from @p Orig's operands, form @p K) to
+		/// @p Cur. Memory-free analogue of addNonLinearZero. Returns @p Cur unchanged
+		/// if operands are unusable.
+		Value* addInputDerivedZero(IRBuilder<>& B, BinaryOperator& Orig,
+			Value* Cur, unsigned K);
+
+		// =========================================================================
 		// Layered MBA
 		// =========================================================================
 

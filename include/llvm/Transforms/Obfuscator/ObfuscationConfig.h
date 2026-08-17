@@ -143,6 +143,18 @@ namespace llvm {
 		bool enableLayered = true;
 		unsigned layeredWindow = 48;   // scan up to N insts backward from anchor
 		unsigned layeredBudget = 1;    // rewrite up to N internal ops per site
+		// Input-derived zeros (V1): memory-free runtime-zero addends built from the
+		// site's operands via nonlinear-lifted MBA identities. Unlike the memory-slot
+		// zeros, these have no alloca a value-set analysis can fold to 0; the solver
+		// must bit-blast the nonlinear lift (SMT-timeout-strong). Default OFF so
+		// existing output is byte-identical.
+		bool enableInputZero = false;
+		unsigned inputZeroWeight = 40; // % chance per transformed site (0-100)
+		// inputZeroReplace: when enableInputZero, suppress the slot-based inflation
+		// (inflateLinear + nonlinear/high-degree/mixed-mode addends) and rely solely
+		// on the input-derived zeros. Off = augment (both); on = replace (Input mode).
+		bool inputZeroReplace = false;
+		unsigned inputZeroCount = 1;   // distinct input-derived forms per fired site (1-8)
 
 		static MBAConfig fromPassConfig(const PassConfig& pc);
 		bool validate() const;

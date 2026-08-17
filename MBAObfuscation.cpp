@@ -340,23 +340,47 @@ namespace {
 			if (SI.SmallRange)
 				InflateDepthHint = std::min(5u, LocalDepth + 1);
 
-			NewV = PCtx.MBA.inflateLinear(B, NewV, InflateDepthHint);
+			// Zero-source strategy (V1f):
+			//   Memory (default)      : slot-based inflation only (byte-identical).
+			//   Input  (replace)      : suppress the slot-based inflation entirely and
+			//                           rely on input-derived zeros — the memory zeros
+			//                           fold under intra-block store-forwarding, so an
+			//                           enabled-strong build should not pay for them.
+			//   Mixed  (augment)      : both (the V1 default-on behavior).
+			const bool suppressMem =
+				PCtx.Cfg.enableInputZero && PCtx.Cfg.inputZeroReplace;
 
-			// Nonlinear addends (mul/urem): increase SMT hardness.
-			// Bias: more likely for wide-range values, less for small-range.
-			if (PCtx.Cfg.enableNonLinear) {
-				unsigned W = PCtx.Cfg.nonLinearWeight;
-				if (SI.SmallRange && W > 10) W -= 10;
-				if (!SI.SmallRange && W < 90) W += 10;
-				if (PCtx.NoiseRng.range(100) < W)
-					NewV = PCtx.MBA.addNonLinearZero(B, *BO, NewV);
-				// High-degree and mixed-mode addends (degree 4/5 + bitwise/rotate mixing).
-				if (PCtx.NoiseRng.range(100) < (W / 2 + 10))
-					NewV = PCtx.MBA.addHighDegreeZero(B, *BO, NewV, InflateDepthHint);
-				if (PCtx.NoiseRng.range(100) < (W / 2 + 10))
-					NewV = PCtx.MBA.addMixedModeZero(B, *BO, NewV, InflateDepthHint);
+			if (!suppressMem) {
+				NewV = PCtx.MBA.inflateLinear(B, NewV, InflateDepthHint);
 
+				// Nonlinear addends (mul/urem): increase SMT hardness.
+				// Bias: more likely for wide-range values, less for small-range.
+				if (PCtx.Cfg.enableNonLinear) {
+					unsigned W = PCtx.Cfg.nonLinearWeight;
+					if (SI.SmallRange && W > 10) W -= 10;
+					if (!SI.SmallRange && W < 90) W += 10;
+					if (PCtx.NoiseRng.range(100) < W)
+						NewV = PCtx.MBA.addNonLinearZero(B, *BO, NewV);
+					// High-degree and mixed-mode addends (degree 4/5 + bitwise/rotate mixing).
+					if (PCtx.NoiseRng.range(100) < (W / 2 + 10))
+						NewV = PCtx.MBA.addHighDegreeZero(B, *BO, NewV, InflateDepthHint);
+					if (PCtx.NoiseRng.range(100) < (W / 2 + 10))
+						NewV = PCtx.MBA.addMixedModeZero(B, *BO, NewV, InflateDepthHint);
+				}
+			}
 
+			// Input-derived zeros (V1): memory-free runtime-zero addends built from the
+			// site's operands. Independent of the volatile noise slot, so intra-block
+			// store-forwarding (or a value-set analysis) that folds the slot to 0 does
+			// not collapse them. Emit inputZeroCount distinct forms per fired site.
+			if (PCtx.Cfg.enableInputZero) {
+				if (PCtx.NoiseRng.range(100) < PCtx.Cfg.inputZeroWeight) {
+					unsigned N = std::max(1u, PCtx.Cfg.inputZeroCount);
+					for (unsigned t = 0; t < N; ++t) {
+						unsigned K = (unsigned)PCtx.NoiseRng.u32();
+						NewV = PCtx.MBA.addInputDerivedZero(B, *BO, NewV, K);
+					}
+				}
 			}
 
 			// Layered MBA: rewrite some internal ops close to the anchor site

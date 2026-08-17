@@ -754,6 +754,120 @@ Value* MbaUtils::addMixedModeZero(IRBuilder<>& B, BinaryOperator& Orig,
 }
 
 // ============================================================================
+// Input-derived zeros (V1) — memory-free runtime zeros
+// ============================================================================
+//
+// Each form takes two spellings of the same value: `f`, an MBA re-spelling built
+// from bitwise ops, and `g`, the plain arithmetic spelling. `f == g` for all
+// inputs, so any function of them cancels: `lift(f) - lift(g) == 0`. The plain
+// difference `f - g` folds instantly (it is just the base identity), but a
+// *nonlinear* lift (cube / pow4 / squared product) forces the solver to bit-blast
+// the bitwise-inside-multiply structure — validated to exceed a 5 s Z3 budget
+// while remaining an exact ring identity mod 2^BW (any bit width).
+//
+// The runtime zero is an *addend* — it need not match the site's opcode, so the
+// pool deliberately uses only the two MBA spellings InstCombine does NOT collapse:
+//   add-spelling  (x^y)+2(x&y) == x+y      (not folded to x+y by -O2)
+//   sub-spelling  (x&~y)-(~x&y) == x-y     (not folded to x-y by -O2)
+// The canonical bitwise spellings ((x+y)-(x&y)==x|y, (x|y)-(x&y)==x^y,
+// (x+y)-(x|y)==x&y) are AVOIDED — InstCombine rewrites f->g for those, which
+// collapses lift(f)-lift(g) to 0 under an attacker's own -O2 (see mba_fold_check).
+//
+// Pool (7 forms), each an exact 0, Z3-timeout-strong, and -O2 fold-resistant:
+//   0 add  cube:  ((x^y)+2(x&y))^3                    - (x+y)^3
+//   1 sub  w2:    ((x&~y)-(~x&y))*(x|y)^2             - (x-y)*(x|y)^2
+//   2 mul  prod:  [((x^y)+2(x&y))*((x|y)-(x&y))]^2    - [(x+y)*(x^y)]^2
+//   3 add  pow4:  ((x^y)+2(x&y))^4                    - (x+y)^4
+//   4 sub  cube:  ((x&~y)-(~x&y))^3                   - (x-y)^3
+//   5 add  w2xor: ((x^y)+2(x&y))*(x^y)^2             - (x+y)*(x^y)^2
+//   6 sub  pow4:  ((x&~y)-(~x&y))^4                   - (x-y)^4
+
+unsigned MbaUtils::inputZeroPoolSize() const { return 7; }
+
+Value* MbaUtils::inputDerivedZero(IRBuilder<>& B, Value* X, Value* Y, unsigned K) {
+	if (!X || !Y)
+		return nullptr;
+	Type* Ty = X->getType();
+	if (!Ty->isIntegerTy() || Y->getType() != Ty)
+		return nullptr;
+	if (Ty->getScalarSizeInBits() < 2)
+		return nullptr;
+
+	Constant* Two = ConstantInt::get(Ty, 2);
+	auto Xor = [&](Value* a, Value* b) { return B.CreateXor(a, b, "mba.idz.x"); };
+	auto And = [&](Value* a, Value* b) { return B.CreateAnd(a, b, "mba.idz.a"); };
+	auto Or  = [&](Value* a, Value* b) { return B.CreateOr(a, b, "mba.idz.o"); };
+	auto Add = [&](Value* a, Value* b) { return B.CreateAdd(a, b, "mba.idz.add"); };
+	auto Sub = [&](Value* a, Value* b) { return B.CreateSub(a, b, "mba.idz.sub"); };
+	auto Mul = [&](Value* a, Value* b) { return B.CreateMul(a, b, "mba.idz.mul"); };
+	auto Not = [&](Value* a) { return B.CreateNot(a, "mba.idz.n"); };
+	auto Sqr  = [&](Value* v) { return Mul(v, v); };
+	auto Cube = [&](Value* v) { return Mul(Sqr(v), v); };
+	auto Pow4 = [&](Value* v) { Value* s = Sqr(v); return Mul(s, s); };
+
+	// Twice(v) == 2*v.
+	auto Twice = [&](Value* v) { return Mul(Two, v); };
+
+	Value* f = nullptr;
+	Value* g = nullptr;
+	switch (K % inputZeroPoolSize()) {
+	default:
+	case 0: // add, cube
+		f = Add(Xor(X, Y), Twice(And(X, Y)));   // == x + y
+		g = Add(X, Y);
+		return Sub(Cube(f), Cube(g));
+	case 1: { // sub, (x|y)^2-weighted
+		f = Sub(And(X, Not(Y)), And(Not(X), Y)); // == x - y
+		g = Sub(X, Y);
+		Value* w = Or(X, Y);
+		Value* w2 = Sqr(w);
+		return Sub(Mul(f, w2), Mul(g, w2));
+	}
+	case 2: { // mul-shaped deep product, squared
+		f = Mul(Add(Xor(X, Y), Twice(And(X, Y))), Sub(Or(X, Y), And(X, Y))); // (x+y)*(x^y)
+		g = Mul(Add(X, Y), Xor(X, Y));
+		return Sub(Sqr(f), Sqr(g));
+	}
+	case 3: // add, pow4
+		f = Add(Xor(X, Y), Twice(And(X, Y)));   // == x + y
+		g = Add(X, Y);
+		return Sub(Pow4(f), Pow4(g));
+	case 4: // sub-spelling, cube
+		f = Sub(And(X, Not(Y)), And(Not(X), Y)); // == x - y
+		g = Sub(X, Y);
+		return Sub(Cube(f), Cube(g));
+	case 5: { // add-spelling, weighted by (x^y)^2
+		f = Add(Xor(X, Y), Twice(And(X, Y)));    // == x + y
+		g = Add(X, Y);
+		Value* w2 = Sqr(Xor(X, Y));
+		return Sub(Mul(f, w2), Mul(g, w2));
+	}
+	case 6: // sub-spelling, pow4
+		f = Sub(And(X, Not(Y)), And(Not(X), Y)); // == x - y
+		g = Sub(X, Y);
+		return Sub(Pow4(f), Pow4(g));
+	}
+}
+
+Value* MbaUtils::addInputDerivedZero(IRBuilder<>& B, BinaryOperator& Orig,
+	Value* Cur, unsigned K) {
+	if (!Cur || !Cur->getType()->isIntegerTy())
+		return Cur;
+
+	Value* x = Orig.getOperand(0);
+	Value* y = Orig.getOperand(1);
+	Type* Ty = Cur->getType();
+	if (!x || !y || x->getType() != Ty || y->getType() != Ty)
+		return Cur;
+
+	Value* NZ = inputDerivedZero(B, x, y, K);
+	if (!NZ || NZ->getType() != Ty)
+		return Cur;
+
+	return B.CreateAdd(Cur, NZ, "mba.idz.acc");
+}
+
+// ============================================================================
 // Layered MBA window
 // ============================================================================
 

@@ -70,6 +70,62 @@ def i_mulAlt2(x, y):
     return I32(np.uint32(m_lo) + np.uint32(m_hi_shift))
 
 # ---------------------------------------------------------------------------
+# Input-derived zero forms (V1) — each must equal 0 for all int32 pairs.
+# Bit-for-bit translation of MbaUtils::inputDerivedZero (7 forms, K=0..6).
+# ---------------------------------------------------------------------------
+
+def _cube(v): return I32(I32(v * v) * v)
+def _pow4(v): s = I32(v * v); return I32(s * s)
+
+def z_add_cube(x, y):          # K0
+    f = I32((x ^ y) + I32(2) * (x & y))   # == x + y
+    g = I32(x + y)
+    return I32(_cube(f) - _cube(g))
+
+def z_sub_w2(x, y):            # K1
+    f = I32((x & I32(~y)) - (I32(~x) & y))  # == x - y
+    g = I32(x - y)
+    w2 = I32((x | y) * (x | y))
+    return I32(I32(f * w2) - I32(g * w2))
+
+def z_mul_prod(x, y):         # K2
+    f = I32(I32((x ^ y) + I32(2) * (x & y)) * I32((x | y) - (x & y)))  # (x+y)*(x^y)
+    g = I32(I32(x + y) * (x ^ y))
+    return I32(I32(f * f) - I32(g * g))
+
+def z_add_pow4(x, y):         # K3
+    f = I32((x ^ y) + I32(2) * (x & y))   # == x + y
+    g = I32(x + y)
+    return I32(_pow4(f) - _pow4(g))
+
+def z_sub_cube(x, y):         # K4
+    f = I32((x & I32(~y)) - (I32(~x) & y))  # == x - y
+    g = I32(x - y)
+    return I32(_cube(f) - _cube(g))
+
+def z_add_w2xor(x, y):        # K5
+    f = I32((x ^ y) + I32(2) * (x & y))     # == x + y
+    g = I32(x + y)
+    w2 = I32((x ^ y) * (x ^ y))
+    return I32(I32(f * w2) - I32(g * w2))
+
+def z_sub_pow4(x, y):         # K6
+    f = I32((x & I32(~y)) - (I32(~x) & y))  # == x - y
+    g = I32(x - y)
+    return I32(_pow4(f) - _pow4(g))
+
+INPUT_ZEROS = [
+    ("idz.K0.add.cube",   z_add_cube),
+    ("idz.K1.sub.w2",     z_sub_w2),
+    ("idz.K2.mul.prod",   z_mul_prod),
+    ("idz.K3.add.pow4",   z_add_pow4),
+    ("idz.K4.sub.cube",   z_sub_cube),
+    ("idz.K5.add.w2xor",  z_add_w2xor),
+    ("idz.K6.sub.pow4",   z_sub_pow4),
+]
+
+
+# ---------------------------------------------------------------------------
 # Shl identities — const-RHS only. n ranges over a fixed set of shift amounts
 # (not the full int32 domain like the other opcodes); x still ranges over the
 # full 1035-value set built by build_value_set().
@@ -164,6 +220,21 @@ def main():
             first_fail = (int(X[idx]), int(Y[idx]), int(expected[idx]), int(got[idx]))
         rows.append((name, passed, total, status, first_fail))
 
+    # Input-derived zero forms: each must evaluate to exactly 0 for all pairs.
+    zeros = np.zeros(total, dtype=np.int32)
+    for name, fn in INPUT_ZEROS:
+        got = fn(X, Y)
+        mismatch = got != zeros
+        n_fail = int(np.count_nonzero(mismatch))
+        passed = total - n_fail
+        status = "PASS" if n_fail == 0 else "FAIL"
+        first_fail = None
+        if n_fail:
+            overall_fail = True
+            idx = int(np.argmax(mismatch))
+            first_fail = (int(X[idx]), int(Y[idx]), 0, int(got[idx]))
+        rows.append((name, passed, total, status, first_fail))
+
     # Shl family: x ranges over the full value set, n ranges over a fixed
     # shift-amount set (const-RHS only), cross-producted.
     n_vals = np.array(SHIFT_AMOUNTS, dtype=np.int32)
@@ -202,7 +273,8 @@ def main():
     else:
         print(
             f"\nRESULT: PASS — {len(rows)} identities all matched "
-            f"({len(IDENTITIES)} x {total} pairs + {len(IDENTITIES_SHL)} x {total_shl} pairs)."
+            f"({len(IDENTITIES)} x {total} pairs + {len(INPUT_ZEROS)} input-zeros x {total} pairs "
+            f"+ {len(IDENTITIES_SHL)} x {total_shl} pairs)."
         )
         sys.exit(0)
 
