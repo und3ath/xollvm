@@ -405,6 +405,14 @@ expressions consisting of linear zero-sum terms and optional nonlinear component
 | `enableLayered` | 1 | 0/1 | Enable layered MBA windowing. |
 | `layeredWindow` | 48 | 0–256 | Sliding window size for layered MBA. |
 | `layeredBudget` | 1 | 0–32 | Max layered expansions per transformed site. |
+| `inputZero` | 0 | 0/1 | Inject memory-free, input-derived nonlinear runtime zeros. |
+| `inputZeroReplace` | 0 | 0/1 | With `inputZero`, drop the noise-slot inflation and use input-derived zeros only. |
+| `inputZeroCount` | 1 | 1–8 | Input-derived zero forms emitted per site. |
+| `inputZeroWeight` | 40 | 0–100 | Probability (%) to inject input-derived zeros per site. |
+| `sle` | 0 | 0/1 | Inject SLE-pool nonlinear runtime zeros (adds per-form structural diversity). |
+| `sleReplace` | 0 | 0/1 | With `sle`, drop the noise-slot inflation and use SLE zeros only. |
+| `sleCount` | 1 | 1–8 | SLE pool forms emitted per site. |
+| `sleWeight` | 40 | 0–100 | Probability (%) to inject SLE zeros per site. |
 
 Example:
 
@@ -417,6 +425,37 @@ Before:
 
 After:
 ![MBA under HexRays](img/mba.png)
+
+#### Memory-free hardening (recommended)
+
+By default, MBA inflation leans on a per-function volatile noise slot. That slot's zero folds
+away under an analyst's own `-O2` (intra-block store-forwarding), and the plain linear terms fall
+to SMT and linear-MBA simplifiers. Two opt-in modes replace it with **memory-free, nonlinear**
+runtime zeros that survive `-O2` and resist both a general SMT solver and a dedicated linear-MBA
+simplifier:
+
+- `inputZero` — a small fixed set of input-derived, nonlinear-lifted zeros.
+- `sle` — a large, swappable pool of synthesized forms, adding per-form structural diversity.
+
+Recommended (strongest per cost):
+
+```c
+__attribute__((annotate("obf: mba(sle=1,sleReplace=1,sleCount=1)")))
+```
+
+Raise `sleCount` / `sleWeight`, or combine `inputZero` and `sle`, for more layering at higher
+runtime cost.
+
+**Regenerating the SLE pool without rebuilding.** The pool loads at runtime from the file named by
+`$XOLLVM_SLE_POOL`, falling back to a compiled-in default. Regenerate and point at it — no LLVM or
+obfuscator rebuild required:
+
+```sh
+python utils/mba_sle_gen.py --n 256 --out my_pool.txt   # mints + vets a fresh pool
+export XOLLVM_SLE_POOL=$PWD/my_pool.txt                  # next opt/clang run uses it
+```
+
+`utils/mba_sle_verify.py` re-checks that a pool file is all exact runtime zeros.
 
 ---
 
