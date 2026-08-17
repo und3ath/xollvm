@@ -75,6 +75,7 @@ def load_all() -> None:
     optional dependency and reports SKIP at run() time instead.
     """
     from . import mba_smt   # noqa: F401
+    from . import simba  # noqa: F401
     from . import cfg_recovery  # noqa: F401
     from . import string_extract  # noqa: F401
     from . import opt_survival  # noqa: F401

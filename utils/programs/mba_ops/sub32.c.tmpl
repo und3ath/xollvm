@@ -1,0 +1,13 @@
+#include <stdint.h>
+#include <stdlib.h>
+
+__attribute__((noinline, annotate("{annotation}")))
+uint32_t obf_target(uint32_t a, uint32_t b) {{
+  return a - b;
+}}
+
+int main(int argc, char **argv) {{
+  uint32_t a = (argc > 1) ? (uint32_t)strtoul(argv[1], 0, 0) : 123u;
+  uint32_t b = (argc > 2) ? (uint32_t)strtoul(argv[2], 0, 0) : 456u;
+  return (int)(obf_target(a, b) & 0xFFu);
+}}

@@ -48,8 +48,10 @@ int main(void) {{
 VARIANTS = {
     "none":              None,
     "memory_strong":     "obf: mba(prob=100,depth=2,maxSites=50,enableNonLinear=1,nonLinearWeight=80,enableLayered=1)",
-    "inputzero_augment": "obf: mba(prob=100,depth=2,maxSites=50,enableNonLinear=1,nonLinearWeight=80,enableLayered=1,inputZero=1,inputZeroWeight=100)",
     "inputzero_replace": "obf: mba(prob=100,depth=1,maxSites=50,inputZero=1,inputZeroReplace=1,inputZeroWeight=100,inputZeroCount=2)",
+    "sle_replace_c1":    "obf: mba(prob=100,depth=1,maxSites=50,sle=1,sleReplace=1,sleWeight=100,sleCount=1)",
+    "sle_replace_c2":    "obf: mba(prob=100,depth=1,maxSites=50,sle=1,sleReplace=1,sleWeight=100,sleCount=2)",
+    "sle_augment":       "obf: mba(prob=100,depth=2,maxSites=50,enableNonLinear=1,nonLinearWeight=80,enableLayered=1,sle=1,sleWeight=100,sleCount=2)",
 }
 
 

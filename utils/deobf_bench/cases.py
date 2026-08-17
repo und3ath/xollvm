@@ -67,15 +67,26 @@ _MBA_TIERS = {
     "weak":   ann_specs([pass_spec("mba", {"prob": 100, "depth": 1, "maxSites": 50})]),
     "medium": ann_specs([pass_spec("mba", {"prob": 100, "depth": 2, "maxSites": 150})]),
     "strong": ann_extra("mba_advanced"),
+    # V1/V2 memory-independent hardening: input-derived and SLE-pool nonlinear
+    # zeros. Both must hold under Z3 (and, below, under SiMBA) where the linear
+    # tiers collapse.
+    "idz":    ann_specs([pass_spec("mba", {"prob": 100, "depth": 1, "maxSites": 50,
+                                           "inputZero": 1, "inputZeroReplace": 1,
+                                           "inputZeroWeight": 100, "inputZeroCount": 2})]),
+    "sle":    ann_specs([pass_spec("mba", {"prob": 100, "depth": 1, "maxSites": 50,
+                                           "sle": 1, "sleReplace": 1,
+                                           "sleWeight": 100, "sleCount": 1})]),
 }
 
-for _op_name, _tmpl in (
+_MBA_OPS = (
     ("add32", "mba_ops.add32"),
     ("sub32", "mba_ops.sub32"),
     ("xor32", "mba_ops.xor32"),
     ("and32", "mba_ops.and32"),
     ("or32",  "mba_ops.or32"),
-):
+)
+
+for _op_name, _tmpl in _MBA_OPS:
     for _tier, _ann in _MBA_TIERS.items():
         register(BenchCase(
             name=f"mba_{_op_name}_{_tier}",
@@ -84,6 +95,33 @@ for _op_name, _tmpl in (
             attack="mba",
             annotation=_ann,
             ground_truth={"op": _op_name[:-2]},  # "add"/"sub"/"xor"/"and"/"or"
+        ))
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  Attack — SiMBA: dedicated LINEAR-MBA simplifier (attacks/simba.py). Linear
+#  tiers collapse (resilience 0); the nonlinear V1/V2 tiers are out of scope for
+#  a linear simplifier (resilience 1). This is the metric that distinguishes
+#  Z3-strong from actually-strong for linear MBA.
+# ═════════════════════════════════════════════════════════════════════════════
+
+_SIMBA_TIERS = {
+    # Explicitly-linear MBA (nonlinear/layered off) — the closest the mba pass gets
+    # to a clean linear MBA, the positive control SiMBA should recover.
+    "linear": ann_specs([pass_spec("mba", {"prob": 100, "depth": 1, "maxSites": 50,
+                                           "enableNonLinear": 0, "enableLayered": 0})]),
+    "idz":    _MBA_TIERS["idz"],    # V1 nonlinear input-derived zeros — survives
+    "sle":    _MBA_TIERS["sle"],    # V2 nonlinear SLE-pool zeros — survives
+}
+
+for _op_name, _tmpl in _MBA_OPS:
+    for _tier, _ann in _SIMBA_TIERS.items():
+        register(BenchCase(
+            name=f"simba_{_op_name}_{_tier}",
+            program=_tmpl,
+            passes=["mba"],
+            attack="simba",
+            annotation=_ann,
+            ground_truth={"op": _op_name[:-2]},
         ))
 
 
