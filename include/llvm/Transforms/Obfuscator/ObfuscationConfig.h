@@ -155,6 +155,13 @@ namespace llvm {
 		// on the input-derived zeros. Off = augment (both); on = replace (Input mode).
 		bool inputZeroReplace = false;
 		unsigned inputZeroCount = 1;   // distinct input-derived forms per fired site (1-8)
+		// SLE pool (V2): diverse nonlinear-lifted runtime zeros drawn from a
+		// swappable pool ($XOLLVM_SLE_POOL, else compiled-in fallback). Same role as
+		// input-derived zeros but with pool diversity (defeats pattern-DB tools).
+		bool enableSle = false;
+		unsigned sleWeight = 40;   // % chance per transformed site (0-100)
+		unsigned sleCount = 1;     // distinct pool forms per fired site (1-8)
+		bool sleReplace = false;   // suppress slot-based inflation (like inputZeroReplace)
 
 		static MBAConfig fromPassConfig(const PassConfig& pc);
 		bool validate() const;

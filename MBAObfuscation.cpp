@@ -348,7 +348,8 @@ namespace {
 			//                           enabled-strong build should not pay for them.
 			//   Mixed  (augment)      : both (the V1 default-on behavior).
 			const bool suppressMem =
-				PCtx.Cfg.enableInputZero && PCtx.Cfg.inputZeroReplace;
+				(PCtx.Cfg.enableInputZero && PCtx.Cfg.inputZeroReplace) ||
+				(PCtx.Cfg.enableSle && PCtx.Cfg.sleReplace);
 
 			if (!suppressMem) {
 				NewV = PCtx.MBA.inflateLinear(B, NewV, InflateDepthHint);
@@ -379,6 +380,19 @@ namespace {
 					for (unsigned t = 0; t < N; ++t) {
 						unsigned K = (unsigned)PCtx.NoiseRng.u32();
 						NewV = PCtx.MBA.addInputDerivedZero(B, *BO, NewV, K);
+					}
+				}
+			}
+
+			// SLE pool (V2): diverse nonlinear-lifted runtime zeros from the
+			// swappable pool. Same runtime-zero role as input-derived zeros, but each
+			// form is structurally unique (pattern-DB resistance).
+			if (PCtx.Cfg.enableSle) {
+				if (PCtx.NoiseRng.range(100) < PCtx.Cfg.sleWeight) {
+					unsigned N = std::max(1u, PCtx.Cfg.sleCount);
+					for (unsigned t = 0; t < N; ++t) {
+						unsigned K = (unsigned)PCtx.NoiseRng.u32();
+						NewV = PCtx.MBA.addSleZero(B, *BO, NewV, K);
 					}
 				}
 			}

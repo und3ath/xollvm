@@ -222,6 +222,25 @@ namespace llvm::obf {
 			Value* Cur, unsigned K);
 
 		// =========================================================================
+		// SLE pool (V2) — diverse nonlinear-lifted runtime zeros
+		// =========================================================================
+		// Like addInputDerivedZero, but the form is drawn from a large, swappable
+		// pool of SLE-synthesized spellings (utils/mba_sle_gen.py) rather than the 7
+		// fixed input-derived forms. Each entry is lift(f) - lift(g) where f is a
+		// random SLE spelling of a base value (x+y / x-y) and g its canonical
+		// spelling: the nonlinear lift gives anti-SiMBA / anti-Z3 strength, the SLE
+		// spelling gives per-form diversity that defeats pattern-DB deobfuscators.
+		// The pool loads at runtime from $XOLLVM_SLE_POOL (regenerable without a
+		// rebuild), falling back to a compiled-in default (MBASlePool.inc).
+
+		/// Number of entries in the active SLE pool (>= 1; the compiled-in fallback).
+		unsigned slePoolSize() const;
+
+		/// Add the @p K-th SLE pool form (folded modulo slePoolSize()), built from
+		/// @p Orig's operands, to @p Cur. Returns @p Cur unchanged if unusable.
+		Value* addSleZero(IRBuilder<>& B, BinaryOperator& Orig, Value* Cur, unsigned K);
+
+		// =========================================================================
 		// Layered MBA
 		// =========================================================================
 

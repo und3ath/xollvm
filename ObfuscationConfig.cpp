@@ -636,6 +636,18 @@ MBAConfig MBAConfig::fromPassConfig(const PassConfig& pc) {
 			cfg.inputZeroReplace = (pc.params.at("inputZeroReplace") != "0");
 		if (pc.params.count("inputZeroCount"))
 			cfg.inputZeroCount = (unsigned)std::stoul(pc.params.at("inputZeroCount"));
+
+		// SLE pool (V2)
+		if (pc.params.count("enableSle"))
+			cfg.enableSle = (pc.params.at("enableSle") != "0");
+		if (pc.params.count("sle"))
+			cfg.enableSle = (pc.params.at("sle") != "0");
+		if (pc.params.count("sleWeight"))
+			cfg.sleWeight = (unsigned)std::stoul(pc.params.at("sleWeight"));
+		if (pc.params.count("sleCount"))
+			cfg.sleCount = (unsigned)std::stoul(pc.params.at("sleCount"));
+		if (pc.params.count("sleReplace"))
+			cfg.sleReplace = (pc.params.at("sleReplace") != "0");
 	}
 	catch (const std::exception& e) {
 		errs() << "Error parsing MBA parameters: " << e.what() << "\n";
@@ -695,6 +707,14 @@ bool MBAConfig::validate() const {
 	}
 	if (inputZeroCount < 1 || inputZeroCount > 8) {
 		errs() << "MBA: Invalid inputZeroCount " << inputZeroCount << " (must be 1-8)\n";
+		return false;
+	}
+	if (sleWeight > 100) {
+		errs() << "MBA: Invalid sleWeight " << sleWeight << " (must be 0-100)\n";
+		return false;
+	}
+	if (sleCount < 1 || sleCount > 8) {
+		errs() << "MBA: Invalid sleCount " << sleCount << " (must be 1-8)\n";
 		return false;
 	}
 	return true;
