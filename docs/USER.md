@@ -395,6 +395,7 @@ expressions consisting of linear zero-sum terms and optional nonlinear component
 
 | Key | Default | Range | Meaning |
 |---|---:|---:|---|
+| `preset` | — | light\|medium\|high\|max | Knob bundle applied before explicit keys (which override it). See below. |
 | `prob` | 40 | 0–100 | Probability (%) to transform a candidate site. |
 | `maxDepth` | 3 | 1–10 | Maximum recursive depth for MBA expansion. |
 | `maxSites` | 120 | 1–5000 | Cap on number of transformed sites per function. |
@@ -425,6 +426,23 @@ Before:
 
 After:
 ![MBA under HexRays](img/mba.png)
+
+#### Presets
+
+`preset` bundles the knobs into one tier (any explicit key overrides it), the same convention as
+the `vm` pass:
+
+| Preset | What it sets | Cost | Resists |
+|---|---|---|---|
+| `light` | basic rewriting, no inflation | lowest | weak |
+| `medium` | noise-slot inflation (nonlinear + layered) — historical default | medium | SMT (fragile under `-O2`) |
+| `high` | **memory-free SLE zeros replacing the noise slot** — recommended | ~same as medium | SMT + linear-MBA, survives `-O2` |
+| `max` | noise-slot inflation + SLE + input-derived zeros stacked | highest | SMT + linear-MBA, survives `-O2` |
+
+```c
+__attribute__((annotate("obf: mba(preset=high)")))            // recommended
+__attribute__((annotate("obf: mba(preset=max, prob=60)")))    // max, but override prob
+```
 
 #### Memory-free hardening (recommended)
 

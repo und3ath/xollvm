@@ -113,6 +113,9 @@
  * mba                                                    Mixed Boolean-Arith
  *   Rewrites arithmetic/bitwise ops into equivalent MBA identities.
  *
+ *   preset  [light|medium|high|max]  knob bundle, applied before explicit keys
+ *           light  = basic rewriting; medium = noise-slot inflation (default-ish);
+ *           high   = memory-free SLE zeros (recommended); max = everything stacked
  *   prob            [0-100]  (75)   % of eligible sites rewritten
  *   depth|maxDepth  [1-10]   (?)    recursive rewrite depth
  *   maxSites        [1-5000]        cap on rewritten sites
