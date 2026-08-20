@@ -11,8 +11,13 @@
 ![Platforms](https://img.shields.io/badge/platforms-Linux%20·%20Windows%20·%20macOS-16A34A)
 ![Passes](https://img.shields.io/badge/passes-11-8B5CF6)
 ![Integration](https://img.shields.io/badge/build-static%20ext%20%2B%20.so%20plugin-F59E0B)
+[![Docs](https://img.shields.io/badge/docs-xollvm.github.io-2563EB?logo=materialformkdocs&logoColor=white)](https://xollvm.github.io)
 
-📖 [User Guide](docs/USER.md) · 🧠 [Architecture](docs/DEV.md) · ⚙️ [VM Reference](docs/VM.md) · ✅ [Tests](docs/TESTS.md)
+### 📖 [**Read the full documentation → xollvm.github.io**](https://xollvm.github.io)
+
+🚀 [Getting Started](https://xollvm.github.io/getting-started/) · 🧩 [Passes](https://xollvm.github.io/passes/) · ⚙️ [Virtualization](https://xollvm.github.io/vm/) · 🧠 [Development](https://xollvm.github.io/development/) · ✅ [Testing](https://xollvm.github.io/testing/)
+
+<sub>Docs source lives in [`docs/`](docs/) and is published to the site via MkDocs.</sub>
 
 </div>
 
