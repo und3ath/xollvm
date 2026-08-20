@@ -137,3 +137,7 @@ def main() -> int:
         shutil.rmtree(work, ignore_errors=True)
 
     return 1 if any(s.status == "FAIL" for s in scores) else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

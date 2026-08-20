@@ -113,6 +113,9 @@
  * mba                                                    Mixed Boolean-Arith
  *   Rewrites arithmetic/bitwise ops into equivalent MBA identities.
  *
+ *   preset  [light|medium|high|max]  knob bundle, applied before explicit keys
+ *           light  = basic rewriting; medium = noise-slot inflation (default-ish);
+ *           high   = memory-free SLE zeros (recommended); max = everything stacked
  *   prob            [0-100]  (75)   % of eligible sites rewritten
  *   depth|maxDepth  [1-10]   (?)    recursive rewrite depth
  *   maxSites        [1-5000]        cap on rewritten sites
@@ -123,8 +126,20 @@
  *   enableLayered   [0/1]           layered/window rewriting
  *   layeredWindow   [0-256]         window size for layered pass
  *   layeredBudget   [0-32]          layered rewrite budget
+ *   -- memory-free nonlinear zeros (survive -O2; resist SMT + linear-MBA) --
+ *   inputZero        [0/1]          input-derived nonlinear-lifted zeros
+ *   inputZeroReplace [0/1]          drop noise-slot inflation, use input zeros only
+ *   inputZeroCount   [1-8]          input-derived forms per site
+ *   inputZeroWeight  [0-100]        % chance to inject input zeros per site
+ *   sle              [0/1]          SLE-pool nonlinear zeros (per-form diversity)
+ *   sleReplace       [0/1]          drop noise-slot inflation, use SLE zeros only
+ *   sleCount         [1-8]          SLE forms per site
+ *   sleWeight        [0-100]        % chance to inject SLE zeros per site
+ *      SLE pool loads from $XOLLVM_SLE_POOL (regen: utils/mba_sle_gen.py),
+ *      else a compiled-in default. Recommended: mba(sle=1,sleReplace=1,sleCount=1)
  *
  *   e.g.  OBF("mba(prob=90, depth=3, enableNonLinear=1)")
+ *   e.g.  OBF("mba(sle=1, sleReplace=1, sleCount=1)")
  *--------------------------------------------------------------------------*/
 
 /*----------------------------------------------------------------------------

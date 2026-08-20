@@ -585,6 +585,42 @@ MBAConfig MBAConfig::fromPassConfig(const PassConfig& pc) {
 	MBAConfig cfg;
 	cfg.enable = pc.enabled;
 	try {
+		// preset=<light|medium|high|max>: shortcut bundle applied BEFORE the
+		// explicit knobs below, so any explicit param in the annotation overrides
+		// the preset (same convention as the vm pass).
+		if (pc.params.count("preset")) {
+			const std::string& P = pc.params.at("preset");
+			if (P == "light") {
+				// Cheapest: basic MBA rewriting only, no inflation.
+				cfg.prob = 40; cfg.maxDepth = 1;
+				cfg.enableNonLinear = false; cfg.enableLayered = false;
+			} else if (P == "medium") {
+				// Noise-slot inflation (nonlinear + layered) — the historical default.
+				cfg.prob = 50; cfg.maxDepth = 2;
+				cfg.enableNonLinear = true; cfg.nonLinearWeight = 20;
+				cfg.enableLayered = true;
+			} else if (P == "high") {
+				// Recommended: memory-free SLE zeros REPLACE the foldable noise-slot
+				// inflation. Strongest per cost — resists SMT and linear-MBA simplifiers,
+				// survives -O2.
+				cfg.prob = 60; cfg.maxDepth = 2;
+				cfg.enableNonLinear = false; cfg.enableLayered = false;
+				cfg.enableSle = true; cfg.sleReplace = true;
+				cfg.sleWeight = 100; cfg.sleCount = 1;
+			} else if (P == "max") {
+				// Everything stacked: noise-slot inflation + SLE (augment) + input zeros.
+				cfg.prob = 80; cfg.maxDepth = 3;
+				cfg.enableNonLinear = true; cfg.nonLinearWeight = 40;
+				cfg.enableLayered = true;
+				cfg.enableSle = true; cfg.sleReplace = false;
+				cfg.sleWeight = 100; cfg.sleCount = 2;
+				cfg.enableInputZero = true; cfg.inputZeroWeight = 100;
+				cfg.inputZeroCount = 2;
+			}
+			// Unknown preset name: silently ignored — falls through to defaults +
+			// whatever explicit knobs the annotation sets.
+		}
+
 		if (pc.params.count("prob")) {
 			cfg.prob = std::stoi(pc.params.at("prob"));
 		}
@@ -624,6 +660,30 @@ MBAConfig MBAConfig::fromPassConfig(const PassConfig& pc) {
 			cfg.layeredWindow = (unsigned)std::stoul(pc.params.at("layeredWindow"));
 		if (pc.params.count("layeredBudget"))
 			cfg.layeredBudget = (unsigned)std::stoul(pc.params.at("layeredBudget"));
+
+		// Input-derived zeros (V1)
+		if (pc.params.count("enableInputZero"))
+			cfg.enableInputZero = (pc.params.at("enableInputZero") != "0");
+		if (pc.params.count("inputZero"))
+			cfg.enableInputZero = (pc.params.at("inputZero") != "0");
+		if (pc.params.count("inputZeroWeight"))
+			cfg.inputZeroWeight = (unsigned)std::stoul(pc.params.at("inputZeroWeight"));
+		if (pc.params.count("inputZeroReplace"))
+			cfg.inputZeroReplace = (pc.params.at("inputZeroReplace") != "0");
+		if (pc.params.count("inputZeroCount"))
+			cfg.inputZeroCount = (unsigned)std::stoul(pc.params.at("inputZeroCount"));
+
+		// SLE pool (V2)
+		if (pc.params.count("enableSle"))
+			cfg.enableSle = (pc.params.at("enableSle") != "0");
+		if (pc.params.count("sle"))
+			cfg.enableSle = (pc.params.at("sle") != "0");
+		if (pc.params.count("sleWeight"))
+			cfg.sleWeight = (unsigned)std::stoul(pc.params.at("sleWeight"));
+		if (pc.params.count("sleCount"))
+			cfg.sleCount = (unsigned)std::stoul(pc.params.at("sleCount"));
+		if (pc.params.count("sleReplace"))
+			cfg.sleReplace = (pc.params.at("sleReplace") != "0");
 	}
 	catch (const std::exception& e) {
 		errs() << "Error parsing MBA parameters: " << e.what() << "\n";
@@ -676,6 +736,22 @@ bool MBAConfig::validate() const {
 		errs() << "MBA: Invalid layeredBudget " << layeredBudget << " (must be 0-32)\n";
 		return false;
 
+	}
+	if (inputZeroWeight > 100) {
+		errs() << "MBA: Invalid inputZeroWeight " << inputZeroWeight << " (must be 0-100)\n";
+		return false;
+	}
+	if (inputZeroCount < 1 || inputZeroCount > 8) {
+		errs() << "MBA: Invalid inputZeroCount " << inputZeroCount << " (must be 1-8)\n";
+		return false;
+	}
+	if (sleWeight > 100) {
+		errs() << "MBA: Invalid sleWeight " << sleWeight << " (must be 0-100)\n";
+		return false;
+	}
+	if (sleCount < 1 || sleCount > 8) {
+		errs() << "MBA: Invalid sleCount " << sleCount << " (must be 1-8)\n";
+		return false;
 	}
 	return true;
 }

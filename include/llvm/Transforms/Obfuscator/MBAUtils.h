@@ -196,6 +196,51 @@ namespace llvm::obf {
 			Value* Cur, unsigned DepthHint);
 
 		// =========================================================================
+		// Input-derived zeros (V1) — memory-free runtime zeros
+		// =========================================================================
+		// Unlike the inflation helpers above, these build a runtime zero purely from
+		// in-scope operands (X, Y) — no volatile noise slot. The value is 0 for all
+		// inputs, but the zeroness is a nonlinear-lifted MBA identity engineered to
+		// exceed an SMT solver's time budget: there is no alloca for a value-set
+		// analysis to fold, and the bitwise-inside-multiply structure does not
+		// linearize, so the solver must bit-blast the whole lift (timeout-strong).
+
+		/// Number of distinct input-derived zero forms. Forms use only the two
+		/// InstCombine-resistant MBA spellings (add-form (x^y)+2(x&y), sub-form
+		/// (x&~y)-(~x&y)) under a nonlinear lift, so they survive an attacker's -O2.
+		unsigned inputZeroPoolSize() const;
+
+		/// Build an input-derived runtime zero from @p X, @p Y. @p K selects the form
+		/// modulo inputZeroPoolSize(). Result has X's type. Returns nullptr if the
+		/// operand types are unusable (non-integer, mismatched, or width < 2).
+		Value* inputDerivedZero(IRBuilder<>& B, Value* X, Value* Y, unsigned K);
+
+		/// Add an input-derived zero (built from @p Orig's operands, form @p K) to
+		/// @p Cur. Memory-free analogue of addNonLinearZero. Returns @p Cur unchanged
+		/// if operands are unusable.
+		Value* addInputDerivedZero(IRBuilder<>& B, BinaryOperator& Orig,
+			Value* Cur, unsigned K);
+
+		// =========================================================================
+		// SLE pool (V2) — diverse nonlinear-lifted runtime zeros
+		// =========================================================================
+		// Like addInputDerivedZero, but the form is drawn from a large, swappable
+		// pool of SLE-synthesized spellings (utils/mba_sle_gen.py) rather than the 7
+		// fixed input-derived forms. Each entry is lift(f) - lift(g) where f is a
+		// random SLE spelling of a base value (x+y / x-y) and g its canonical
+		// spelling: the nonlinear lift gives anti-SiMBA / anti-Z3 strength, the SLE
+		// spelling gives per-form diversity that defeats pattern-DB deobfuscators.
+		// The pool loads at runtime from $XOLLVM_SLE_POOL (regenerable without a
+		// rebuild), falling back to a compiled-in default (MBASlePool.inc).
+
+		/// Number of entries in the active SLE pool (>= 1; the compiled-in fallback).
+		unsigned slePoolSize() const;
+
+		/// Add the @p K-th SLE pool form (folded modulo slePoolSize()), built from
+		/// @p Orig's operands, to @p Cur. Returns @p Cur unchanged if unusable.
+		Value* addSleZero(IRBuilder<>& B, BinaryOperator& Orig, Value* Cur, unsigned K);
+
+		// =========================================================================
 		// Layered MBA
 		// =========================================================================
 
