@@ -43,6 +43,16 @@ CLAUDE.md
 .vscode/
 *.user
 
+# Throwaway dev scratch — prototype demos, PoCs, perf probes.
+# Keep these in the scratchpad, never track them. Underscore-prefixed
+# package modules (_common.py, _ir.py, __init__.py) are NOT scratch.
+**/_*_demo.py
+**/_*_perf.py
+**/_*_poc.py
+**/_v[0-9]*_*.py
+**/*_scratch.py
+**/*_playground.py
+
 # Private planning docs (never commit)
 .claude/
 docs/VM_GAP_ANALYSIS.md
