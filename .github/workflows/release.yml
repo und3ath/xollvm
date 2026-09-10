@@ -4,7 +4,8 @@ name: Release (manual)
 #   * toolchain  — builds stock LLVM + clang/opt with the obfuscator linked in
 #                  statically (LLVM_EXTERNAL_PROJECTS extension), for Linux and
 #                  Windows, with the cross-arch backends. The big (~1GB+) bundle.
-#   * plugin     — builds the loadable Obfuscator.so (-fpass-plugin) for Linux.
+#   * plugin       — loadable Obfuscator.so (-fpass-plugin) for Linux.
+#   * plugin-macos — loadable Obfuscator.dylib (-fpass-plugin) for macOS arm64.
 #   * release    — attaches all artifacts to a DRAFT release for manual review.
 on:
   workflow_dispatch:
@@ -304,11 +305,58 @@ jobs:
           if-no-files-found: error
 
   # ==========================================================================
+  # Loadable plugin: Obfuscator.dylib (-fpass-plugin), macOS arm64.
+  # ==========================================================================
+  plugin-macos:
+    name: plugin / macos
+    runs-on: macos-14
+    steps:
+      - name: Checkout xollvm
+        uses: actions/checkout@v4
+
+      - name: Install LLVM 22 + ninja
+        run: brew install llvm@22 ninja
+
+      - name: Build Obfuscator plugin
+        run: |
+          LLVM_PREFIX=$(brew --prefix llvm@22)
+          cmake -S . -B build -G Ninja \
+            -DLLVM_DIR="$LLVM_PREFIX/lib/cmake/llvm" \
+            -DCMAKE_C_COMPILER="$LLVM_PREFIX/bin/clang" \
+            -DCMAKE_CXX_COMPILER="$LLVM_PREFIX/bin/clang++" \
+            -DCMAKE_BUILD_TYPE=Release
+          ninja -C build Obfuscator
+          # add_llvm_pass_plugin emits a MODULE lib; suffix is .so or .dylib
+          # depending on toolchain, so locate it instead of hardcoding.
+          PLUGIN=$(ls build/Obfuscator.dylib build/Obfuscator.so 2>/dev/null | head -n1)
+          cp "$PLUGIN" Obfuscator-macos-arm64.dylib
+
+      - name: Smoke test plugin
+        run: |
+          LLVM_PREFIX=$(brew --prefix llvm@22)
+          cat > ann.c <<'EOF'
+          #define OBF(spec) __attribute__((annotate("obf: " spec)))
+          OBF("mba, bcf, split")
+          int secret(int x){ int a=x*3+7; for(int i=0;i<x;i++) a+=(i^a); return a; }
+          EOF
+          "$LLVM_PREFIX/bin/clang" -O0 -emit-llvm -S ann.c -o ann.ll
+          "$LLVM_PREFIX/bin/opt" -load-pass-plugin=./Obfuscator-macos-arm64.dylib -passes=obfuscation ann.ll -S -o ann_obf.ll
+          "$LLVM_PREFIX/bin/opt" -passes=verify ann_obf.ll -disable-output
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: xollvm-plugin-macos
+          path: Obfuscator-macos-arm64.dylib
+          retention-days: 14
+          if-no-files-found: error
+
+  # ==========================================================================
   # Draft release with all artifacts (manual review before publishing).
   # ==========================================================================
   release:
     name: Draft release
-    needs: [toolchain, plugin]
+    needs: [toolchain, plugin, plugin-macos]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -339,6 +387,7 @@ jobs:
             | `xollvm-linux-Release.tar.zst` | clang/opt with obfuscator built in | Linux x86_64 |
             | `xollvm-windows-Release.7z` | clang/opt with obfuscator built in | Windows x64 |
             | `Obfuscator-linux-x64.so` | loadable `-fpass-plugin` | Linux x86_64 |
+            | `Obfuscator-macos-arm64.dylib` | loadable `-fpass-plugin` | macOS arm64 |
 
             ### Cross-compilation backends
             `-DLLVM_TARGETS_TO_BUILD="X86;AArch64;ARM;RISCV"` — X86, AArch64, ARM, RISC-V.
