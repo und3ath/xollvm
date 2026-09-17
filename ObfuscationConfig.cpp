@@ -827,15 +827,20 @@ StringEncryptionConfig::fromPassConfig(const PassConfig& pc) {
 			}
 		}
 
-		// aes=0|1  � enable/disable AES-CTR (default: 1)
-		if (pc.params.count("aes"))
+		// aes=0|1  � enable/disable AES-CTR. The explicit aes= knob opts out of the
+		// chacha default entirely: aes=1 selects AES, aes=0 selects the XOR fallback.
+		// cipher= below still overrides (it is parsed later).
+		if (pc.params.count("aes")) {
 			cfg.useAES = (pc.params.at("aes") != "0");
+			cfg.useChaCha = false;
+		}
 
 		// keysplit=0|1  � split key across segments (default: 1)
 		if (pc.params.count("keysplit"))
 			cfg.keySplit = (pc.params.at("keysplit") != "0");
 
-		// cipher=chacha|aes|xor  (default: aes/legacy). chacha -> tableless path.
+		// cipher=chacha|aes|xor  (default: chacha, tableless). aes -> AES-128-CTR;
+		// xor -> legacy single-byte fallback.
 		if (pc.params.count("cipher")) {
 			const std::string& v = pc.params.at("cipher");
 			if (v == "chacha")   { cfg.useChaCha = true;  cfg.useAES = true;  }
