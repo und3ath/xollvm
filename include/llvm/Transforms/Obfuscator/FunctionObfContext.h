@@ -45,8 +45,8 @@ namespace llvm {
 		bool HasCleanupPad = false;
 		bool HasCatchPad = false;
 
-		uint32_t StateXorKey;
-		uint32_t StateAddKey;
+		uint32_t StateXorKey = 0;
+		uint32_t StateAddKey = 0;
 
 		bool Debug = false;
 
