@@ -181,14 +181,15 @@ namespace llvm {
 		bool enable = false;
 		int  minLength = 4;          // minimum string length to encrypt (1–100)
 		// ── AES-CTR options ──────────────────────────────────────────────────────
-		bool useAES = true;        // true  → AES-128-CTR (default)
+		bool useAES = true;        // true  → AES-128-CTR
 		// false → legacy single-byte XOR fallback
 		bool keySplit = true;        // true  → split 176-byte key schedule across
 		//         data segment + code segment (stores)
 		// false → store all 176 bytes in data only
 		//         (simpler, weaker)
-		bool useChaCha = false;      // true → ChaCha20 (tableless). Takes precedence
-		                             // over useAES in dispatch. Opt-in via cipher=chacha.
+		bool useChaCha = true;       // true → ChaCha20 (tableless, default). Takes
+		                             // precedence over useAES in dispatch. Opt out
+		                             // with cipher=aes; cipher=xor for the fallback.
 		// Passes to apply to the linked stub functions.
 		// Populated from a sibling strenc_stub(...) annotation token.
 		ObfuscationConfig stubPasses;

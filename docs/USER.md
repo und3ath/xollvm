@@ -772,10 +772,11 @@ them at process load time.
 
 Three ciphers are available via the `cipher` key:
 
-- **`aes`** *(default)* — AES-128-CTR. Uses the shared `__obf_aes_ctr_decrypt` runtime
-  (the same stub the `vm` pass links when it encrypts bytecode).
-- **`chacha`** — ChaCha20 (tableless: 256-bit key + 96-bit nonce, no AES S-box tables in the
-  binary). Takes precedence over `aes` when both are requested.
+- **`chacha`** *(default)* — ChaCha20 (tableless: 256-bit key + 96-bit nonce, no AES S-box
+  tables in the binary, and the key is stored masked). Takes precedence over `aes` when both
+  are requested.
+- **`aes`** — AES-128-CTR. Uses the shared `__obf_aes_ctr_decrypt` runtime (the same stub the
+  `vm` pass links when it encrypts bytecode).
 - **`xor`** — legacy XOR keystream. Weakest; kept as a lightweight fallback.
 
 Enabled when at least one annotated function includes `strenc(...)` anywhere in the module.
@@ -785,19 +786,19 @@ cipher (or `keysplit`), it is applied to every encrypted string in the module.
 | Key | Default | Range | Meaning |
 |---|---:|---:|---|
 | `minlen` / `minLength` / `min` | 4 | 1–100 | Minimum string length to encrypt. |
-| `cipher` | `aes` | `aes`/`chacha`/`xor` | Cipher selection (see above). `chacha` wins over `aes`. |
-| `aes` | 1 | 0/1 | Shorthand toggle for the AES path. `aes=0` falls back to the XOR keystream (unless `cipher=chacha`). |
+| `cipher` | `chacha` | `aes`/`chacha`/`xor` | Cipher selection (see above). `chacha` is the default and wins over `aes`. |
+| `aes` | 1 | 0/1 | Shorthand toggle for the AES path. Explicit `aes=1` selects AES over the `chacha` default; `cipher=` still overrides. |
 | `keysplit` | 1 | 0/1 | AES path only — split the 176-byte AES round-key schedule across module segments so the full key never appears contiguously. |
 
 Example:
 
 ```c
-// Default AES-128-CTR
+// Default ChaCha20, tableless (no AES tables in the binary)
 __attribute__((annotate("obf: strenc(minlen=6)")))
 void init(void) { puts("confidential string"); }
 
-// ChaCha20, tableless (no AES tables in the binary)
-__attribute__((annotate("obf: strenc(minlen=4,cipher=chacha)")))
+// Opt into AES-128-CTR
+__attribute__((annotate("obf: strenc(minlen=4,cipher=aes)")))
 void init2(void) { puts("another secret"); }
 ```
 
