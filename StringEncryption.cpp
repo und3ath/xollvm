@@ -18,6 +18,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/Metadata.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/IRBuilder.h"
@@ -568,10 +569,9 @@ namespace {
             }
         }
 
-        // Mark all strenc-private globals the same way.
+        // Mark all pass-created (owned) globals the same way.
         for (GlobalVariable& GV : M.globals()) {
-            StringRef Sec = GV.hasSection() ? GV.getSection() : StringRef();
-            if (Sec.starts_with(".strenc"))
+            if (GV.getMetadata("obf.owned.se"))
                 GV.setVisibility(GlobalValue::HiddenVisibility);
         }
     }
@@ -592,9 +592,9 @@ namespace {
             M, Ty, /*isConstant=*/true,
             GlobalValue::PrivateLinkage,
             ConstantArray::get(Ty, Bytes),
-            ".strenc.kd");
+            "");  // unnamed: no self-describing symbol in the binary
 
-        GV->setSection(".strenc.kd");
+        GV->setMetadata("obf.owned.se", MDNode::get(C, {}));
         GV->setAlignment(Align(16));
         GV->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
         return GV;
@@ -658,7 +658,6 @@ namespace {
 
         F->setLinkage(GlobalValue::PrivateLinkage);
         F->addFnAttr(Attribute::NoUnwind);
-        F->setSection(".strenc.kt");
         F->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
 
         Argument* OutArg = F->getArg(0);
@@ -701,8 +700,9 @@ namespace {
         auto* CDA = dyn_cast<ConstantDataArray>(GV.getInitializer());
         if (!CDA || !CDA->isCString()) return false;
 
-        // Skip stub-owned globals (section starts with ".strenc")
-        if (GV.hasSection() && GV.getSection().starts_with(".strenc"))
+        // Skip our own pass-created globals (marked with owned metadata,
+        // which is dropped at codegen so it never reaches the binary).
+        if (GV.getMetadata("obf.owned.se"))
             return false;
 
         StringRef S = CDA->getAsCString();
@@ -734,14 +734,13 @@ namespace {
             Bytes.push_back(ConstantInt::get(Type::getInt8Ty(C), c));
         Bytes.push_back(ConstantInt::get(Type::getInt8Ty(C), 0)); // null terminator
 
-        std::string Name = ".strenc.ct." + std::to_string(idx);
         GlobalVariable* GV = new GlobalVariable(
             M, Ty, /*isConstant=*/true,
             GlobalValue::PrivateLinkage,
             ConstantArray::get(Ty, Bytes),
-            Name);
+            "");
 
-        GV->setSection(".strenc.ct");
+        GV->setMetadata("obf.owned.se", MDNode::get(C, {}));
         GV->setAlignment(Align(1));
         GV->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
         return GV;
@@ -759,14 +758,13 @@ namespace {
             Bytes.push_back(ConstantInt::get(Type::getInt8Ty(C),
                 (uint8_t)((nonce >> (8 * i)) & 0xFF)));
 
-        std::string Name = ".strenc.nonce." + std::to_string(idx);
         GlobalVariable* GV = new GlobalVariable(
             M, Ty, /*isConstant=*/true,
             GlobalValue::PrivateLinkage,
             ConstantArray::get(Ty, Bytes),
-            Name);
+            "");
 
-        GV->setSection(".strenc.n");
+        GV->setMetadata("obf.owned.se", MDNode::get(C, {}));
         GV->setAlignment(Align(8));
         GV->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
         return GV;
@@ -783,14 +781,13 @@ namespace {
         for (int i = 0; i < 12; i++)
             Bytes.push_back(ConstantInt::get(Type::getInt8Ty(C), nonce12[i]));
 
-        std::string Name = ".strenc.nc12." + std::to_string(idx);
         GlobalVariable* GV = new GlobalVariable(
             M, Ty, /*isConstant=*/true,
             GlobalValue::PrivateLinkage,
             ConstantArray::get(Ty, Bytes),
-            Name);
+            "");
 
-        GV->setSection(".strenc.n");
+        GV->setMetadata("obf.owned.se", MDNode::get(C, {}));
         GV->setAlignment(Align(8));
         GV->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
         return GV;
@@ -1161,8 +1158,8 @@ namespace {
                     M, KeyTy, /*isConstant=*/true,
                     GlobalValue::PrivateLinkage,
                     ConstantArray::get(KeyTy, KeyBytes),
-                    ".strenc.ck");
-                Ctx.ChaChaKeyGV->setSection(".strenc.ck");
+                    "");
+                Ctx.ChaChaKeyGV->setMetadata("obf.owned.se", MDNode::get(C, {}));
                 Ctx.ChaChaKeyGV->setAlignment(Align(16));
                 Ctx.ChaChaKeyGV->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
             }
