@@ -12,6 +12,8 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Bitcode/BitcodeReader.h"
@@ -893,10 +895,16 @@ namespace {
             // Derive per-string nonce (FNV-64 of index + content)
             uint64_t Nonce = fnv64_nonce(Cand.Index, Plain);
 
+            // Serialize the nonce little-endian to match createNonceGlobal()'s
+            // byte layout and the runtime decrypt on any host (not host-endian).
+            uint8_t NonceLE[8];
+            for (int i = 0; i < 8; i++)
+                NonceLE[i] = (uint8_t)((Nonce >> (8 * i)) & 0xFF);
+
             // Encrypt offline
             std::string Cipher = Plain;
             aes128_ctr(Ctx.ExpandedKeys,
-                reinterpret_cast<const uint8_t*>(&Nonce),
+                NonceLE,
                 reinterpret_cast<uint8_t*>(Cipher.data()),
                 Cipher.size());
 
@@ -909,10 +917,17 @@ namespace {
             const uint64_t CtBytes = CtTy->getNumElements();  // plaintext len + 1
 
             // Find all functions that use this string global
-            std::set<Function*> Users;
+            llvm::SmallPtrSet<Function*, 16> Seen;
+            llvm::SmallVector<Function*, 16> Users;
             for (User* U : GV->users())
-                if (auto* I = dyn_cast<Instruction>(U))
-                    Users.insert(I->getFunction());
+                if (auto* I = dyn_cast<Instruction>(U)) {
+                    Function* UF = I->getFunction();
+                    if (UF && Seen.insert(UF).second)
+                        Users.push_back(UF);
+                }
+            llvm::sort(Users, [](Function* A, Function* B) {
+                return A->getName() < B->getName();
+            });
 
             // inject decryption at each using function's entry ──────
             for (Function* F : Users) {
@@ -1157,10 +1172,17 @@ namespace {
             const uint64_t CtBytes = CtTy->getNumElements();  // plaintext len + 1
 
             // Find all functions that use this string global
-            std::set<Function*> Users;
+            llvm::SmallPtrSet<Function*, 16> Seen;
+            llvm::SmallVector<Function*, 16> Users;
             for (User* U : GV->users())
-                if (auto* I = dyn_cast<Instruction>(U))
-                    Users.insert(I->getFunction());
+                if (auto* I = dyn_cast<Instruction>(U)) {
+                    Function* UF = I->getFunction();
+                    if (UF && Seen.insert(UF).second)
+                        Users.push_back(UF);
+                }
+            llvm::sort(Users, [](Function* A, Function* B) {
+                return A->getName() < B->getName();
+            });
 
             for (Function* F : Users) {
                 if (!F || F->isDeclaration()) continue;
@@ -1525,10 +1547,17 @@ namespace {
                 ".enc_str");
             EncGV->setAlignment(Align(1));
 
-            std::set<Function*> Users;
+            llvm::SmallPtrSet<Function*, 16> Seen;
+            llvm::SmallVector<Function*, 16> Users;
             for (User* U : GV->users())
-                if (auto* I = dyn_cast<Instruction>(U))
-                    Users.insert(I->getFunction());
+                if (auto* I = dyn_cast<Instruction>(U)) {
+                    Function* UF = I->getFunction();
+                    if (UF && Seen.insert(UF).second)
+                        Users.push_back(UF);
+                }
+            llvm::sort(Users, [](Function* A, Function* B) {
+                return A->getName() < B->getName();
+            });
 
             for (Function* F : Users) {
                 if (!F || F->isDeclaration()) continue;

@@ -283,6 +283,9 @@ PreservedAnalyses AntiDecompilerPass::run(Function& F,
 	unsigned TotalApplied = 0;
 	const unsigned Total = Cfg.maxSites;
 
+	unsigned InstsBefore = 0;
+	for (BasicBlock& BB : F) InstsBefore += (unsigned)BB.size();
+
 	for (auto& Tech : Registry) {
 		if (!Tech->isEnabled(Cfg))
 			continue;
@@ -298,9 +301,14 @@ PreservedAnalyses AntiDecompilerPass::run(Function& F,
 		TotalApplied += N;
 	}
 
-	// stackPollution is in the registry but reports 0 work; the original
-	// driver always counted it as "Changed". Mirror that.
-	Changed = true;
+	// Some techniques (e.g. stackPollution) can add IR while reporting 0
+	// applied sites; fall back to an instruction-count delta so Changed stays
+	// truthful instead of unconditionally forcing it.
+	if (!Changed) {
+		unsigned InstsAfter = 0;
+		for (BasicBlock& BB : F) InstsAfter += (unsigned)BB.size();
+		if (InstsAfter != InstsBefore) Changed = true;
+	}
 
 	if (ObfVerbose)
 		errs() << "[adec] " << F.getName()

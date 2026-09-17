@@ -1,5 +1,7 @@
 #include "llvm/Transforms/Obfuscator/ObfMetrics.h"
 
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Function.h"
@@ -139,7 +141,13 @@ namespace {
 } // namespace
 
 PreservedAnalyses ObfMetricsPass::run(Module& M, ModuleAnalysisManager&) {
-	for (Function& F : M) {
+	// Sort by name for reproducible output (module order is link-order dependent).
+	SmallVector<Function*, 64> Fns;
+	for (Function& F : M) Fns.push_back(&F);
+	llvm::sort(Fns, [](Function* A, Function* B) { return A->getName() < B->getName(); });
+
+	for (Function* FP : Fns) {
+		Function& F = *FP;
 		if (F.isDeclaration() && !ObfMetricsIncludeDeclarations)
 			continue;
 		if (!ObfMetricsFunction.empty() && F.getName() != ObfMetricsFunction)

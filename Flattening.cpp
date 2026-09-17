@@ -1593,5 +1593,8 @@ PreservedAnalyses FlatteningPass::run(Function& F, FunctionAnalysisManager& AM) 
 	}
 
 	llvm::obf::recordObfPassSkip(Ctx.FOC, "flattening", "flatten_failed");
-	return LowerPA;
+	// flattenFunction() always runs demoteForCFGChange (promoting back on
+	// failure), replacing Value identities even when flattening bails — so we
+	// cannot claim all()/LowerPA here.
+	return PreservedAnalyses::none();
 }
