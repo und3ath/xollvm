@@ -41,10 +41,15 @@ def strenc_key_providers(obf_ir: str) -> Optional[str]:
 
 @register("strenc_keysplit_sections")
 def strenc_keysplit_sections(obf_ir: str) -> Optional[str]:
-    missing = [sec for sec in (".strenc.kd", ".strenc.kt")
-               if sec not in obf_ir]
+    # Keysplit no longer relies on labeled sections: the split is the data half
+    # (__aes_key_a memcpy from an unnamed global) plus the code half
+    # (__aes_key_b individual stores). Also assert the de-labeling invariant —
+    # no self-describing ".strenc" section/symbol names leak into the IR.
+    missing = [fn for fn in ("__aes_key_a", "__aes_key_b") if fn not in obf_ir]
     if missing:
-        return f"key-split section(s) missing from IR: {', '.join(missing)}"
+        return f"key-split provider(s) missing from IR: {', '.join(missing)}"
+    if ".strenc" in obf_ir:
+        return "de-label regression: '.strenc' section/symbol label leaked into IR"
     return None
 
 
