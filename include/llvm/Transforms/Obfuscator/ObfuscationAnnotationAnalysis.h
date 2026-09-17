@@ -73,11 +73,14 @@ namespace llvm {
 
 
 	inline const ObfuscationAnnotationCache& getObfCache(Function& F, FunctionAnalysisManager& FAM) {
+		static const ObfuscationAnnotationCache Empty;
 		auto& MAMProxy = FAM.getResult<ModuleAnalysisManagerFunctionProxy>(F);
 		auto* Cache =
 			MAMProxy.getCachedResult<ObfuscationAnnotationAnalysis>(*F.getParent());
 		assert(Cache &&
 			"ObfuscationAnnotationAnalysis must be computed at module level");
-		return *Cache;
+		// In a Release/NDEBUG build the assert compiles out; fall back to an
+		// empty cache instead of dereferencing null on pass-manager misordering.
+		return Cache ? *Cache : Empty;
 	}
 } // namespace llvm 

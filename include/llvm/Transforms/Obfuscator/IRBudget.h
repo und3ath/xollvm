@@ -168,12 +168,17 @@ namespace llvm::obf {
 		/// skip, with the given reason. Used by the driver when a pass
 		/// self-reports a skip via FunctionObfContext::PassSkipReasons after
 		/// already being recorded as started. No-op if no records exist.
-		void markLastRecordSkipped(StringRef Reason) {
+		void markLastRecordSkipped(StringRef Reason, unsigned CurrentInsts = 0) {
 			if (Records.empty())
 				return;
 			Records.back().Skipped = true;
 			Records.back().SkipReason = Reason.str();
 			Records.back().Changed = false;
+			// Refresh the post-pass count: a pass may have mutated IR before
+			// self-reporting a skip, so InstsAfter must reflect real growth
+			// (0 = caller has no fresh count, leave the recorded value).
+			if (CurrentInsts)
+				Records.back().InstsAfter = CurrentInsts;
 		}
 
 

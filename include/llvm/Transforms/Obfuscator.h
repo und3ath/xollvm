@@ -431,7 +431,8 @@ namespace llvm {
 					auto& FOC3 = *FAM.getResult<FunctionObfContextAnalysis>(F);
 					auto It = FOC3.PassSkipReasons.find(Entry.Name);
 					if (It != FOC3.PassSkipReasons.end() && !It->second.empty()) {
-						Budget.markLastRecordSkipped(It->second);
+						Budget.markLastRecordSkipped(It->second,
+							llvm::obf::countInstructions(F));
 						if (ObfVerbose)
 							errs() << "[skip] " << F.getName() << ": " << Entry.Name
 							       << ": " << It->second << "\n";
