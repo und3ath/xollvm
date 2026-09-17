@@ -42,7 +42,7 @@ namespace {
 		static bool hasMustTailCall(BasicBlock* BB);
 		static bool canSplitAt(Instruction* I);
 		static void shuffle(std::vector<int>& vec, llvm::obf::Rng& R);
-		static void doSplit(Function& F, int split_num, llvm::obf::Rng& ShuffleRng);
+		static bool doSplit(Function& F, int split_num, llvm::obf::Rng& ShuffleRng);
 	};
 
 
@@ -149,7 +149,7 @@ namespace {
 		}
 	}
 
-	void SplitImpl::doSplit(Function& F, int split_num, llvm::obf::Rng& ShuffleRng)
+	bool SplitImpl::doSplit(Function& F, int split_num, llvm::obf::Rng& ShuffleRng)
 	{
 
 		// Phase2: budgets and safety gates
@@ -271,6 +271,7 @@ namespace {
 					break;
 			}
 		}
+		return TotalSplits > 0;
 	}
 } // namespace
 
@@ -309,6 +310,8 @@ PreservedAnalyses SplitBasicBlockPass::run(Function& F, FunctionAnalysisManager&
 		return PreservedAnalyses::all();
 	}
 
-	SplitImpl::doSplit(F, Ctx.Cfg.num, Ctx.ShuffleRng);
+	bool Changed = SplitImpl::doSplit(F, Ctx.Cfg.num, Ctx.ShuffleRng);
+	if (!Changed)
+		return PreservedAnalyses::all();
 	return PreservedAnalyses::none();
 }
