@@ -893,10 +893,16 @@ namespace {
             // Derive per-string nonce (FNV-64 of index + content)
             uint64_t Nonce = fnv64_nonce(Cand.Index, Plain);
 
+            // Serialize the nonce little-endian to match createNonceGlobal()'s
+            // byte layout and the runtime decrypt on any host (not host-endian).
+            uint8_t NonceLE[8];
+            for (int i = 0; i < 8; i++)
+                NonceLE[i] = (uint8_t)((Nonce >> (8 * i)) & 0xFF);
+
             // Encrypt offline
             std::string Cipher = Plain;
             aes128_ctr(Ctx.ExpandedKeys,
-                reinterpret_cast<const uint8_t*>(&Nonce),
+                NonceLE,
                 reinterpret_cast<uint8_t*>(Cipher.data()),
                 Cipher.size());
 
