@@ -12,6 +12,8 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Bitcode/BitcodeReader.h"
@@ -915,10 +917,17 @@ namespace {
             const uint64_t CtBytes = CtTy->getNumElements();  // plaintext len + 1
 
             // Find all functions that use this string global
-            std::set<Function*> Users;
+            llvm::SmallPtrSet<Function*, 16> Seen;
+            llvm::SmallVector<Function*, 16> Users;
             for (User* U : GV->users())
-                if (auto* I = dyn_cast<Instruction>(U))
-                    Users.insert(I->getFunction());
+                if (auto* I = dyn_cast<Instruction>(U)) {
+                    Function* UF = I->getFunction();
+                    if (UF && Seen.insert(UF).second)
+                        Users.push_back(UF);
+                }
+            llvm::sort(Users, [](Function* A, Function* B) {
+                return A->getName() < B->getName();
+            });
 
             // inject decryption at each using function's entry ──────
             for (Function* F : Users) {
@@ -1163,10 +1172,17 @@ namespace {
             const uint64_t CtBytes = CtTy->getNumElements();  // plaintext len + 1
 
             // Find all functions that use this string global
-            std::set<Function*> Users;
+            llvm::SmallPtrSet<Function*, 16> Seen;
+            llvm::SmallVector<Function*, 16> Users;
             for (User* U : GV->users())
-                if (auto* I = dyn_cast<Instruction>(U))
-                    Users.insert(I->getFunction());
+                if (auto* I = dyn_cast<Instruction>(U)) {
+                    Function* UF = I->getFunction();
+                    if (UF && Seen.insert(UF).second)
+                        Users.push_back(UF);
+                }
+            llvm::sort(Users, [](Function* A, Function* B) {
+                return A->getName() < B->getName();
+            });
 
             for (Function* F : Users) {
                 if (!F || F->isDeclaration()) continue;
@@ -1531,10 +1547,17 @@ namespace {
                 ".enc_str");
             EncGV->setAlignment(Align(1));
 
-            std::set<Function*> Users;
+            llvm::SmallPtrSet<Function*, 16> Seen;
+            llvm::SmallVector<Function*, 16> Users;
             for (User* U : GV->users())
-                if (auto* I = dyn_cast<Instruction>(U))
-                    Users.insert(I->getFunction());
+                if (auto* I = dyn_cast<Instruction>(U)) {
+                    Function* UF = I->getFunction();
+                    if (UF && Seen.insert(UF).second)
+                        Users.push_back(UF);
+                }
+            llvm::sort(Users, [](Function* A, Function* B) {
+                return A->getName() < B->getName();
+            });
 
             for (Function* F : Users) {
                 if (!F || F->isDeclaration()) continue;
