@@ -19,13 +19,13 @@ static uint64_t computeModuleSeed(const Module& M) {
 	if (ObfDeterministic) {
 		return llvm::obf::mix64(llvm::obf::fnv1a64(M.getModuleIdentifier()) ^ 0xD1B54A32D192ED03ull);
 	}
-	// Non-deterministic: OS entropy
+	// Non-deterministic: OS entropy, mixed full-width so no draw's high bits
+	// are discarded (the old shift-and-xor kept only ~16 bits of three draws).
 	std::random_device rd;
-	uint64_t a = (uint64_t)rd();
-	uint64_t b = (uint64_t)rd();
-	uint64_t c = (uint64_t)rd();
-	uint64_t d = (uint64_t)rd();
-	return (a << 48) ^ (b << 32) ^ (c << 16) ^ d;
+	auto draw64 = [&] { return ((uint64_t)rd() << 32) | (uint64_t)rd(); };
+	uint64_t s = llvm::obf::mix64(draw64());
+	s = llvm::obf::mix64(s ^ draw64());
+	return s;
 }
 
 
