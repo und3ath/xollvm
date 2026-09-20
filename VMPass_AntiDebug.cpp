@@ -274,6 +274,14 @@ void VMImpl::buildAntiDebugGate(VMEngine::SharedState* SS) {
 	IRBuilder<> EntB(SS->Entry->getTerminator());
 	AllocaInst* CtrA = EntB.CreateAlloca(I32Ty, nullptr, "vm.ad.ctr");
 	EntB.CreateStore(EntB.getInt32(0), CtrA)->setVolatile(true);
+	// Consecutive-slow debounce counter for the RDTSC timing check (see the
+	// timing gate below). A real debugger single-steps every gate fire, so the
+	// count climbs to kDebounce and stays; an isolated scheduling/interrupt
+	// spike between the two reads is reset by the next (fast) fire. This kills
+	// the load-dependent false-poison flake the old one-slow-reading-poisons
+	// design had (matches the handler spot-check debounce in hardenVMEngine()).
+	AllocaInst* SlowCntA = EntB.CreateAlloca(I32Ty, nullptr, "vm.ad.slowcnt");
+	EntB.CreateStore(EntB.getInt32(0), SlowCntA)->setVolatile(true);
 
 	//  Create new basic blocks 
 	BasicBlock* CountBB = BasicBlock::Create(Ctx, "vm.ad.count", EF);
@@ -341,7 +349,22 @@ void VMImpl::buildAntiDebugGate(VMEngine::SharedState* SS) {
 			// threshold from config
 			auto* Slow = B.CreateICmpUGT(Delta,
 				B.getInt64((uint64_t)Cfg.adDispatchThreshold), "vm.ad.slow");
-			Detected = B.CreateOr(Detected, Slow, "vm.ad.det.time");
+
+			// Debounce: only treat the timing check as a detection after
+			// kDebounce consecutive slow fires. slow ? cnt+1 : 0 (branchless);
+			// a lone spike (context switch / interrupt landing between the two
+			// reads) is cleared by the next fast fire and never poisons the
+			// salt. A debugger keeps every fire slow, so cnt reaches kDebounce.
+			const unsigned kDebounce = 3;
+			auto* OldSlowCnt = B.CreateLoad(I32Ty, SlowCntA, "vm.ad.scnt.o");
+			cast<LoadInst>(OldSlowCnt)->setVolatile(true);
+			Value* IncSlow = B.CreateAdd(OldSlowCnt, B.getInt32(1), "vm.ad.scnt.i");
+			Value* NewSlowCnt = B.CreateSelect(Slow, IncSlow, B.getInt32(0),
+				"vm.ad.scnt.n");
+			B.CreateStore(NewSlowCnt, SlowCntA)->setVolatile(true);
+			Value* TimingDet = B.CreateICmpUGE(NewSlowCnt,
+				B.getInt32(kDebounce), "vm.ad.time.det");
+			Detected = B.CreateOr(Detected, TimingDet, "vm.ad.det.time");
 		}
 
 		//  Windows: IsDebuggerPresent()
