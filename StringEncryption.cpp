@@ -693,6 +693,10 @@ namespace {
 
     bool StrEncImpl::shouldEncrypt(GlobalVariable& GV, int minLength) {
         if (!GV.hasInitializer() || !GV.isConstant()) return false;
+        // Explicit sections can hold linker/toolchain metadata, not runtime strings.
+        // In particular, Emscripten extracts em_asm/em_js source at link time and
+        // requires the original contents and addresses to remain intact.
+        if (GV.hasSection()) return false;
         // Never rewrite/erase a symbol another TU may link against. isDiscardableIfUnused()
         // covers private/internal AND linkonce_odr (how clang-cl emits string literals on
         // Windows) while still excluding external/weak ABI symbols.
