@@ -4,10 +4,14 @@
 #include "llvm/Transforms/Obfuscator/ObfuscationConfig.h"
 #include "llvm/Transforms/Obfuscator/ObfuscationOptions.h"
 #include "llvm/Transforms/Obfuscator/Rng.h"
+#include "llvm/Support/CommandLine.h"
 #include <random>
 
 
 using namespace llvm;
+static cl::opt<std::string> ObfAll(
+    "obf-all", cl::desc("Override annotations with this pass specification for every defined function"),
+    cl::init(""));
 AnalysisKey ObfuscationAnnotationAnalysis::Key;
 uint64_t ObfuscationAnnotationCache::getFunctionSeed(const Function& F) const {
 	// Stable across runs if ModuleSeed is stable.
@@ -44,11 +48,14 @@ ObfuscationAnnotationAnalysis::run(Module& M, ModuleAnalysisManager& MAM) {
 		Out.AnnotationsInit = nullptr;
 	}
 
+	ObfuscationConfig GlobalConfig;
+	if (!ObfAll.empty())
+		GlobalConfig = AnnotationParser::parseAnnotationString("obf: " + ObfAll.getValue());
 	for (Function& F : M) {
 		if (F.isDeclaration())
 			continue;
 
-		ObfuscationConfig Cfg = AnnotationParser::parseAnnotations(&F);
+		ObfuscationConfig Cfg = ObfAll.empty() ? AnnotationParser::parseAnnotations(&F) : GlobalConfig;
 		if (!Cfg.passes.empty())
 			Out.PerFunction[&F] = std::move(Cfg);
 	}
