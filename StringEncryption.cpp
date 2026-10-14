@@ -704,6 +704,12 @@ namespace {
         auto* CDA = dyn_cast<ConstantDataArray>(GV.getInitializer());
         if (!CDA || !CDA->isCString()) return false;
 
+        // Embind consumes Signature<...> constants as ABI metadata while registering
+        // bindings. Preserve their static storage and plaintext contents, including
+        // short WASM64 pointer signatures such as ppjpp. Match the template symbol,
+        // not its contents, so ordinary application strings are still eligible.
+        if (GV.getName().starts_with("_ZN10emscripten8internal9SignatureI")) return false;
+
         // Skip our own pass-created globals (marked with owned metadata,
         // which is dropped at codegen so it never reaches the binary).
         if (GV.getMetadata("obf.owned.se"))
