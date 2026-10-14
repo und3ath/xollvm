@@ -24,7 +24,9 @@ std::vector<std::unique_ptr<ADecTechnique>> buildTechniqueRegistry() {
 	R.push_back(makeStackPollutionTechnique());
 	R.push_back(makeAsmGadgetsTechnique());
 	R.push_back(makeConstLaunderTechnique());
+#if OBF_ENABLE_RDTSC_STRETCH
 	R.push_back(makeRdtscStretchTechnique());
+#endif
 	R.push_back(makeIndirectBrTechnique());
 	R.push_back(makeCallTrampolineTechnique());
 	R.push_back(makeAliasConfusionTechnique());

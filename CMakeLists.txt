@@ -68,6 +68,17 @@ find_package(Python3 COMPONENTS Interpreter REQUIRED)
 add_subdirectory(aes_stub)
 
 
+# rdtscStretch requires LLVM's generated X86 intrinsics. Keep it enabled in
+# ordinary builds, but don't require those headers in a target-limited SDK.
+set(_OBF_RDTSC_DEFAULT ON)
+if(DEFINED LLVM_TARGETS_TO_BUILD AND
+   NOT "X86" IN_LIST LLVM_TARGETS_TO_BUILD AND
+   NOT "all" IN_LIST LLVM_TARGETS_TO_BUILD)
+  set(_OBF_RDTSC_DEFAULT OFF)
+endif()
+option(OBF_ENABLE_RDTSC_STRETCH "Build the x86 rdtscStretch technique" ${_OBF_RDTSC_DEFAULT})
+add_compile_definitions(OBF_ENABLE_RDTSC_STRETCH=$<BOOL:${OBF_ENABLE_RDTSC_STRETCH}>)
+
 # ---------------------------------------------------------------------------
 # Sources
 # ---------------------------------------------------------------------------
@@ -102,7 +113,6 @@ set(OBF_SOURCES
   ADec/Tech_CallTrampoline.cpp
   ADec/Tech_AliasConfusion.cpp
   ADec/Tech_FakeLoop.cpp
-  ADec/Tech_RdtscStretch.cpp
   ADec/Tech_ConstLaunder.cpp
   AntiOptimizationShield.cpp
   VMPass.cpp
@@ -128,6 +138,9 @@ set(OBF_SOURCES
   registration/PluginEntry.cpp
 )
 
+if(OBF_ENABLE_RDTSC_STRETCH)
+  list(APPEND OBF_SOURCES ADec/Tech_RdtscStretch.cpp)
+endif()
 
 # ---------------------------------------------------------------------------
 # Target

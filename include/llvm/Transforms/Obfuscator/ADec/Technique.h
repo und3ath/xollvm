@@ -40,7 +40,9 @@ std::unique_ptr<ADecTechnique> makeStackPollutionTechnique();
 std::unique_ptr<ADecTechnique> makeCallTrampolineTechnique();
 std::unique_ptr<ADecTechnique> makeAliasConfusionTechnique();
 std::unique_ptr<ADecTechnique> makeFakeLoopTechnique();
+#if OBF_ENABLE_RDTSC_STRETCH
 std::unique_ptr<ADecTechnique> makeRdtscStretchTechnique();
+#endif
 std::unique_ptr<ADecTechnique> makeConstLaunderTechnique();
 
 // Registry of all built-in techniques in canonical execution order.
