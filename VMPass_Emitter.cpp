@@ -1,3 +1,4 @@
+#include "llvm/Transforms/Obfuscator/LLVMCompat.h"
 // ============================================================================
 // VMPass_Emitter.cpp — Code Virtualisation pass: Bytecode Emitter impl
 // ============================================================================
@@ -261,7 +262,7 @@ uint32_t BytecodeEmitter::isize(Instruction* I) {
 		markUnsupported(I); return 0;
 	}
 	if (isBranchOpcode(Op))
-		return cast<BranchInst>(I)->isUnconditional() ? 5 : 10;
+		return llvm::obfIsUnconditionalBranch(I) ? 5 : 10;
 
 	if (Op == Instruction::Switch) {
 		auto* SI = cast<SwitchInst>(I);
@@ -988,12 +989,12 @@ void BytecodeEmitter::emit(Instruction* I) {
 
 
 	if (isBranchOpcode(Op)) {
-		auto* BI = cast<BranchInst>(I);
-		if (BI->isUnconditional()) {
+		auto* BI = I;
+		if (llvm::obfIsUnconditionalBranch(BI)) {
 			bop(OP_JMP); fixup_u32(BI->getSuccessor(0));
 		}
 		else {
-			bop(OP_JMPC); b8(xorSalt(vr(BI->getCondition())));
+			bop(OP_JMPC); b8(xorSalt(vr(llvm::obfBranchCondition(BI))));
 			fixup_u32(BI->getSuccessor(0));
 			fixup_u32(BI->getSuccessor(1));
 		}

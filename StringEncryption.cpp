@@ -828,13 +828,13 @@ namespace {
                     unsigned IVN = PN->getIncomingValueNumForOperand(UPtr->getOperandNo());
                     BasicBlock* Pred = PN->getIncomingBlock(IVN);
                     Instruction* NI = CE->getAsInstruction();
-                    NI->insertBefore(Pred->getTerminator());
+                    NI->insertBefore(Pred->getTerminator()->getIterator());
                     NI->setDebugLoc(PN->getDebugLoc());
                     UPtr->set(NI);
                     continue;
                 }
                 Instruction* NI = CE->getAsInstruction();
-                NI->insertBefore(I);
+                NI->insertBefore(I->getIterator());
                 NI->setDebugLoc(I->getDebugLoc());
                 UPtr->set(NI);
             }
@@ -1514,13 +1514,13 @@ namespace {
                         unsigned IVN = PN->getIncomingValueNumForOperand(UP->getOperandNo());
                         BasicBlock* Pred = PN->getIncomingBlock(IVN);
                         Instruction* NI = CE->getAsInstruction();
-                        NI->insertBefore(Pred->getTerminator());
+                        NI->insertBefore(Pred->getTerminator()->getIterator());
                         NI->setDebugLoc(PN->getDebugLoc());
                         UP->set(NI);
                         continue;
                     }
                     Instruction* NI = CE->getAsInstruction();
-                    NI->insertBefore(I);
+                    NI->insertBefore(I->getIterator());
                     NI->setDebugLoc(I->getDebugLoc());
                     UP->set(NI);
                 }

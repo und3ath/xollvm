@@ -1,3 +1,4 @@
+#include "llvm/Transforms/Obfuscator/LLVMCompat.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
@@ -266,8 +267,8 @@ void VMImpl::buildAntiDebugGate(VMEngine::SharedState* SS) {
 	Function* EF = SS->EngineFn;
 
 	//  Find FetchBB: it's the false-successor of vm.dispatch ─
-	auto* DispTerm = dyn_cast<BranchInst>(SS->Dispatch->getTerminator());
-	if (!DispTerm || !DispTerm->isConditional()) return;
+	auto* DispTerm = obfBranch(SS->Dispatch->getTerminator());
+	if (!DispTerm || !llvm::obfIsConditionalBranch(DispTerm)) return;
 	BasicBlock* FetchBB = DispTerm->getSuccessor(1); // false = !OOB = fetch
 
 	//  Create counter alloca in vm.entry (before its terminator) ─

@@ -1,4 +1,5 @@
 #pragma once
+#include "llvm/Transforms/Obfuscator/LLVMCompat.h"
 // ============================================================================
 // VMPass.h — Code Virtualisation pass
 //
@@ -54,7 +55,7 @@
 // ============================================================================
 #include "llvm/IR/PassManager.h"
 namespace llvm {
-	class VMPass : public PassInfoMixin<VMPass> {
+	class VMPass : public ObfPassInfoMixin<VMPass> {
 	public:
 		PreservedAnalyses run(Function& F, FunctionAnalysisManager& AM);
 		static bool isRequired() { return true; }
