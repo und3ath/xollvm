@@ -691,6 +691,20 @@ namespace {
         return false;
     }
 
+    // Follow constant aggregates/GEPs to detect references retained in globals.
+    static bool hasPersistentStringUsers(GlobalVariable* GV) {
+        SmallVector<User*, 16> Work(GV->user_begin(), GV->user_end());
+        SmallPtrSet<User*, 32> Seen;
+        while (!Work.empty()) {
+            User* U = Work.pop_back_val();
+            if (!Seen.insert(U).second) continue;
+            if (isa<GlobalValue>(U)) return true;
+            if (isa<Constant>(U))
+                Work.append(U->user_begin(), U->user_end());
+        }
+        return false;
+    }
+
     bool StrEncImpl::shouldEncrypt(GlobalVariable& GV, int minLength) {
         if (!GV.hasInitializer() || !GV.isConstant()) return false;
         // Explicit sections can hold linker/toolchain metadata, not runtime strings.
@@ -701,6 +715,9 @@ namespace {
         // covers private/internal AND linkonce_odr (how clang-cl emits string literals on
         // Windows) while still excluding external/weak ABI symbols.
         if (!GV.isDiscardableIfUnused()) return false;
+        // ODR-coalesced storage could otherwise be decrypted independently by
+        // multiple translation-unit constructors, each with a different key.
+        if (!GV.hasLocalLinkage() && hasPersistentStringUsers(&GV)) return false;
         auto* CDA = dyn_cast<ConstantDataArray>(GV.getInitializer());
         if (!CDA || !CDA->isCString()) return false;
 
@@ -841,6 +858,92 @@ namespace {
         }
     }
 
+
+    // Strings referenced by static aggregates must keep a stable address. Decrypt
+    // these in place before C++ dynamic initialisation, using one compact table
+    // loop rather than thousands of unrolled calls for large catalogues.
+    class GlobalStrings {
+        Module& M;
+        StructType* RowTy;
+        SmallVector<Constant*, 16> Rows;
+    public:
+        explicit GlobalStrings(Module& Mod) : M(Mod) {
+            auto& C = M.getContext();
+            auto* P = PointerType::getUnqual(C);
+            RowTy = StructType::get(C, {P, Type::getInt32Ty(C), P, Type::getInt8Ty(C)});
+        }
+        bool add(GlobalVariable* GV, GlobalVariable* Cipher,
+                 GlobalVariable* Nonce = nullptr, uint8_t Key = 0) {
+            if (!hasPersistentStringUsers(GV)) return false;
+            auto& C = M.getContext();
+            GV->setConstant(false);
+            GV->setInitializer(Cipher->getInitializer());
+            GV->setMetadata("obf.owned.se", MDNode::get(C, {}));
+            auto Len = cast<ArrayType>(GV->getValueType())->getNumElements() - 1;
+            Constant* Nc = Nonce ? static_cast<Constant*>(Nonce)
+                : ConstantPointerNull::get(PointerType::getUnqual(C));
+            Rows.push_back(ConstantStruct::get(RowTy, {
+                GV, ConstantInt::get(Type::getInt32Ty(C), Len), Nc,
+                ConstantInt::get(Type::getInt8Ty(C), Key)}));
+            Cipher->eraseFromParent();
+            ++EncryptedStrings;
+            return true;
+        }
+        bool emit(StrEncCtx& Ctx, Function* Decrypt) {
+            if (Rows.empty()) return false;
+            auto& C = M.getContext();
+            auto* TableTy = ArrayType::get(RowTy, Rows.size());
+            auto* Table = new GlobalVariable(M, TableTy, true,
+                GlobalValue::PrivateLinkage, ConstantArray::get(TableTy, Rows), "");
+            auto* Init = Function::Create(FunctionType::get(Type::getVoidTy(C), false),
+                GlobalValue::InternalLinkage, "__strenc_globals", M);
+            Init->addFnAttr(Attribute::NoInline);
+            auto* Entry = BasicBlock::Create(C, "entry", Init);
+            auto* Loop = BasicBlock::Create(C, "loop", Init);
+            auto* Exit = BasicBlock::Create(C, "exit", Init);
+            IRBuilder<> B(Entry);
+            Value* Key = nullptr;
+            if (Ctx.Cfg.useChaCha) {
+                Key = B.CreateAlloca(ArrayType::get(B.getInt8Ty(), 32));
+                for (unsigned W = 0; W < 8; ++W) {
+                    // Volatile masked-key reads keep key recovery at runtime.
+                    auto* Src = B.CreateConstGEP1_32(B.getInt32Ty(), Ctx.ChaChaKeyGV, W);
+                    auto* Word = B.CreateLoad(B.getInt32Ty(), Src);
+                    Word->setAlignment(Align(1));
+                    Word->setVolatile(true);
+                    auto* Dst = B.CreateConstGEP1_32(B.getInt32Ty(), Key, W);
+                    B.CreateStore(B.CreateXor(Word, B.getInt32(Ctx.MaskWords[W])), Dst)
+                        ->setAlignment(Align(1));
+                }
+            }
+            B.CreateBr(Loop);
+            B.SetInsertPoint(Loop);
+            auto* Index = B.CreatePHI(B.getInt32Ty(), 2);
+            Index->addIncoming(B.getInt32(0), Entry);
+            auto* Row = B.CreateInBoundsGEP(TableTy, Table, {B.getInt32(0), Index});
+            auto Load = [&](unsigned Field) {
+                return B.CreateLoad(RowTy->getElementType(Field),
+                    B.CreateStructGEP(RowTy, Row, Field));
+            };
+            Value* Dst = Load(0);
+            Value* Len = Load(1);
+            if (Ctx.Cfg.useChaCha)
+                B.CreateCall(Decrypt, {Dst, Len, Key, Load(2), B.getInt32(0)});
+            else if (Ctx.Cfg.useAES)
+                B.CreateCall(Decrypt, {Dst, Len, Load(2)});
+            else
+                B.CreateCall(Decrypt, {Dst, Load(3), Len});
+            ++DecryptCallsInserted;
+            auto* Next = B.CreateAdd(Index, B.getInt32(1));
+            Index->addIncoming(Next, Loop);
+            B.CreateCondBr(B.CreateICmpULT(Next, B.getInt32(Rows.size())), Loop, Exit);
+            B.SetInsertPoint(Exit);
+            B.CreateRetVoid();
+            appendToGlobalCtors(M, Init, 0);
+            return true;
+        }
+    };
+
     // StrEncImpl::encryptStrings
 
     bool StrEncImpl::encryptStrings(Module& M, StrEncCtx& Ctx) {
@@ -886,6 +989,7 @@ namespace {
         if (Cands.empty()) return false;
 
         bool Changed = false;
+        GlobalStrings Globals(M);
 
         LLVMContext& C = M.getContext();
         Type* I32Ty = Type::getInt32Ty(C);
@@ -922,6 +1026,8 @@ namespace {
             ArrayType* CtTy = cast<ArrayType>(CtGV->getValueType());
             ArrayType* NonceTy = cast<ArrayType>(NonceGV->getValueType());
             const uint64_t CtBytes = CtTy->getNumElements();  // plaintext len + 1
+
+            if (Globals.add(GV, CtGV, NonceGV)) continue;
 
             // Find all functions that use this string global
             llvm::SmallPtrSet<Function*, 16> Seen;
@@ -983,6 +1089,8 @@ namespace {
                 ++EncryptedStrings;
             }
         }
+
+        Changed |= Globals.emit(Ctx, DecryptFn);
 
         return Changed;
     }
@@ -1063,6 +1171,7 @@ namespace {
         if (Cands.empty()) return false;
 
         bool Changed = false;
+        GlobalStrings Globals(M);
 
         LLVMContext& C = M.getContext();
         Type* I8Ty = Type::getInt8Ty(C);
@@ -1177,6 +1286,8 @@ namespace {
             ArrayType* CtTy = cast<ArrayType>(CtGV->getValueType());
             ArrayType* NonceTy = cast<ArrayType>(NonceGV->getValueType());
             const uint64_t CtBytes = CtTy->getNumElements();  // plaintext len + 1
+
+            if (Globals.add(GV, CtGV, NonceGV)) continue;
 
             // Find all functions that use this string global
             llvm::SmallPtrSet<Function*, 16> Seen;
@@ -1400,6 +1511,8 @@ namespace {
             }
         }
 
+        Changed |= Globals.emit(Ctx, ChaChaDecryptFn);
+
         // Phase C: inline every decrypt call so no callable decrypt boundary
         // remains in the using functions (defeats "first direct call" tap +
         // symbol/choke-point hooks). __strenc_chacha_decrypt is self-contained
@@ -1539,6 +1652,7 @@ namespace {
         if (ToEnc.empty()) return false;
 
         bool Changed = false;
+        GlobalStrings Globals(M);
         for (auto& [GV, Key, Str] : ToEnc) {
             materialize(GV);
 
@@ -1553,6 +1667,8 @@ namespace {
                 ConstantArray::get(ArrTy, Enc),
                 ".enc_str");
             EncGV->setAlignment(Align(1));
+
+            if (Globals.add(GV, EncGV, nullptr, Key)) continue;
 
             llvm::SmallPtrSet<Function*, 16> Seen;
             llvm::SmallVector<Function*, 16> Users;
@@ -1594,6 +1710,8 @@ namespace {
             ++EncryptedStrings;
             if (GV->use_empty()) GV->eraseFromParent();
         }
+        Changed |= Globals.emit(Ctx, DecFn);
+
         return Changed;
     }
 
