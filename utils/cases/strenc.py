@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import programs
+
 from ._common import Registry
+from gates.strenc import SECRET_A
 
 
 _AES = "obf: strenc(minlen=4,aes=1,keysplit=1)"
@@ -57,6 +60,17 @@ def register(reg: Registry, **_opts) -> None:
             category="strenc")
     reg.add(name="strenc_xor_fallback", passes=["strenc"],
             ann_override=_XOR, gates=[], category="strenc")
+    # Strings referenced only through a global aggregate: must take the
+    # persistent-global path (in-place cipher + priority-0 module ctor), keep
+    # runtime output identical to baseline, leave no plaintext, and actually
+    # wire the __strenc_globals ctor.
+    reg.add(name="strenc_persistent_global", passes=["strenc"],
+            ann_override=_AES,
+            src_override=programs.render("strenc.global_table",
+                                         annotation=_AES, secret=SECRET_A),
+            gates=["strenc_no_plaintext", "strenc_decrypt_present",
+                   "strenc_persistent_global_ctor"],
+            category="strenc")
     reg.add(name="aes_stub_obfuscated", passes=["strenc", "mba", "bcf"],
             ann_override=_STUB,
             gates=["strenc_no_plaintext", "strenc_decrypt_present"],

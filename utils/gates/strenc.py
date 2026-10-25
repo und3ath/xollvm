@@ -60,3 +60,19 @@ def strenc_short_plaintext(obf_ir: str) -> Optional[str]:
         return None
     return (f"short string {s!r} not found as plaintext in IR "
             f"— may have been incorrectly encrypted")
+
+
+@register("strenc_persistent_global_ctor")
+def strenc_persistent_global_ctor(obf_ir: str) -> Optional[str]:
+    # Strings reachable only through a global aggregate take the
+    # persistent-global path: encrypted in place and decrypted once from a
+    # priority-zero module constructor. Assert that path actually engaged
+    # (rather than the string being handled per-function or left untouched):
+    # the decrypt constructor must exist and be wired into @llvm.global_ctors.
+    if "__strenc_globals" not in obf_ir:
+        return ("persistent-global decrypt ctor '__strenc_globals' absent — "
+                "string retained by a global was not routed through the "
+                "in-place/module-ctor path")
+    if "@llvm.global_ctors" not in obf_ir:
+        return "__strenc_globals present but not wired into @llvm.global_ctors"
+    return None

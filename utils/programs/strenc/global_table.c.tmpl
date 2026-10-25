@@ -1,0 +1,57 @@
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+/* Persistent-global string fixture.
+
+   The two character buffers below are referenced ONLY through a global
+   aggregate (g_table), never directly inside a function body. strenc must
+   therefore route them through the persistent-global path -- encrypt them in
+   place and decrypt once from a priority-zero module constructor
+   (__strenc_globals) -- instead of the per-function stack-buffer path, so the
+   pointers retained in g_table keep stable addresses.
+
+   The buffers are file-scope `static` so they have internal (local) linkage:
+   the non-local-linkage exclusion skips globally-referenced strings that are
+   NOT local, and on Windows a bare string literal is emitted linkonce_odr +
+   comdat (so it would be excluded). g_table has external linkage so it is
+   retained; a volatile pointer load blocks -O2 from folding the table away
+   before strenc runs.
+
+   obf_target FNV-1a-hashes both decrypted entries and returns 0 only when the
+   hash matches EXPECTED -- i.e. the constructor decrypted the table to the
+   correct bytes before main (the strenc harness runs obf_target(0,0) and
+   requires exit 0). EXPECTED is the hash of these two exact strings; it is not
+   their plaintext, so it does not trip strenc_no_plaintext. {secret} must not
+   survive as plaintext in the obfuscated IR (strenc_no_plaintext), and
+   __strenc_globals must be wired as a global constructor
+   (strenc_persistent_global_ctor). */
+
+static const char secret_entry[] = "{secret}";
+static const char second_entry[] = "PERSISTENT_GLOBAL_SECOND_ENTRY_2026";
+
+const char *const g_table[] = {{
+  secret_entry,
+  second_entry,
+}};
+
+/* FNV-1a 32-bit over secret_entry then second_entry (see utils/gates/strenc.py
+   SECRET_A); recompute if either string changes. */
+#define EXPECTED 4003968035u
+
+__attribute__((noinline, annotate("{annotation}")))
+uint32_t obf_target(uint32_t x, uint32_t y) {{
+  volatile int n = 2;
+  uint32_t r = 2166136261u;
+  for (int i = 0; i < n; ++i) {{
+    const char *volatile pv = g_table[i];
+    for (const char *p = (const char *)pv; *p; ++p)
+      r = (r ^ (uint32_t)(unsigned char)*p) * 16777619u;
+  }}
+  return (r == EXPECTED) ? (x ^ x) : (1u + y - y);
+}}
+
+int main(int argc, char** argv) {{
+  (void)argc; (void)argv;
+  return (int)obf_target(0u, 0u);
+}}
