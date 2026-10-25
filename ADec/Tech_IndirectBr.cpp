@@ -1,3 +1,4 @@
+#include "llvm/Transforms/Obfuscator/LLVMCompat.h"
 #include "llvm/Transforms/Obfuscator/ADec/Technique.h"
 #include "llvm/Transforms/Obfuscator/ADec/Types.h"
 
@@ -16,8 +17,8 @@ using namespace llvm::obf::adec;
 
 namespace {
 
-static bool canConvertBranch(llvm::BranchInst* BI) {
-	if (!BI || !BI->isUnconditional())
+static bool canConvertBranch(llvm::Instruction* BI) {
+	if (!BI || !llvm::obfIsUnconditionalBranch(BI))
 		return false;
 
 	llvm::BasicBlock* BB = BI->getParent();
@@ -44,9 +45,9 @@ public:
 	}
 
 	unsigned run(ADecCtx& Ctx, unsigned Budget) override {
-		llvm::SmallVector<llvm::BranchInst*, 32> Cands;
+		llvm::SmallVector<llvm::Instruction*, 32> Cands;
 		for (llvm::BasicBlock& BB : Ctx.F) {
-			auto* BI = llvm::dyn_cast<llvm::BranchInst>(BB.getTerminator());
+			auto* BI = llvm::obfBranch(BB.getTerminator());
 			if (canConvertBranch(BI))
 				Cands.push_back(BI);
 		}
@@ -54,7 +55,7 @@ public:
 		if (Cands.empty())
 			return 0;
 
-		Ctx.ShuffleRng.shuffle(llvm::MutableArrayRef<llvm::BranchInst*>(
+		Ctx.ShuffleRng.shuffle(llvm::MutableArrayRef<llvm::Instruction*>(
 		    Cands.data(), Cands.size()));
 
 		// A single statically-known BlockAddress trampoline is transparent
@@ -80,7 +81,7 @@ public:
 		int EffProb = Ctx.Cfg.effectiveProb(name());
 
 		unsigned Converted = 0;
-		for (llvm::BranchInst* BI : Cands) {
+		for (llvm::Instruction* BI : Cands) {
 			if (Converted >= Budget)
 				break;
 			if (Ctx.SelectRng.range(100) >= (uint32_t)EffProb)
@@ -149,7 +150,7 @@ public:
 			auto* Ld = B.CreateLoad(PtrTy, Slot, Ctx.prefixed("ibr.addr"));
 			Ld->setVolatile(true);
 
-			auto* IBr = llvm::IndirectBrInst::Create(Ld, 2, BI);
+			auto* IBr = llvm::IndirectBrInst::Create(Ld, 2, BI->getIterator());
 			IBr->addDestination(Dest0);
 			IBr->addDestination(Dest1);
 

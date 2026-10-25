@@ -1,4 +1,5 @@
 #pragma once
+#include "llvm/Transforms/Obfuscator/LLVMCompat.h"
 
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/Verifier.h"
@@ -11,7 +12,7 @@
 
 namespace llvm::obf {
 
-	class ObfVerifyFunctionPass : public llvm::PassInfoMixin<ObfVerifyFunctionPass> {
+	class ObfVerifyFunctionPass : public llvm::ObfPassInfoMixin<ObfVerifyFunctionPass> {
 		std::string Label;
 
 	public:
@@ -31,7 +32,7 @@ namespace llvm::obf {
 		static bool isRequired() { return true; }
 	};
 
-	class ObfVerifyModulePass : public llvm::PassInfoMixin<ObfVerifyModulePass> {
+	class ObfVerifyModulePass : public llvm::ObfPassInfoMixin<ObfVerifyModulePass> {
 		std::string Label;
 
 	public:

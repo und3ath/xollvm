@@ -148,7 +148,7 @@ namespace {
 		}
 		else if (Entropy != InsertBefore) {
 			// Force it to dominate *everything* (including early entry instrumentation).
-			Entropy->moveBefore(InsertBefore);
+			Entropy->moveBefore(InsertBefore->getIterator());
 		}
 
 		return Entropy;

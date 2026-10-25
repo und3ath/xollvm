@@ -50,7 +50,7 @@ public:
 				continue;
 			if (BB.isEHPad())
 				continue;
-			for (auto It = BB.getFirstNonPHI()->getIterator(),
+			for (auto It = BB.getFirstNonPHIIt(),
 			          E = BB.end(); It != E; ++It) {
 				llvm::Instruction* I = &*It;
 				if (I->isTerminator())
