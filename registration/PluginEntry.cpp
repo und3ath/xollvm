@@ -42,12 +42,12 @@ using namespace llvm;
 // pass is injected at the start of clang's compile pipeline so annotated
 // functions are obfuscated during a normal `-c` compile -- no opt round-trip.
 // Default off: the extension point adds nothing, so the pipeline is unchanged.
-// The pass itself is annotation-gated (no `obf:` annotations => no-op), so even
-// with this on, un-annotated code is untouched.
+// Without -obf-all the pass remains annotation-gated; with it, the global
+// specification applies to every defined function.
 static llvm::cl::opt<bool> EnableObfuscationEP(
     "enable-obfuscation",
     llvm::cl::desc("Auto-run the obfuscation module pass in the compile "
-                   "pipeline (annotation-gated; requires obf: annotations)"),
+                   "pipeline (requires obf: annotations or -obf-all)"),
     llvm::cl::init(false), llvm::cl::Hidden);
 
 // Canonical registration. Wires every name in ObfPasses.inc into the
