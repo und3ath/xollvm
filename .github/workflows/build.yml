@@ -316,7 +316,7 @@ jobs:
   # ==========================================================================
   plugin-macos:
     name: plugin / llvm${{ inputs.llvm_major }} / macos
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - name: Checkout xollvm
         uses: actions/checkout@v4
