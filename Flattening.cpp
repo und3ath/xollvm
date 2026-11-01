@@ -1,3 +1,4 @@
+#include "llvm/Transforms/Obfuscator/LLVMCompat.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -977,7 +978,7 @@ namespace {
 				continue;
 			}
 
-			if (!isa<BranchInst>(Disp->getTerminator()) &&
+			if (!llvm::obfIsBranch(Disp->getTerminator()) &&
 				!isa<SwitchInst>(Disp->getTerminator())) {
 				OS << "[flattening] Dispatcher terminator is not branch/switch: "
 					<< Disp->getName() << "\n";
@@ -1124,10 +1125,10 @@ namespace {
 		SmallPtrSet<BasicBlock*, 32> FlatSet(Ctx.FlattenedBlocks.begin(),
 			Ctx.FlattenedBlocks.end());
 		auto branchTargetsAllFlattened = [&](BasicBlock& BB) {
-			auto* Br = dyn_cast<BranchInst>(BB.getTerminator());
+			auto* Br = obfBranch(BB.getTerminator());
 			if (!Br)
 				return true; // ret/unreachable/invoke handled elsewhere
-			for (BasicBlock* Succ : Br->successors())
+			for (BasicBlock* Succ : successors(Br->getParent()))
 				if (!FlatSet.contains(Succ))
 					return false;
 			return true;
@@ -1358,11 +1359,11 @@ namespace {
 			return;  // invoke preserved, unwind edge untouched
 		}
 
-		auto* Br = dyn_cast<BranchInst>(TI);
+		auto* Br = obfBranch(TI);
 		if (!Br) return;  // exotic terminator — skip gracefully
 
 		IRBuilder<> B(TI);
-		if (Br->isUnconditional()) {
+		if (llvm::obfIsUnconditionalBranch(Br)) {
 			BasicBlock* Succ = Br->getSuccessor(0);
 			uint32_t Raw = Ctx.BlockIDs.lookup(Succ);
 			uint32_t Enc = encodeStateConst(Raw, Ctx);
@@ -1373,7 +1374,7 @@ namespace {
 			storeState(B, PCtx, Ctx, Next);
 		}
 		else {
-			Value* Cond = Br->getCondition();
+			Value* Cond = llvm::obfBranchCondition(Br);
 			BasicBlock* T = Br->getSuccessor(0);
 			BasicBlock* FBB = Br->getSuccessor(1);
 
@@ -1437,7 +1438,7 @@ namespace {
 
 			// ── Branch handling (existing logic) ─────────────────────────
 
-			auto* Br = dyn_cast<BranchInst>(TI);
+			auto* Br = obfBranch(TI);
 			if (!Br) {
 				// Unexpected terminator (e.g. switch that wasn't lowered).
 				// Leave as-is rather than asserting — a diagnostic will catch it.
@@ -1445,7 +1446,7 @@ namespace {
 			}
 
 			IRBuilder<> B(TI);
-			if (Br->isUnconditional()) {
+			if (llvm::obfIsUnconditionalBranch(Br)) {
 				BasicBlock* Succ = Br->getSuccessor(0);
 				uint32_t Enc = encodeStateConst(Ctx.BlockIDs.lookup(Succ), Ctx);
 				Value* Next = PCtx.Opaque.opaqueI32Const(B, Enc);
@@ -1457,7 +1458,7 @@ namespace {
 
 			}
 			else {
-				Value* Cond = Br->getCondition();
+				Value* Cond = llvm::obfBranchCondition(Br);
 				BasicBlock* T = Br->getSuccessor(0);
 				BasicBlock* FBB = Br->getSuccessor(1);
 				uint32_t EncT = encodeStateConst(Ctx.BlockIDs.lookup(T), Ctx);

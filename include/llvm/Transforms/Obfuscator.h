@@ -1,4 +1,5 @@
 #pragma once
+#include "llvm/Transforms/Obfuscator/LLVMCompat.h"
 
 #include "llvm/IR/PassManager.h"
 #include "llvm/ADT/DenseMap.h"
@@ -81,7 +82,7 @@ namespace llvm {
 	} // namespace
 
 	class ObfuscationFunctionDriverPass
-		: public PassInfoMixin<ObfuscationFunctionDriverPass> {
+		: public ObfPassInfoMixin<ObfuscationFunctionDriverPass> {
 	public:
 		PreservedAnalyses run(Function& F, FunctionAnalysisManager& FAM) {
 			if (F.isDeclaration())
@@ -576,7 +577,7 @@ namespace llvm {
 		static bool isRequired() { return true; }
 	};
 
-	class ObfuscationModulePass : public PassInfoMixin<ObfuscationModulePass> {
+	class ObfuscationModulePass : public ObfPassInfoMixin<ObfuscationModulePass> {
 	public:
 		PreservedAnalyses run(Module& M, ModuleAnalysisManager& MAM) {
 			// Prime the report sink early so function passes can append via proxy.

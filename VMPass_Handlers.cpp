@@ -908,7 +908,7 @@ void VMImpl::buildHandlersFloat() {
 		// Carry IsF32 (i1) into the merge block via alloca so every incoming
 		// edge can read it without duplicating the comparison.
 		auto* IsF32Slot = new AllocaInst(Type::getInt1Ty(Ctx), 0, "vm.bof.f32.sl",
-			&*HFn->getEntryBlock().getFirstInsertionPt());
+			HFn->getEntryBlock().getFirstInsertionPt());
 		B.CreateStore(IsF32, IsF32Slot);
 
 		BasicBlock* FMergeBB = BasicBlock::Create(Ctx, "vm.bof.merge", HFn);

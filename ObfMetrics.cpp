@@ -1,3 +1,4 @@
+#include "llvm/Transforms/Obfuscator/LLVMCompat.h"
 #include "llvm/Transforms/Obfuscator/ObfMetrics.h"
 
 #include "llvm/ADT/SmallVector.h"
@@ -95,7 +96,7 @@ namespace {
 			Instruction* T = BB.getTerminator();
 			if (isa<ReturnInst>(T))
 				++M.Returns;
-			else if (isa<BranchInst>(T))
+			else if (llvm::obfIsBranch(T))
 				++M.Branches;
 		}
 

@@ -1,3 +1,4 @@
+#include "llvm/Transforms/Obfuscator/LLVMCompat.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Twine.h"
@@ -218,7 +219,7 @@ void VMImpl::wireLiveDecoys(Function* EF) {
 		if (BB.getName().starts_with("vm.cl.")) continue;    // CALL sub-blocks
 
 		Instruction* Term = BB.getTerminator();
-		auto* Br = dyn_cast_or_null<BranchInst>(Term);
+		auto* Br = obfBranch(Term);
 		if (!Br) continue;                                   // only br / condbr terminators
 
 		if (LiveRng.range(2) != 0) continue;                 // ~50% density

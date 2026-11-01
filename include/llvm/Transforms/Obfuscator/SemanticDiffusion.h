@@ -1,4 +1,5 @@
 #pragma once
+#include "llvm/Transforms/Obfuscator/LLVMCompat.h"
 
 #include "llvm/IR/PassManager.h"
 
@@ -9,7 +10,7 @@ namespace llvm {
 	// We instead use two *distinct* volatile-load keys K1 and K2 that are equal at runtime
 	// (same local slot, no store between), but not provably equal for the optimizer:
 	//   x' = (x ^ K1) ^ K2   (runtime: K1==K2 => x'==x)
-	class SemanticDiffusionPass : public PassInfoMixin<SemanticDiffusionPass> {
+	class SemanticDiffusionPass : public ObfPassInfoMixin<SemanticDiffusionPass> {
 	public:
 		PreservedAnalyses run(Function& F, FunctionAnalysisManager& AM);
 	};

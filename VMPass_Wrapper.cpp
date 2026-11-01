@@ -1,3 +1,4 @@
+#include "llvm/Transforms/Obfuscator/LLVMCompat.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
@@ -773,9 +774,9 @@ void VMImpl::hardenWrapper() {
 	//  Replace unconditional branches with opaque-predicate branches 
 	auto replaceEdge = [&](BasicBlock* From) {
 		auto* Term = From->getTerminator();
-		if (!Term || !isa<BranchInst>(Term)) return;
-		auto* BI = cast<BranchInst>(Term);
-		if (!BI->isUnconditional()) return;
+		if (!Term || !llvm::obfIsBranch(Term)) return;
+		auto* BI = Term;
+		if (!llvm::obfIsUnconditionalBranch(BI)) return;
 
 		BasicBlock* RealSucc = BI->getSuccessor(0);
 		BasicBlock* FakeDst = DeadBBs[HRng.range((unsigned)DeadBBs.size())];
@@ -843,7 +844,7 @@ void VMImpl::flattenWrapper() {
 
 	// Initial state = tag of the first successor of entry.
 	BasicBlock* FirstSucc = nullptr;
-	if (auto* BI = dyn_cast<BranchInst>(EntryBB->getTerminator())) {
+	if (auto* BI = obfBranch(EntryBB->getTerminator())) {
 		FirstSucc = BI->getSuccessor(0);
 	}
 	if (!FirstSucc || !StateMap.count(FirstSucc)) return;
@@ -877,11 +878,11 @@ void VMImpl::flattenWrapper() {
 		if (isa<ReturnInst>(Term) || isa<UnreachableInst>(Term))
 			continue;
 
-		if (auto* BI = dyn_cast<BranchInst>(Term)) {
+		if (auto* BI = obfBranch(Term)) {
 			IRBuilder<> TB(Term);
 			uint32_t CurTag = StateMap[BB];
 
-			if (BI->isUnconditional()) {
+			if (llvm::obfIsUnconditionalBranch(BI)) {
 				BasicBlock* Succ = BI->getSuccessor(0);
 				if (StateMap.count(Succ)) {
 					uint32_t NextTag = StateMap[Succ];
@@ -899,7 +900,7 @@ void VMImpl::flattenWrapper() {
 				// Conditional branch (opaque predicates from 06b.3)
 				BasicBlock* TSucc = BI->getSuccessor(0);
 				BasicBlock* FSucc = BI->getSuccessor(1);
-				Value* Cond = BI->getCondition();
+				Value* Cond = llvm::obfBranchCondition(BI);
 
 				if (StateMap.count(TSucc) && StateMap.count(FSucc)) {
 					uint32_t TDelta = CurTag ^ StateMap[TSucc];

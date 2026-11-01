@@ -164,7 +164,7 @@ namespace {
 		if (!BB || BB->empty())
 			return false;
 
-		Instruction* firstNonPHI = BB->getFirstNonPHI();
+		Instruction* firstNonPHI = &*BB->getFirstNonPHIIt();
 		if (firstNonPHI && firstNonPHI->isEHPad())
 			return false;
 

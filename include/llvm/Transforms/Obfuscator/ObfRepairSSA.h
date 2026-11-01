@@ -1,4 +1,5 @@
 #pragma once
+#include "llvm/Transforms/Obfuscator/LLVMCompat.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/Function.h"
 #include "llvm/Transforms/Obfuscator/Utils.h"
@@ -6,7 +7,7 @@
 
 namespace llvm::obf {
 
-	class ObfRepairSSAFunctionPass : public llvm::PassInfoMixin<ObfRepairSSAFunctionPass> {
+	class ObfRepairSSAFunctionPass : public llvm::ObfPassInfoMixin<ObfRepairSSAFunctionPass> {
 		std::string Label;
 
 	public:

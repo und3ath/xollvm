@@ -1,3 +1,4 @@
+#include "llvm/Transforms/Obfuscator/LLVMCompat.h"
 // Tech_ConstLaunder.cpp — route literal integer constants through
 // per-constant private globals loaded volatile.
 //
@@ -44,8 +45,8 @@ static bool isUnsafeUse(llvm::Instruction* User, unsigned OpIdx) {
 	// Branch condition is fine — but we want to preserve it as a literal
 	// because decompilers visually flag ConstantInt branch cond as
 	// "always true/false" anyway; laundering it adds little value here.
-	if (auto* BR = llvm::dyn_cast<llvm::BranchInst>(User)) {
-		if (BR->isConditional() && OpIdx == 0)
+	if (auto* BR = llvm::obfBranch(User)) {
+		if (llvm::obfIsConditionalBranch(BR) && OpIdx == 0)
 			return true;
 	}
 

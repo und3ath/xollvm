@@ -1,3 +1,4 @@
+#include "llvm/Transforms/Obfuscator/LLVMCompat.h"
 // ============================================================================
 // AntiOptimizationShield.cpp — Post-obfuscation hardening pass
 //
@@ -167,7 +168,7 @@ namespace {
 				if (auto* Cmp = dyn_cast<ICmpInst>(&I)) {
 					bool FeedsBranch = false;
 					for (User* U : Cmp->users()) {
-						if (isa<BranchInst>(U) || isa<SwitchInst>(U) || isa<SelectInst>(U))
+						if (llvm::obfIsBranch(U) || isa<SwitchInst>(U) || isa<SelectInst>(U))
 							FeedsBranch = true;
 					}
 					// Only barrier icmps with obfuscation-related operands
@@ -379,10 +380,10 @@ namespace {
 		Function& F = Ctx.F;
 		unsigned Count = 0;
 
-		SmallVector<BranchInst*, 32> UncondBranches;
+		SmallVector<Instruction*, 32> UncondBranches;
 		for (BasicBlock& BB : F) {
-			auto* BI = dyn_cast<BranchInst>(BB.getTerminator());
-			if (!BI || BI->isConditional())
+			auto* BI = obfBranch(BB.getTerminator());
+			if (!BI || llvm::obfIsConditionalBranch(BI))
 				continue;
 
 			// Only guard branches between obfuscation-named blocks
@@ -401,7 +402,7 @@ namespace {
 			UncondBranches.push_back(BI);
 		}
 
-		for (BranchInst* BI : UncondBranches) {
+		for (Instruction* BI : UncondBranches) {
 			if (!Ctx.budgetOk())
 				break;
 

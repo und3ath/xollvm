@@ -117,7 +117,7 @@ namespace llvm::obf {
 		}
 		else if (Entropy != InsertBefore) {
 			// Force it to dominate everything in entry, even if other passes reshuffle.
-			Entropy->moveBefore(InsertBefore);
+			Entropy->moveBefore(InsertBefore->getIterator());
 		}
 
 		return Entropy;

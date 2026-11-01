@@ -68,7 +68,7 @@ public:
 			if (BB.isEHPad())
 				continue;
 
-			for (auto It = BB.getFirstNonPHI()->getIterator(),
+			for (auto It = BB.getFirstNonPHIIt(),
 			          E = BB.end(); It != E; ++It) {
 				llvm::Instruction* I = &*It;
 				if (I->isTerminator())
@@ -104,7 +104,7 @@ public:
 			    VoidFnTy, G.Body, Clob,
 			    /*hasSideEffects=*/true, /*isAlignStack=*/false);
 
-			llvm::CallInst::Create(IA, {}, "", IP);
+			llvm::CallInst::Create(IA, {}, "", IP->getIterator());
 
 			++Inserted;
 			++ADecAsmGadgets;

@@ -189,7 +189,7 @@ namespace {
 			}
 
 			// Skip EH pads
-			Instruction* FirstNonPHI = curr->getFirstNonPHI();
+			Instruction* FirstNonPHI = &*curr->getFirstNonPHIIt();
 			if (FirstNonPHI && FirstNonPHI->isEHPad())
 				continue;
 

@@ -1,3 +1,4 @@
+#include "llvm/Transforms/Obfuscator/LLVMCompat.h"
 #include "llvm/Transforms/Obfuscator/ObfReport.h"
 
 #include "llvm/ADT/SmallString.h"
@@ -91,8 +92,8 @@ namespace llvm::obf {
 			++Blocks;
 			Edges += succ_size(&BB);
 
-			if (const auto* Br = dyn_cast<BranchInst>(BB.getTerminator()))
-				if (Br->isConditional())
+			if (const auto* Br = obfBranch(BB.getTerminator()))
+				if (llvm::obfIsConditionalBranch(Br))
 					++C.ConditionalBranches;
 
 			for (const Instruction& I : BB) {
